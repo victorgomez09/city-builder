@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>City Builder 3D - Low Poly</title>
+    <style>
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+        user-select: none;
+      }
+      body, html {
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background-color: #1a1a1a;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      }
+      #canvas-container {
+        width: 100%;
+        height: 100%;
+        position: absolute;
+        top: 0;
+        left: 0;
+      }
+      #hud-container {
+        position: absolute;
+        top: 16px;
+        left: 16px;
+        background: rgba(25, 30, 36, 0.85);
+        color: #ffffff;
+        padding: 10px 18px;
+        border-radius: 8px;
+        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+        backdrop-filter: blur(8px);
+        font-size: 14px;
+        font-weight: 500;
+        z-index: 10;
+        pointer-events: none;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+      }
+
+      /* Barra de Herramientas Principal */
+      #main-toolbar {
+        position: absolute;
+        bottom: 24px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 30;
+      }
+      .toolbar-wrapper {
+        display: flex;
+        gap: 10px;
+        background: rgba(20, 24, 30, 0.92);
+        padding: 8px 12px;
+        border-radius: 30px;
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+        backdrop-filter: blur(12px);
+      }
+      .main-tool-btn {
+        background: transparent;
+        color: #cfd8dc;
+        border: none;
+        padding: 10px 18px;
+        border-radius: 20px;
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .main-tool-btn:hover {
+        background: rgba(255, 255, 255, 0.1);
+        color: #ffffff;
+      }
+      .main-tool-btn.active {
+        background: #0288d1;
+        color: #ffffff;
+        box-shadow: 0 0 12px rgba(2, 136, 209, 0.6);
+      }
+
+      /* Subpanel de Carreteras con Modos de Trazado */
+      #road-panel {
+        position: absolute;
+        bottom: 84px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgba(24, 28, 35, 0.94);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        border-radius: 12px;
+        padding: 14px 20px;
+        color: #fff;
+        z-index: 25;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+        backdrop-filter: blur(12px);
+        display: none;
+        flex-direction: column;
+        gap: 10px;
+        min-width: 480px;
+      }
+      .panel-section-title {
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.8px;
+        color: #90caf9;
+      }
+      .draw-mode-buttons, .road-type-buttons {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        justify-content: flex-start;
+      }
+      .draw-mode-btn, .road-type-btn {
+        background: #2a323d;
+        color: #cfd8dc;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        padding: 8px 12px;
+        border-radius: 6px;
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.18s ease;
+      }
+      .draw-mode-btn:hover, .road-type-btn:hover {
+        background: #37474f;
+        color: #ffffff;
+        border-color: rgba(255, 255, 255, 0.3);
+      }
+      .draw-mode-btn.active {
+        background: #0288d1;
+        color: #ffffff;
+        border-color: #29b6f6;
+        box-shadow: 0 0 10px rgba(2, 136, 209, 0.5);
+      }
+      .road-type-btn.active {
+        background: #00897b;
+        color: #ffffff;
+        border-color: #26a69a;
+        box-shadow: 0 0 10px rgba(0, 137, 123, 0.5);
+      }
+      .road-info {
+        font-size: 12px;
+        color: #80cbc4;
+        text-align: center;
+        background: rgba(0, 0, 0, 0.25);
+        padding: 6px 10px;
+        border-radius: 4px;
+      }
+
+      /* Panel de Terraformación */
+      #terraform-panel {
+        position: absolute;
+        bottom: 84px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgba(24, 28, 35, 0.94);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        border-radius: 12px;
+        padding: 14px 20px;
+        color: #fff;
+        z-index: 25;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+        backdrop-filter: blur(12px);
+        display: none;
+        flex-direction: column;
+        gap: 12px;
+        min-width: 380px;
+      }
+      .panel-header {
+        font-size: 13px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.8px;
+        color: #90caf9;
+        text-align: center;
+      }
+      .tool-buttons {
+        display: flex;
+        gap: 8px;
+        justify-content: center;
+      }
+      .tool-btn {
+        background: #2a323d;
+        color: #cfd8dc;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        padding: 8px 14px;
+        border-radius: 6px;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.18s ease;
+      }
+      .tool-btn:hover {
+        background: #37474f;
+        color: #ffffff;
+        border-color: rgba(255, 255, 255, 0.3);
+      }
+      .tool-btn.active {
+        background: #00acc1;
+        color: #ffffff;
+        border-color: #26c6da;
+        box-shadow: 0 0 10px rgba(0, 172, 193, 0.5);
+      }
+      .brush-controls {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        padding-top: 8px;
+        border-top: 1px solid rgba(255, 255, 255, 0.1);
+      }
+      .control-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-size: 13px;
+        color: #b0bec5;
+      }
+      .control-row input[type="range"] {
+        width: 180px;
+        cursor: pointer;
+        accent-color: #00e5ff;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="canvas-container"></div>
+    <div id="hud-container">
+      <div id="hud-stats">Conectando con el motor de simulación...</div>
+    </div>
+    <script type="module">
+      import { Engine } from './src/main.ts';
+      const container = document.getElementById('canvas-container');
+      if (container) {
+        const engine = new Engine(container);
+        engine.start();
+      }
+    </script>
+  </body>
+</html>
