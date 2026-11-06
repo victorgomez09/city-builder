@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
+import { SimplexNoise } from '@core/utils/noise';
 
 /**
  * Gestor Centralizado de Assets (Texturas PBR, HDRI y Modelos GLTF/GLB).
@@ -15,6 +16,8 @@ export class AssetManager {
   private textureCache: Map<string, THREE.Texture> = new Map();
   private gltfCache: Map<string, THREE.Group> = new Map();
   private envMapCache: Map<string, THREE.Texture> = new Map();
+  private noiseTexCache: THREE.DataTexture | null = null;
+  private waterNormalCache: THREE.DataTexture | null = null;
 
   public static getInstance(): AssetManager {
     if (!AssetManager.instance) {
@@ -46,6 +49,132 @@ export class AssetManager {
 
     this.textureCache.set(cacheKey, texture);
     return texture;
+  }
+
+  /**
+   * Genera o retorna una textura RGBA de ruido procedimental continuo y tileable (estilo Fable Cities).
+   * R: manchas amplias (baja frecuencia)
+   * G: frecuencia media
+   * B: detalle fino
+   * A: celular / variación micro
+   */
+  public getProceduralNoiseTexture(size: number = 256, seed: number = 1337): THREE.DataTexture {
+    if (this.noiseTexCache) return this.noiseTexCache;
+
+    const n1 = new SimplexNoise(seed + 11);
+    const n2 = new SimplexNoise(seed + 12);
+    const n3 = new SimplexNoise(seed + 13);
+    const n4 = new SimplexNoise(seed + 14);
+
+    const seamlessFbm = (noise: SimplexNoise, u: number, v: number, freq: number, oct: number): number => {
+      const s = (x: number, y: number) => 0.5 + 0.5 * noise.fbm2D(x * freq, y * freq, oct);
+      const a = s(u, v);
+      const b = s(u - 1, v);
+      const c = s(u, v - 1);
+      const d = s(u - 1, v - 1);
+      const wu = u * u * (3 - 2 * u);
+      const wv = v * v * (3 - 2 * v);
+      const top = a * (1 - wu) + b * wu;
+      const bot = c * (1 - wu) + d * wu;
+      return top * (1 - wv) + bot * wv;
+    };
+
+    const data = new Uint8Array(size * size * 4);
+    for (let y = 0; y < size; y++) {
+      const v = y / size;
+      for (let x = 0; x < size; x++) {
+        const u = x / size;
+        const k = (y * size + x) * 4;
+        data[k + 0] = Math.floor(255 * seamlessFbm(n1, u, v, 2.0, 3));
+        data[k + 1] = Math.floor(255 * seamlessFbm(n2, u, v, 5.0, 4));
+        data[k + 2] = Math.floor(255 * seamlessFbm(n3, u, v, 12.0, 4));
+        const w = seamlessFbm(n4, u, v, 7.0, 2);
+        data[k + 3] = Math.floor(255 * Math.pow(Math.abs(w * 2 - 1), 0.6));
+      }
+    }
+
+    const tex = new THREE.DataTexture(data, size, size, THREE.RGBAFormat, THREE.UnsignedByteType);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    tex.generateMipmaps = true;
+    tex.needsUpdate = true;
+
+    this.noiseTexCache = tex;
+    return tex;
+  }
+
+  /**
+   * Genera o retorna una textura de normales de oleaje marino/fluvial 100% continua y tileable (estilo CityRT / Cities: Skylines).
+   * R, G, B: componentes del vector normal en espacio tangente (X, Y, Z).
+   * A: máscara de crestas de espuma y oleaje micro.
+   */
+  public getProceduralWaterNormalTexture(size: number = 256): THREE.DataTexture {
+    if (this.waterNormalCache) return this.waterNormalCache;
+
+    const data = new Uint8Array(size * size * 4);
+    // Armónicos periódicos cerrados (k_x, k_y enteros) para garantizar tileabilidad matemática perfecta
+    const waves = [
+      { kx: 3, ky: 2, amp: 0.045, phase: 0.1 },
+      { kx: -2, ky: 5, amp: 0.035, phase: 1.2 },
+      { kx: 6, ky: -4, amp: 0.022, phase: 2.3 },
+      { kx: 8, ky: 7, amp: 0.015, phase: 0.7 },
+      { kx: -11, ky: 9, amp: 0.010, phase: 3.1 },
+      { kx: 14, ky: -12, amp: 0.007, phase: 1.8 },
+      { kx: 20, ky: 18, amp: 0.004, phase: 0.5 },
+      { kx: -25, ky: 22, amp: 0.003, phase: 2.7 },
+    ];
+
+    const twoPi = Math.PI * 2;
+
+    for (let y = 0; y < size; y++) {
+      const v = y / size;
+      for (let x = 0; x < size; x++) {
+        const u = x / size;
+
+        let dhdu = 0;
+        let dhdv = 0;
+        let height = 0;
+
+        for (let i = 0; i < waves.length; i++) {
+          const w = waves[i]!;
+          const angle = twoPi * (w.kx * u + w.ky * v) + w.phase;
+          const s = Math.sin(angle);
+          const c = Math.cos(angle);
+
+          height += s * w.amp;
+          dhdu += c * (twoPi * w.kx) * w.amp;
+          dhdv += c * (twoPi * w.ky) * w.amp;
+        }
+
+        const strength = 2.0;
+        const nx = -dhdu * strength;
+        const ny = -dhdv * strength;
+        const nz = 1.0;
+        const len = Math.hypot(nx, ny, nz);
+
+        const normX = nx / len;
+        const normY = ny / len;
+        const normZ = nz / len;
+
+        const idx = (y * size + x) * 4;
+        data[idx + 0] = Math.floor((normX * 0.5 + 0.5) * 255);
+        data[idx + 1] = Math.floor((normY * 0.5 + 0.5) * 255);
+        data[idx + 2] = Math.floor((normZ * 0.5 + 0.5) * 255);
+        data[idx + 3] = Math.floor(Math.max(0, Math.min(255, (height * 10.0 + 0.5) * 255)));
+      }
+    }
+
+    const tex = new THREE.DataTexture(data, size, size, THREE.RGBAFormat, THREE.UnsignedByteType);
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.wrapT = THREE.RepeatWrapping;
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    tex.generateMipmaps = true;
+    tex.needsUpdate = true;
+
+    this.waterNormalCache = tex;
+    return tex;
   }
 
   /**

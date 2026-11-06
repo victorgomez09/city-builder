@@ -40,7 +40,9 @@ export class RoadGraph {
   private gridCoordToNodeId: Map<string, number> = new Map();
 
   private getCoordKey(x: number, z: number): string {
-    return `${x},${z}`;
+    const rx = Math.round(x * 10) / 10;
+    const rz = Math.round(z * 10) / 10;
+    return `${rx},${rz}`;
   }
 
   /**
@@ -78,6 +80,93 @@ export class RoadGraph {
   public getNodeAt(x: number, z: number): RoadNode | undefined {
     const id = this.gridCoordToNodeId.get(this.getCoordKey(x, z));
     return id !== undefined ? this.nodes.get(id) : undefined;
+  }
+
+  /**
+   * Busca el nodo más cercano dentro de una distancia de atracción (snapping).
+   */
+  public findClosestNode(x: number, z: number, maxDist: number = 2.5): RoadNode | null {
+    let closestNode: RoadNode | null = null;
+    let minDistSq = maxDist * maxDist;
+
+    for (const node of this.nodes.values()) {
+      const dx = node.x - x;
+      const dz = node.z - z;
+      const dSq = dx * dx + dz * dz;
+      if (dSq < minDistSq) {
+        minDistSq = dSq;
+        closestNode = node;
+      }
+    }
+
+    return closestNode;
+  }
+
+  /**
+   * Busca la proyección ortogonal más cercana sobre cualquier arista existente.
+   */
+  public findClosestEdge(
+    x: number,
+    z: number,
+    maxDist: number = 2.0
+  ): { edge: RoadEdge; projX: number; projZ: number; t: number } | null {
+    let closest: { edge: RoadEdge; projX: number; projZ: number; t: number } | null = null;
+    let minDistSq = maxDist * maxDist;
+
+    for (const edge of this.edges.values()) {
+      const nodeA = this.nodes.get(edge.fromNodeId);
+      const nodeB = this.nodes.get(edge.toNodeId);
+      if (!nodeA || !nodeB) continue;
+
+      const segX = nodeB.x - nodeA.x;
+      const segZ = nodeB.z - nodeA.z;
+      const segLenSq = segX * segX + segZ * segZ;
+      if (segLenSq < 0.0001) continue;
+
+      const t = Math.max(0.12, Math.min(0.88, ((x - nodeA.x) * segX + (z - nodeA.z) * segZ) / segLenSq));
+      const projX = nodeA.x + t * segX;
+      const projZ = nodeA.z + t * segZ;
+
+      const dx = x - projX;
+      const dz = z - projZ;
+      const dSq = dx * dx + dz * dz;
+
+      if (dSq < minDistSq) {
+        minDistSq = dSq;
+        closest = { edge, projX, projZ, t };
+      }
+    }
+
+    return closest;
+  }
+
+  /**
+   * Divide una arista existente insertando un nuevo nodo de intersección en (splitX, splitZ).
+   */
+  public splitEdge(edgeId: number, splitX: number, splitZ: number, elevation: number = 0): RoadNode | null {
+    const edge = this.edges.get(edgeId);
+    if (!edge) return null;
+
+    const nodeA = this.nodes.get(edge.fromNodeId);
+    const nodeB = this.nodes.get(edge.toNodeId);
+    if (!nodeA || !nodeB) return null;
+
+    const midNode = this.getOrCreateNode(Math.round(splitX * 10) / 10, Math.round(splitZ * 10) / 10, elevation);
+
+    // Eliminar la arista original
+    this.edges.delete(edgeId);
+    nodeA.outNeighbors = nodeA.outNeighbors.filter((id) => id !== nodeB.id);
+    nodeB.inNeighbors = nodeB.inNeighbors.filter((id) => id !== nodeA.id);
+    if (!edge.isOneWay) {
+      nodeB.outNeighbors = nodeB.outNeighbors.filter((id) => id !== nodeA.id);
+      nodeA.inNeighbors = nodeA.inNeighbors.filter((id) => id !== nodeB.id);
+    }
+
+    // Crear A -> Mid y Mid -> B
+    this.addRoadSegment(nodeA.x, nodeA.z, midNode.x, midNode.z, nodeA.elevation, elevation, edge.roadType);
+    this.addRoadSegment(midNode.x, midNode.z, nodeB.x, nodeB.z, elevation, nodeB.elevation, edge.roadType);
+
+    return midNode;
   }
 
   /**

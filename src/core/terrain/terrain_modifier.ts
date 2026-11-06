@@ -32,6 +32,7 @@ export class TerrainModifier {
    * @param worldZ Coordenada Z del centro de la brocha en el mundo
    * @param settings Parámetros de la brocha (radio, fuerza, herramienta)
    * @param deltaTime Segundos transcurridos desde el último cálculo
+   * @param isBuildable Función opcional para restringir deformación a parcelas desbloqueadas (Cities: Skylines)
    * @returns Bounding box de vértices modificados [minVX, maxVX, minVZ, maxVZ] para optimizar la GPU
    */
   public static applyBrush(
@@ -42,7 +43,8 @@ export class TerrainModifier {
     worldX: number,
     worldZ: number,
     settings: BrushSettings,
-    deltaTime: number
+    deltaTime: number,
+    isBuildable?: (gx: number, gz: number) => boolean
   ): [number, number, number, number] | null {
     if (settings.tool === TerraformTool.NONE || settings.radius <= 0) {
       return null;
@@ -73,6 +75,9 @@ export class TerrainModifier {
     if (settings.tool === TerraformTool.SMOOTH) {
       for (let vz = minVZ; vz <= maxVZ; vz++) {
         for (let vx = minVX; vx <= maxVX; vx++) {
+          if (isBuildable && !isBuildable(Math.min(width - 1, vx), Math.min(height - 1, vz))) {
+            continue;
+          }
           const dx = vx - gridX;
           const dz = vz - gridZ;
           const distSq = dx * dx + dz * dz;
@@ -87,27 +92,34 @@ export class TerrainModifier {
       }
     }
 
-    // Aplicar deformación con atenuación radial cuadrática suave (Falloff cosenoidal / suave)
+    let modified = false;
+
+    // Aplicar deformación con atenuación radial cuadrática suave (Falloff cosenoidal)
     for (let vz = minVZ; vz <= maxVZ; vz++) {
       for (let vx = minVX; vx <= maxVX; vx++) {
+        // Comprobar si el vértice está dentro de territorio desbloqueado
+        if (isBuildable && !isBuildable(Math.min(width - 1, vx), Math.min(height - 1, vz))) {
+          continue;
+        }
+
         const dx = vx - gridX;
         const dz = vz - gridZ;
         const distSq = dx * dx + dz * dz;
 
         if (distSq <= radiusSq) {
           const dist = Math.sqrt(distSq);
-          // Factor de atenuación: 1 en el centro, 0 en el borde
           const falloff = 0.5 * (1 + Math.cos((dist / radiusInCells) * Math.PI));
           const idx = vz * stride + vx;
           const currentH = heights[idx] ?? 0;
+          modified = true;
 
           switch (settings.tool) {
             case TerraformTool.RAISE:
-              heights[idx] = Math.min(25.0, currentH + amount * falloff);
+              heights[idx] = Math.min(30.0, currentH + amount * falloff);
               break;
 
             case TerraformTool.LOWER:
-              heights[idx] = Math.max(0.0, currentH - amount * falloff);
+              heights[idx] = Math.max(0.1, currentH - amount * falloff);
               break;
 
             case TerraformTool.FLATTEN: {
@@ -126,6 +138,6 @@ export class TerrainModifier {
       }
     }
 
-    return [minVX, maxVX, minVZ, maxVZ];
+    return modified ? [minVX, maxVX, minVZ, maxVZ] : null;
   }
 }

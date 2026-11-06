@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { PRNG } from '@core/utils/prng';
-import { Vec2 } from '@core/utils/math';
+import { Vec2, clamp, lerp, smoothstep, damp } from '@core/utils/math';
 import { ObjectPool } from '@core/utils/pool';
+import { SimplexNoise } from '@core/utils/noise';
 
 describe('PRNG (Mulberry32)', () => {
   it('debe producir secuencias idénticas para una misma semilla', () => {
@@ -71,5 +72,51 @@ describe('ObjectPool', () => {
     expect(obj2).toBe(obj1);
     expect(obj2.x).toBe(0);
     expect(obj2.y).toBe(0);
+  });
+});
+
+describe('Scalar Math & Damping', () => {
+  it('debe calcular clamp, lerp y smoothstep correctamente', () => {
+    expect(clamp(-5, 0, 10)).toBe(0);
+    expect(clamp(15, 0, 10)).toBe(10);
+    expect(clamp(5, 0, 10)).toBe(5);
+
+    expect(lerp(10, 20, 0.5)).toBe(15);
+    expect(smoothstep(0, 10, 5)).toBe(0.5);
+  });
+
+  it('debe amortiguar suavemente hacia el target con damp', () => {
+    const cur = 0;
+    const target = 100;
+    const nextVal = damp(cur, target, 10, 0.05);
+    expect(nextVal).toBeGreaterThan(0);
+    expect(nextVal).toBeLessThan(100);
+  });
+});
+
+describe('SimplexNoise', () => {
+  it('debe ser determinista con la misma semilla', () => {
+    const n1 = new SimplexNoise(1234);
+    const n2 = new SimplexNoise(1234);
+
+    for (let x = 0; x < 5; x++) {
+      for (let y = 0; y < 5; y++) {
+        expect(n1.noise2D(x * 0.1, y * 0.1)).toBeCloseTo(n2.noise2D(x * 0.1, y * 0.1), 6);
+        expect(n1.fbm2D(x * 0.2, y * 0.2)).toBeCloseTo(n2.fbm2D(x * 0.2, y * 0.2), 6);
+      }
+    }
+  });
+
+  it('debe mantenerse dentro de los rangos acotados [-1, 1] y [0, 1]', () => {
+    const noise = new SimplexNoise(999);
+    for (let i = 0; i < 20; i++) {
+      const val2D = noise.noise2D(i * 1.7, i * 2.3);
+      expect(val2D).toBeGreaterThanOrEqual(-1.5);
+      expect(val2D).toBeLessThanOrEqual(1.5);
+
+      const ridged = noise.ridged2D(i * 0.5, i * 0.5);
+      expect(ridged).toBeGreaterThanOrEqual(0);
+      expect(ridged).toBeLessThanOrEqual(1.0);
+    }
   });
 });

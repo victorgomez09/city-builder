@@ -9,11 +9,12 @@
 | Documento | Descripción | Fase |
 |---|---|---|
 | [**01. Arquitectura General & Dual Loop**](01-architecture-dual-loop.md) | Separación estricta Main Thread vs Web Worker, flujo de mensajes tipados y Zero-Allocation. | Fase 0 |
-| [**02. Motor Gráfico, Cámara & Shaders**](02-graphics-camera-shaders.md) | Three.js, Flat Shading low-poly, controlador cinemático RTS y ciclo Día/Noche. | Fase 1 |
-| [**03. Terreno Dinámico & Terraformación**](03-terrain-and-terraforming.md) | Generación procedural determinista, buffers `DynamicDrawUsage` y brochas en tiempo real. | Fase 1 & 1.5 |
+| [**02. Motor Gráfico, Cámara & Shaders**](02-graphics-camera-shaders.md) | Three.js PBR continuo, controlador cinemático RTS y ciclo Día/Noche con HDRI Poly Haven. | Fase 1 |
+| [**03. Terreno Dinámico, Paisaje Extendido & Macro-Parcelas**](03-terrain-and-terraforming.md) | Orografía geomorfológica natural unificada, paisaje exterior continuo hasta 14 km (OuterLandscapeMesh), playas vs acantilados, vegetación mundial y macro-parcelas con hitos. | Fase 1 & 1.5 |
 | [**04. Solver Hidrodinámico (SWE 2.5D)**](04-hydrodynamics-swe-water.md) | Simulación física de fluidos mediante Ecuaciones de Aguas Someras, manantiales y olas. | Fase 1.5 |
-| [**05. Red Vial, Grafo & Pathfinding A\***](05-road-network-and-pathfinding.md) | Topología vial, algoritmo A* con ObjectPool y render procedural de calzadas. | Fase 2 |
-| [**06. Pipeline de Assets PBR & Modelos 3D**](06-asset-pipeline-and-pbr.md) | Gestor AssetManager, texturas PBR continuas y atrezzo urbano GLTF en calzadas. | Fase 2 & 3 |
+| [**05. Red Vial, Grafo & Pathfinding A\***](05-road-network-and-pathfinding.md) | Topología vial, mecánicas CityRT (libre ángulo, snapping, HUD flotante, niveles E/Q), vehículos y render PBR. | Fase 2 |
+| [**06. Pipeline de Assets PBR, Modelos 3D & Vegetación**](06-asset-pipeline-and-pbr.md) | Gestor AssetManager, texturas PBR, atrezzo GLTF, skyline Downtown y arbolado masivo instanciado. | Fase 2 & 3 |
+| [**07. Zonificación RCI & Crecimiento de Edificios**](07-zoning-and-building-growth.md) | Cuadrícula de casillas 4x4m a lo largo de calles, pintura de zonas RCI y crecimiento procedimental de edificios. | Fase 3 |
 
 ---
 
