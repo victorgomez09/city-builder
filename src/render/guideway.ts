@@ -58,8 +58,8 @@ export const GUIDEWAY_MIN_CROSSHEAD_CLEARANCE_M = 0.5;
 /** A tram on the guideway has its floor this far above the beam top. */
 export const TRAM_FLOOR_ABOVE_BEAM_M = 0.45;
 /** Pale precast concrete, the beams a shade lighter than the columns under them. */
-export const GUIDEWAY_BEAM_COLOR = 0xc9cbc8;
-export const GUIDEWAY_COLUMN_COLOR = 0xb7bab8;
+export const GUIDEWAY_BEAM_COLOR = 0x87837d;
+export const GUIDEWAY_COLUMN_COLOR = 0x78746d;
 
 export interface GuidewayPoint {
   x: number;
@@ -634,8 +634,16 @@ export class GuidewayRenderer {
   private readonly scene: THREE.Scene;
   private readonly surfaceAt: (wx: number, wz: number) => number;
   private readonly box = new THREE.BoxGeometry(1, 1, 1);
-  private readonly beamMaterial = new THREE.MeshLambertMaterial({ color: GUIDEWAY_BEAM_COLOR });
-  private readonly columnMaterial = new THREE.MeshLambertMaterial({ color: GUIDEWAY_COLUMN_COLOR });
+  private readonly beamMaterial = new THREE.MeshStandardMaterial({
+    color: GUIDEWAY_BEAM_COLOR,
+    roughness: 0.9,
+    metalness: 0.05,
+  });
+  private readonly columnMaterial = new THREE.MeshStandardMaterial({
+    color: GUIDEWAY_COLUMN_COLOR,
+    roughness: 0.9,
+    metalness: 0.05,
+  });
   private meshes: THREE.InstancedMesh[] = [];
   private current: Guideway | null = null;
 

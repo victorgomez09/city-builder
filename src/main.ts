@@ -279,7 +279,8 @@ async function startGame(session: Extract<AppSession, { screen: 'playing' }>): P
   const handle = await createRenderer(viewport);
   const world = createWorldScene();
 
-  const map = generateProceduralMap(seed, MAP_NAME);
+  const cityName = session.cityName ?? MAP_NAME;
+  const map = generateProceduralMap(seed, cityName, session.mapOptions);
 
   const terrain = new TerrainRenderer(world.scene);
   terrain.build(map);

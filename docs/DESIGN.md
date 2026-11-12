@@ -39,7 +39,8 @@ file is the index to what they foreclose, not a second copy of the argument.
 - **Signal phase simulation** — a signal that actually cycles and holds traffic.
   Signal heads, stop and give-way boards, and motorway gantries are built; what
   is deferred is the phasing behind them.
-- **Weather, seasons, flooding, climate variation.**
+- **Weather and seasons (climatology) are no longer deferred:** dynamic atmospheric
+  states, seasonal foliage transitions and ambient sky shifts are in progress ([ROADMAP.md](ROADMAP.md)).
 - **Supply chains, imports and exports; deeper industry.**
 - **Tunnels**, and a **third deck level** — so interchange stacks and turbines
   are out. A tile carries one road, or two where one passes over the other
@@ -49,8 +50,9 @@ file is the index to what they foreclose, not a second copy of the argument.
   segments ([ADR-0016](engineering/adr/0016-roads-are-a-network-of-nodes-and-segments.md),
   [road network](world-sim/road-network/README.md)). Still deferred: signal-phase design, reversible and contraflow lanes, and per-lane speed
   limits.
-- **Terrain painting**, and a procedural map generator complementing the curated
-  maps.
+- **Procedural map generator is no longer deferred:** in-browser procedural terrain
+  synthesis and biome generation are in progress ([ROADMAP.md](ROADMAP.md)). Still
+  deferred: in-game interactive terrain painting.
 - **Dynamic water flow simulation.** Heightfield flow is a performance tar pit,
   and the derived sea-level model already covers seas, lakes and dug canals.
 - **Sewage, recycling, internet and heating as distinct networks.** Garbage is

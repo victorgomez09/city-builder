@@ -16,8 +16,9 @@ import { StartMenu } from './StartMenu';
 import { useCityStore } from './store';
 import { deleteSave, listSaves, type SaveHeaderWithId } from '../app/persist';
 import { quitToMenu, startLoadGame, startNewGame } from '../app/session';
+import { NewGameConfig, NewGamePanel } from './NewGamePanel';
 
-type SubView = 'main' | 'options' | 'saves';
+type SubView = 'main' | 'options' | 'saves' | 'newGame';
 
 function toSaveRow(header: SaveHeaderWithId): SaveRow {
   return {
@@ -130,13 +131,24 @@ export function MenuScreen(): JSX.Element | null {
     );
   }
 
+  if (sub === 'newGame') {
+    return (
+      <NewGamePanel
+        onBack={() => setSub('main')}
+        onStart={(cfg: NewGameConfig) =>
+          startNewGame(cfg.cityName, cfg.seed, cfg.options)
+        }
+      />
+    );
+  }
+
   return (
     <StartMenu
       hasActiveGame={screen === 'playing'}
       hasSaves={saves.length > 0}
       logoSlot={<BrandLogo className="text-white self-center text-center" />}
       onResume={resumeGame}
-      onNewGame={startNewGame}
+      onNewGame={() => setSub('newGame')}
       onSaveGame={() => useCityStore.getState().bound?.saveGame()}
       onLoadGame={() => setSub('saves')}
       onOptions={() => setSub('options')}

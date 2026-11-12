@@ -2228,3 +2228,16 @@ export interface District {
  * Additive string-union; extend by appending new members.
  */
 export type Policy = 'lowTax' | 'highTax' | 'noHeavyTraffic' | 'greenEnergy';
+
+/**
+ * Map archetype — the general terrain type of the map, influencing its
+ * topography, water distribution, and overall layout.
+ */
+export type MapArchetype = 'valley' | 'plains' | 'coastal' | 'mountain' | 'island' | 'custom';
+
+export interface MapOptions {
+  relief: number; // 0..1, controls the overall terrain ruggedness
+  waterLevel: number; // 0..1, controls the overall water coverage on the map
+  treeDensity: number; // 0..1, controls the overall tree coverage on the map
+  archetype: MapArchetype; // general terrain type of the map
+}

@@ -378,8 +378,8 @@ export function glintSpecular(ndotH: number): number {
 // WaterRenderer
 // ---------------------------------------------------------------------------
 
-/** Vertex-grid resolution of the water plane — cheap (GPU-animated), fine enough to carry the swell/normal detail. */
-const WATER_SEGMENTS = 128;
+/** Vertex-grid resolution of the water plane — high definition for smooth shoreline intersection. */
+const WATER_SEGMENTS = 256;
 const DEFAULT_LIGHT_DIRECTION = new THREE.Vector3(0, 1, 0.15).normalize();
 
 function findDirectionalLight(scene: THREE.Scene): THREE.DirectionalLight | null {
@@ -563,7 +563,9 @@ export class WaterRenderer {
         .add(warpNode);
       swell = swell.add(sin(phase).mul(layer.amplitude));
     }
-    material.positionNode = positionLocal.add(vec3(0, swell, 0));
+    // Shoreline swell attenuation: calm water flush with the sand, preventing vertical wave-clipping
+    const swellAtten = clamp(depthAttr.div(1.5), 0, 1);
+    material.positionNode = positionLocal.add(vec3(0, swell.mul(swellAtten), 0));
 
     // Scrolling wave-normal layers: shading-only XZ tilt with trochoidal crest shaping —
     // three widely separated layers from 24m ripples to 88m orbital swell.
@@ -591,11 +593,15 @@ export class WaterRenderer {
     // the sky reflection's fresnel weight.
     const viewDir = normalize(positionViewDirection);
     const cosView = clamp(dot(transformNormalToView(shadingNormalLocal), viewDir), 0, 1);
-    material.opacityNode = mix(
+    const baseOpacity = mix(
       float(OPACITY_AT_GRAZING_ANGLE),
       float(OPACITY_AT_NORMAL_INCIDENCE),
       cosView,
     );
+    // Soft depth fade: smoothly fades water opacity to zero at the water-land contact line,
+    // eliminating sharp polygon cutoffs and blending seamlessly into the sand.
+    const depthFade = clamp(depthAttr.div(0.6), 0, 1);
+    material.opacityNode = baseOpacity.mul(depthFade);
 
     // Analytic sky reflection with cubic Fresnel curve: grazing views reflect
     // the sky dome cleanly, while overhead/RTS views see the clear cerulean depth.

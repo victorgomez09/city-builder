@@ -9,9 +9,11 @@
  * localStorage so they survive across games and reloads.
  */
 
+import { MapOptions } from "../shared/types";
+
 /** What the next boot should show. Persisted in sessionStorage (per tab). */
 export type AppSession =
-  { screen: 'menu' } | { screen: 'playing'; seed: number; mode: 'new' | 'load'; saveId?: number };
+  { screen: 'menu' } | { screen: 'playing'; seed: number; mode: 'new' | 'load'; cityName?: string, mapOptions?: MapOptions; saveId?: number };
 
 const SESSION_KEY = 'cityvi.session';
 const SETTINGS_KEY = 'cityvi.settings';
@@ -46,8 +48,8 @@ export function randomSeed(): number {
 }
 
 /** Writes "start a fresh random city" intent and reloads into gameplay. */
-export function startNewGame(): void {
-  writeAppSession({ screen: 'playing', seed: randomSeed(), mode: 'new' });
+export function startNewGame(cityName?: string, seed = randomSeed(), mapOptions?: MapOptions): void {
+  writeAppSession({ screen: 'playing', seed: seed, mode: 'new', cityName, mapOptions });
   location.reload();
 }
 

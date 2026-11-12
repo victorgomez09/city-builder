@@ -34,6 +34,10 @@ again, update the figure here and nowhere else.
 
 **Open:**
 
+- The municipal budget and tax management panel is not yet built: while the
+  sim models sector taxes (`setTaxRate`), demand response (`(rate − 0.09) × 4`),
+  and debt repayment, no DOM panel or store action exposes tax sliders (0%–30%)
+  or loan drawdown/repayment controls up to the ¢100,000 ceiling.
 - What a review of every shot the tools write found wrong in the game is
   ranked in [open-visual-defects.md](roadmap/open-visual-defects.md).
 - A bend turns at its kerb return's radius, not its class's minimum curve
@@ -169,11 +173,11 @@ at the player's choice (complete 2026-10-16;
 fields a line's vehicles over its own network, a mode with no depot runs
 nothing, every vehicle in service is charged its operating cost, buses
 pull out at dawn and home at night, and the fleet at home stands on the
-apron. **In progress, at the player's request (2026-10-16): tramways**
-([tramways.md](specs/tramways.md)) — a street tramway drawn
+apron. So is tramways, at the player's request (complete 2026-10-23;
+[tramways.md](specs/tramways.md)): a street tramway drawn
 as a street cars share, a tram reservation lifted onto an elevated guideway
 in the Disney World monorail's form with raised stations, and every tram
-lane routable; complete 2026-10-23 with the raised stations. **The
+lane routable. **The
 programme's last epic, parks and recreation, is complete (2026-10-23;
 [parks-and-recreation.md](specs/parks-and-recreation.md))** —
 parks at the real sizes of the US park types, planned to a provision
@@ -192,21 +196,18 @@ modernizing Tailwind v4 theme tokens, refined panel chrome, updated typography
 and iconography, clearer dock/drawer hierarchies, and smooth micro-interactions
 across every panel, drawer and HUD element, while preserving Rule Zero
 ([R-design-001](truths/design.md)) and full test coverage across `src/ui`.
-**At the player's request (2026-11-12): municipal budget & tax management panel**
-— bringing the simulation's tax and loan mechanics to the interface. While the
-worker and economy model fully simulate sector taxes (`setTaxRate` for residential,
-commercial, and industrial), demand response (`(rate − 0.09) × 4`,
-[demand-rci.md](game-design/balancing/demand-rci.md)), and debt repayment
-([economy.md](game-design/economy.md)), there is currently no DOM panel or store
-action exposing tax sliders or loan controls to the player, despite the Advisor
-explicitly recommending tax adjustments. This epic delivers a dedicated Budget &
-Finance panel with sector tax sliders (0%–30%), loan drawdown and repayment
-controls up to the ¢100,000 ceiling, and a monthly ledger view, wired directly
-through `src/ui/store.ts` to `CommandQueue` and adhering to Rule Zero
-([R-design-001](truths/design.md)).
-Next, the [DESIGN.md](DESIGN.md) deferred backlog (weather, deeper industry,
-more transit modes) and AI raster map packs, facade-atlas stage 2 and
-screen-space AO/reflections are the shelf to pick from.
+**In progress, at the player's request (2026-11-12): weather and seasons (climatology)**
+— dynamic atmospheric states (clear, overcast, rain precipitation, fog), seasonal
+foliage transitions (spring, summer, autumn, winter snow), ambient sky lighting shifts,
+and surface rain sheen, respecting zero-image-texture InstancedMesh rules
+`[R-render-001]`, `[R-render-005]`, `[R-render-006]`.
+**In progress, at the player's request (2026-11-12): procedural map generator**
+— in-browser procedural terrain synthesis (multi-octave simplex/Perlin elevation
+heightfields, natural river carving, coastline synthesis, and vegetation biomes)
+complementing curated AI raster maps, fully deterministic and playable from seed.
+Next, the [DESIGN.md](DESIGN.md) deferred backlog (deeper industry, more transit modes)
+and AI raster map packs, facade-atlas stage 2 and screen-space AO/reflections are the
+shelf to pick from.
 
 ---
 

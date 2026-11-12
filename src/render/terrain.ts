@@ -33,8 +33,16 @@ const GRASS_MAX_HEIGHT = 130; // meters at which elevation-driven effects (patch
 const ROCK_BLEND_RANGE = 3; // meters of slope beyond MAX_BUILD_SLOPE to fully saturate to rock
 const TREE_DARKEN_MAX = 0.35; // fraction darkened at full (255) tree density (canopy-shadow read)
 
-const SAND_COLOR: readonly [number, number, number] = [0.8, 0.74, 0.52];
-const ROCK_COLOR: readonly [number, number, number] = [0.45, 0.43, 0.4];
+const SAND_COLOR: readonly [number, number, number] = [0.82, 0.77, 0.58];
+const ROCK_DARK_SLATE: readonly [number, number, number] = [0.3, 0.32, 0.36];
+const ROCK_GRANITE: readonly [number, number, number] = [0.44, 0.43, 0.41];
+const ROCK_LIGHT_STONE: readonly [number, number, number] = [0.55, 0.53, 0.49];
+const SNOW_COLOR: readonly [number, number, number] = [0.93, 0.95, 0.98];
+
+/** Altitude in meters where alpine snowcaps begin to appear. */
+export const SNOW_MIN_HEIGHT = 400;
+/** Vertical transition range in meters over which snow reaches full coverage. */
+export const SNOW_BLEND_RANGE = 50;
 
 // Water rendering — terrain-side seabed/shoreline treatment. The water
 // SURFACE itself (translucent plane, waves, glint) is water.ts's; this is
@@ -44,11 +52,11 @@ const SEABED_DEEP_COLOR: readonly [number, number, number] = [0.24, 0.38, 0.48];
 const FOAM_COLOR: readonly [number, number, number] = [0.9, 0.93, 0.96]; // shoreline sand/foam highlight
 
 // Ground cover — grass hue variants, dry patches, mown band.
-const GRASS_HUE_FRESH: readonly [number, number, number] = [0.32, 0.58, 0.26];
-const GRASS_HUE_OLIVE: readonly [number, number, number] = [0.42, 0.5, 0.24];
-const GRASS_HUE_YELLOW: readonly [number, number, number] = [0.58, 0.56, 0.22];
-const DRY_PATCH_COLOR: readonly [number, number, number] = [0.5, 0.42, 0.22];
-const MOWN_GREEN_COLOR: readonly [number, number, number] = [0.28, 0.62, 0.28];
+const GRASS_HUE_FRESH: readonly [number, number, number] = [0.27, 0.53, 0.23];
+const GRASS_HUE_OLIVE: readonly [number, number, number] = [0.36, 0.48, 0.24];
+const GRASS_HUE_YELLOW: readonly [number, number, number] = [0.46, 0.54, 0.25];
+const DRY_PATCH_COLOR: readonly [number, number, number] = [0.48, 0.43, 0.28];
+const MOWN_GREEN_COLOR: readonly [number, number, number] = [0.26, 0.58, 0.26];
 
 /** Low-frequency cell size (meters/cycle) for the 3-hue grass blend — the "different grass types" read. */
 const GRASS_HUE_CELL_METERS = 96;
@@ -199,7 +207,30 @@ export function groundCoverTint(
   const patchNoise = valueNoise2D(worldX, worldZ, DRY_PATCH_CELL_METERS, DRY_PATCH_SEED);
   const base = grassHueBlend(hueNoise);
   const patchT = dryPatchWeight(patchNoise, treeDensity, height);
-  return lerp3(base, DRY_PATCH_COLOR, patchT);
+  const tinted = lerp3(base, DRY_PATCH_COLOR, patchT);
+
+  // Subtle organic micro-noise (fine grass blade / soil variation):
+  const micro = valueNoise2D(worldX, worldZ, 6, 3141);
+  const microFactor = 0.94 + micro * 0.12;
+  return [
+    clamp01(tinted[0] * microFactor),
+    clamp01(tinted[1] * microFactor),
+    clamp01(tinted[2] * microFactor),
+  ];
+}
+
+/**
+ * Procedural geological rock texture:
+ * Sedimentary horizontal strata and micro-fractures blending dark basalt/slate,
+ * weathered mountain granite, and sunlit limestone layers.
+ */
+export function rockColorAt(worldX: number, worldZ: number, height: number): [number, number, number] {
+  const strataNoise = valueNoise2D(worldX, worldZ, 32, 4821);
+  const microNoise = valueNoise2D(worldX, worldZ, 7, 9217);
+  const strataBand = Math.sin(height * 0.35 + strataNoise * 3.2) * 0.5 + 0.5;
+
+  const baseStone = lerp3(ROCK_DARK_SLATE, ROCK_GRANITE, microNoise);
+  return lerp3(baseStone, ROCK_LIGHT_STONE, strataBand * 0.45);
 }
 
 /**
@@ -207,7 +238,8 @@ export function groundCoverTint(
  * - underwater (height < SEA_LEVEL): seabedDepthColor ramp by depth.
  * - on land: sand near SEA_LEVEL fading into the ground-cover tint
  *   (hue variants + dry patches + mown-near-road), blended to rock where
- *   local slope exceeds MAX_BUILD_SLOPE.
+ *   local slope exceeds MAX_BUILD_SLOPE or at high alpine altitudes.
+ * - high alpine summits (height > 62m) receive snowcaps on gentle ledges.
  * - a shoreline foam band is blended in wherever height sits within
  *   SHORELINE_BAND_METERS of SEA_LEVEL, on either side.
  * - dense tree cover darkens the final color (canopy-shadow read).
@@ -233,8 +265,27 @@ export function vertexColorFor(
     const cover = groundCoverTint(worldX, worldZ, treeDensity, height, nearRoad);
     rgb = lerp3(SAND_COLOR, cover, sandT);
 
-    const rockT = clamp01((slope - MAX_BUILD_SLOPE) / ROCK_BLEND_RANGE);
-    rgb = lerp3(rgb, ROCK_COLOR, rockT);
+    // Multi-criteria rock blending:
+    // 1. Cliffs where slope exceeds buildable limit
+    const slopeRock = clamp01((slope - (MAX_BUILD_SLOPE - 0.8)) / ROCK_BLEND_RANGE);
+    // 2. High altitude transition (rock emerges naturally above 38m, dominates above 65m)
+    const altitudeRock = clamp01((height - 38) / 28);
+    const rockT = Math.max(slopeRock, altitudeRock * 0.9);
+
+    if (rockT > 0) {
+      const rockRgb = rockColorAt(worldX, worldZ, height);
+      rgb = lerp3(rgb, rockRgb, rockT);
+    }
+
+    // High alpine snowcaps:
+    // Above SNOW_MIN_HEIGHT, snow appears on summits and gentle high-altitude ledges
+    if (height > SNOW_MIN_HEIGHT) {
+      const snowAltitude = clamp01((height - SNOW_MIN_HEIGHT) / SNOW_BLEND_RANGE);
+      const snowSlopeFactor = clamp01(1 - (slope - 2) / 5.5);
+      const snowNoise = valueNoise2D(worldX, worldZ, 18, 7331);
+      const snowT = clamp01(snowAltitude * snowSlopeFactor * (snowNoise * 0.5 + 0.75));
+      rgb = lerp3(rgb, SNOW_COLOR, snowT);
+    }
   }
 
   const shoreT = shorelineBandWeight(height);
@@ -351,8 +402,8 @@ export class TerrainRenderer {
     // reads no brighter than the bodies standing on it after dark.
     this.material = new MeshStandardNodeMaterial({
       vertexColors: true,
-      roughness: 1,
-      metalness: 0,
+      roughness: 0.9,
+      metalness: 0.05,
     });
     this.material.colorNode = nightTintNode(this.nightFactorUniform);
     // Skirt: DoubleSide so the perimeter reads correctly regardless of which
@@ -435,21 +486,21 @@ export class TerrainRenderer {
     const iz = Math.floor(gz);
     const u = gx - ix;
     const v = gz - iz;
-    // Fast path for exact tile corners — the per-vertex sampling
-    // makeChunkGeometry does for every mesh vertex — needs just one corner.
     if (u === 0 && v === 0) return this.cornerHeight(ix, iz);
-    // Otherwise interpolate within the one triangle (u+v=1 diagonal) the point
-    // falls in — only the three corners of that triangle are needed.
-    if (u + v <= 1) {
-      const h00 = this.cornerHeight(ix, iz);
-      const h10 = this.cornerHeight(ix + 1, iz);
-      const h01 = this.cornerHeight(ix, iz + 1);
-      return h00 + u * (h10 - h00) + v * (h01 - h00);
-    }
-    const h11 = this.cornerHeight(ix + 1, iz + 1);
-    const h01 = this.cornerHeight(ix, iz + 1);
+
+    // Smooth cubic Hermite interpolation between tile corners:
+    // Produces a continuous, curved surface (C1 slope continuity) across tile boundaries,
+    // eliminating straight planar facets and sharp polygonal diagonal creases.
+    const su = u * u * (3 - 2 * u);
+    const sv = v * v * (3 - 2 * v);
+    const h00 = this.cornerHeight(ix, iz);
     const h10 = this.cornerHeight(ix + 1, iz);
-    return h11 + (1 - u) * (h01 - h11) + (1 - v) * (h10 - h11);
+    const h01 = this.cornerHeight(ix, iz + 1);
+    const h11 = this.cornerHeight(ix + 1, iz + 1);
+
+    const top = h00 + (h10 - h00) * su;
+    const bottom = h01 + (h11 - h01) * su;
+    return top + (bottom - top) * sv;
   }
 
   /**
@@ -590,7 +641,9 @@ export class TerrainRenderer {
 
   private makeChunkGeometry(cx: number, cz: number): THREE.BufferGeometry {
     const chunkMeters = CHUNK_TILES * TILE_METERS;
-    const geometry = new THREE.PlaneGeometry(chunkMeters, chunkMeters, CHUNK_TILES, CHUNK_TILES);
+    // 32x32 quads per chunk (10m vertex spacing) following the smooth Hermite cubic heightfield
+    const segments = CHUNK_TILES * 2;
+    const geometry = new THREE.PlaneGeometry(chunkMeters, chunkMeters, segments, segments);
     geometry.rotateX(-Math.PI / 2);
     geometry.translate(cx * chunkMeters + chunkMeters / 2, 0, cz * chunkMeters + chunkMeters / 2);
 

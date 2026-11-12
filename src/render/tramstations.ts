@@ -423,16 +423,30 @@ export class TramStationRenderer {
   private readonly scene: THREE.Scene;
   private readonly surfaceAt: (wx: number, wz: number) => number;
   private readonly box = new THREE.BoxGeometry(1, 1, 1);
-  private readonly concrete = new THREE.MeshLambertMaterial({ color: GUIDEWAY_COLUMN_COLOR });
-  private readonly roof = new THREE.MeshLambertMaterial({ color: SHELTER_ROOF_COLOR });
+  private readonly concrete = new THREE.MeshStandardMaterial({
+    color: GUIDEWAY_COLUMN_COLOR,
+    roughness: 0.9,
+    metalness: 0.05,
+  });
+  private readonly roof = new THREE.MeshStandardMaterial({
+    color: SHELTER_ROOF_COLOR,
+    roughness: 0.85,
+    metalness: 0.08,
+  });
   /** The panes glow as a kit's lit parts do: a floor by day, full at night. */
-  private readonly glass = new THREE.MeshLambertMaterial({
+  private readonly glass = new THREE.MeshStandardMaterial({
     color: SHELTER_GLASS_COLOR,
+    roughness: 0.25,
+    metalness: 0.05,
     emissive: 0xffffff,
     emissiveIntensity: LIT_DAY_FLOOR,
   });
   /** White, tinted per instance in the line's colour. */
-  private readonly sign = new THREE.MeshLambertMaterial({ color: 0xffffff });
+  private readonly sign = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    roughness: 0.85,
+    metalness: 0.05,
+  });
   private meshes: THREE.InstancedMesh[] = [];
   private current: TramStations = EMPTY;
 
