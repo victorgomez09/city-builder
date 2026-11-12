@@ -1,0 +1,1938 @@
+/**
+ * Road composition: the derivations that turn a class and a cross-section into
+ * the numbers the sim and the render already consume — speed, capacity,
+ * carriageway width, kerbs. Pure functions over data; no grid, no three.js.
+ *
+ * The sim already speaks real units: a road's speed is metres per second and
+ * an edge's cost is length over speed, so seconds. Capacity is the one figure
+ * that needs a calibration, and it is a single constant: game capacity units
+ * per vehicle per hour, chosen so the two-lane preset keeps its 600.
+ */
+import roadsData from '../data/roads.json';
+import type {
+  LaneFlow,
+  LanePiece,
+  LanePieceKind,
+  CorridorHalf,
+  ParkingStyle,
+  RoadClassId,
+  RoadClassSpec,
+  RoadProfile,
+  RoadSpec,
+} from './types';
+import { TILE_METERS } from './constants';
+import { flowDirection, isStreetTier, isTramTier, RoadFlow, RoadTier } from './types';
+import {
+  DEFAULT_SOUND_WALL_HEIGHT_M,
+  SOUND_WALL_BASE_WIDTH_M,
+  SOUND_WALL_HEIGHTS_M,
+  soundWallPrice,
+} from './soundwall';
+
+const data = roadsData as { classes: RoadClassSpec[]; specs: RoadSpec[] };
+
+export const ROAD_CLASSES: readonly RoadClassSpec[] = data.classes;
+export const ROAD_PRESETS: readonly RoadSpec[] = data.specs;
+
+/** HCM base saturation flow for an urban lane, veh/h/lane. */
+export const SATURATION_FLOW_VEH_PER_HOUR = 1900;
+/**
+ * Game capacity units per veh/h. The two-lane preset is 600 for two lanes at
+ * 700 veh/h each (1,900 × 0.37 green ratio), so 600 / 1,400 = 3/7.
+ */
+export const CAPACITY_PER_VEH_PER_HOUR = 3 / 7;
+/** Per-lane figures are rounded to this so they read as catalogue numbers, not decimals. */
+const LANE_CAPACITY_STEP = 25;
+
+/**
+ * People-carrying pieces in car-equivalent game units. A bus lane at 50
+ * buses/h × 48 riders ÷ 1.5 riders per car-trip is ~1,600 car-equivalents/h;
+ * a tram track at 30 trams/h × 150 riders is ~1,500; a bike lane counts its
+ * share of commute trips at the sim's granularity, not its physical 1,500
+ * bikes/h; a rail track is the §26 figure carried over.
+ */
+export const TRANSIT_PIECE_CAPACITY: Readonly<Record<'bus' | 'tram' | 'bike' | 'rail', number>> = {
+  bus: 700,
+  tram: 650,
+  bike: 75,
+  rail: 3000,
+};
+
+/**
+ * Profile ids: 0 is no road, 1..12 are the presets and equal their tier, and
+ * player-composed profiles start here, in the save's own table.
+ *
+ * The boundary MOVES UP each time the catalogue gains a tier, which is why
+ * `adoptCustomProfiles` exists: a save written before the tier existed may
+ * already have given the id to a profile the player composed.
+ */
+export const FIRST_CUSTOM_PROFILE_ID = 13;
+
+export function isPresetProfileId(id: number): boolean {
+  return id >= 1 && id < FIRST_CUSTOM_PROFILE_ID;
+}
+
+/**
+ * A save's custom-profile table, with any id a preset has since claimed moved
+ * out of the way, and the tiles referring to it moved with it.
+ *
+ * A preset's id is its tier number, so every new road tier takes the next id
+ * off the top of the range — an id an older save may already have handed to a
+ * player-composed profile. Left alone, that profile would be read as the new
+ * preset and every road drawn with it would silently change shape. Moving it
+ * costs a load-time pass over the tiles and keeps the map the player drew.
+ *
+ * `tiles` is rewritten in place. Idempotent: a table already clear of preset
+ * ids is returned unchanged and the tiles are not touched.
+ */
+export function adoptCustomProfiles(
+  table: readonly { id: number; profile: RoadProfile }[],
+  tiles: Uint16Array,
+): Map<number, RoadProfile> {
+  const taken = new Set(table.map((e) => e.id));
+  let next = FIRST_CUSTOM_PROFILE_ID;
+  const moved = new Map<number, number>();
+  for (const entry of table) {
+    if (entry.id >= FIRST_CUSTOM_PROFILE_ID) continue;
+    while (taken.has(next)) next += 1;
+    taken.add(next);
+    moved.set(entry.id, next);
+  }
+  if (moved.size > 0) {
+    for (let i = 0; i < tiles.length; i++) {
+      const to = moved.get(tiles[i]!);
+      if (to !== undefined) tiles[i] = to;
+    }
+  }
+  return new Map(table.map((e) => [moved.get(e.id) ?? e.id, e.profile]));
+}
+
+/** A preset's profile id is its tier. */
+export function profileIdForTier(tier: RoadTier): number {
+  return tier;
+}
+
+/**
+ * The nearest preset tier for a profile — what every consumer that still
+ * reads a tier (lamps, kerb parking, water conduction, the render's shade)
+ * sees when the tile carries a composed profile.
+ *
+ * A road's tier is its SIZE. A bus lane or a tramway is something a road of a
+ * given size is given, not a road of its own, so it does not change which road
+ * this is — a street with a bus lane is still that street, and a four-lane one
+ * and a two-lane one are not suddenly the same road because both carry a bus.
+ * What the lane adds is a price and a milestone, which ride on the profile;
+ * see `roadPriceOf`. Rail is the exception and stays a tier, because a railway
+ * is a class of its own rather than a lane of a street.
+ */
+export function tierForProfile(profile: RoadProfile): RoadTier {
+  if (profile.class === 'rail') return 11 as RoadTier;
+  const byClass: Record<RoadClassId, number> = {
+    dirt: 4,
+    alley: 5,
+    rural: 1,
+    local: 1,
+    urban: 7,
+    collector: 7,
+    arterial: 2,
+    divided: 2,
+    oneWay: 6,
+    highway: 3,
+    ramp: 12,
+    rail: 11,
+  };
+  return byClass[profile.class] as RoadTier;
+}
+
+/**
+ * What one reserved lane adds to the road carrying it, per tile, on top of the
+ * price of the size itself.
+ *
+ * Each figure is DERIVED, not chosen: it is the difference between the road
+ * that used to stand alone and the ordinary road of its own class, divided by
+ * the reserved lanes it carried. The bike road was a local street with a bike
+ * lane each side (28 − 20 = 8 over two, upkeep 0.5 − 0.4, unlocking a
+ * milestone later); the bus road an arterial with a bus lane each side
+ * (55 − 45 = 10 over two); the tram road an urban street with rails in both
+ * its lanes (70 − 32 = 38 over two). So a player who composes what those roads
+ * were pays exactly what those roads cost, and `roadPriceOf` is checked
+ * against all three.
+ */
+export const TRANSIT_LANE_PRICE: Readonly<
+  Record<'bus' | 'bike' | 'tram', { cost: number; upkeep: number; unlockMilestone: number }>
+> = {
+  bus: { cost: 5, upkeep: 0.1, unlockMilestone: 2 },
+  bike: { cost: 4, upkeep: 0.05, unlockMilestone: 1 },
+  tram: { cost: 19, upkeep: 0.3, unlockMilestone: 3 },
+};
+
+/**
+ * What a reserved track costs against a street track. A reservation runs on an
+ * elevated guideway, and elevated light rail costs 2 to 2.5 times what it costs
+ * at grade (Flyvbjerg, Bruzelius & van Wee 2008, EJTIR 8(1)); this is the
+ * midpoint.
+ */
+export const GUIDEWAY_COST_RATIO = 2.25;
+
+/**
+ * One guideway track: the street track's build cost times the guideway ratio,
+ * to the whole unit. Its upkeep and milestone are the street track's, since no
+ * source gives a ratio for keeping one.
+ */
+export const GUIDEWAY_TRACK_PRICE: Readonly<{
+  cost: number;
+  upkeep: number;
+  unlockMilestone: number;
+}> = {
+  ...TRANSIT_LANE_PRICE.tram,
+  cost: Math.round(TRANSIT_LANE_PRICE.tram.cost * GUIDEWAY_COST_RATIO),
+};
+
+/**
+ * The reserved lanes a profile carries, by kind. Mixed running counts as one
+ * track per lane it shares, because that is how much rail is in the ground.
+ */
+export function transitLanesOf(profile: RoadProfile): Record<'bus' | 'bike' | 'tram', number> {
+  let bus = 0;
+  let bike = 0;
+  let tram = 0;
+  for (const piece of profile.pieces) {
+    if (piece.kind === 'bus') bus++;
+    else if (piece.kind === 'bike') bike++;
+    else if (piece.kind === 'tram') tram++;
+    else if (piece.kind === 'travel' && piece.tram === true) tram++;
+  }
+  return { bus, bike, tram };
+}
+
+/** What a road costs to build and keep, and the milestone it needs. */
+export interface RoadPrice {
+  costPerTile: number;
+  upkeepPerTile: number;
+  unlockMilestone: number;
+}
+
+/**
+ * A road's price: the price of its size, plus what each reserved lane and
+ * each sound wall adds.
+ *
+ * The size is the road — a four-lane street with a bus lane is a four-lane
+ * street that costs a little more, not a different road that costs whatever
+ * that other road cost. A reserved lane also carries its own milestone, so a
+ * city cannot lay tram track before it could have laid a tramway. A tram's
+ * track is a street track where it shares the lane and a guideway track where
+ * it has a reservation.
+ */
+export function roadPriceOf(sizeSpec: RoadSpec, profile: RoadProfile): RoadPrice {
+  const lanes = transitLanesOf(profile);
+  const guideway = profile.pieces.filter((p) => p.kind === 'tram').length;
+  let costPerTile = sizeSpec.costPerTile;
+  let upkeepPerTile = sizeSpec.upkeepPerTile;
+  let unlockMilestone = sizeSpec.unlockMilestone;
+  const priced: readonly [typeof GUIDEWAY_TRACK_PRICE, number][] = [
+    [TRANSIT_LANE_PRICE.bus, lanes.bus],
+    [TRANSIT_LANE_PRICE.bike, lanes.bike],
+    [TRANSIT_LANE_PRICE.tram, lanes.tram - guideway],
+    [GUIDEWAY_TRACK_PRICE, guideway],
+  ];
+  for (const [price, n] of priced) {
+    if (n === 0) continue;
+    costPerTile += price.cost * n;
+    upkeepPerTile += price.upkeep * n;
+    unlockMilestone = Math.max(unlockMilestone, price.unlockMilestone);
+  }
+  // A corridor is charged per tile of each of its two runs, and each wall
+  // stands on one of them, so a wall's price is shared across the tiles the
+  // road spans.
+  const spans = Math.max(1, tilesAcross(profile));
+  for (const piece of profile.pieces) {
+    if (piece.kind !== 'soundWall') continue;
+    const wall = soundWallPrice(piece.height ?? DEFAULT_SOUND_WALL_HEIGHT_M);
+    costPerTile += wall.cost / spans;
+    upkeepPerTile += wall.upkeep / spans;
+  }
+  // Money is whole and upkeep is read to one decimal; carrying the float noise
+  // would show a road costing 27.999999999999996.
+  return {
+    costPerTile: Math.round(costPerTile),
+    upkeepPerTile: Math.round(upkeepPerTile * 100) / 100,
+    unlockMilestone,
+  };
+}
+
+/** The preset profile a tier is shorthand for. Every tier has one. */
+export function presetProfileForTier(tier: RoadTier): RoadProfile {
+  const spec = ROAD_PRESETS.find((s) => s.tier === tier);
+  if (!spec?.profile) throw new RangeError(`roadprofile: no preset profile for tier ${tier}`);
+  return spec.profile;
+}
+
+/** Whether a cross-section carries a tram: a lane the trams share, or a reservation of their own. */
+export function carriesTram(profile: RoadProfile): boolean {
+  return profile.pieces.some((p) => p.kind === 'tram' || p.tram === true);
+}
+
+/**
+ * Whether a cross-section gives its trams a reservation, which runs on an
+ * elevated guideway above the street rather than in its lanes.
+ */
+export function carriesGuideway(profile: RoadProfile): boolean {
+  return profile.pieces.some((p) => p.kind === 'tram');
+}
+
+/**
+ * Whether a road is tram track: a street whose cross-section carries a tram
+ * lane. The Tramway's tier always is, since its preset runs the trams in both
+ * lanes; a railway never is, whatever it is handed.
+ */
+export function isTramTrack(tier: number, profile: RoadProfile | null): boolean {
+  if (isTramTier(tier)) return true;
+  return isStreetTier(tier) && profile !== null && carriesTram(profile);
+}
+
+/**
+ * `isTramTrack` for the road on the ground at tile index `i`. A preset id
+ * resolves from the catalogue; `custom` resolves a player-composed one.
+ */
+export function isTramTile(
+  roads: { readonly roadTier: ArrayLike<number>; readonly roadProfile: ArrayLike<number> },
+  i: number,
+  custom: (id: number) => RoadProfile | null,
+): boolean {
+  const id = roads.roadProfile[i] ?? 0;
+  const profile = isPresetProfileId(id) ? presetProfileForTier(id as RoadTier) : custom(id);
+  return isTramTrack(roads.roadTier[i] ?? RoadTier.None, profile);
+}
+
+export function roadClass(id: RoadClassId): RoadClassSpec {
+  const found = ROAD_CLASSES.find((c) => c.id === id);
+  if (!found) throw new RangeError(`roadprofile: no class ${id}`);
+  return found;
+}
+
+/** Sim speed (m/s) from a posted speed. 50 km/h → 14, 100 km/h → 28. */
+export function speedFromKmh(kmh: number): number {
+  return Math.round(kmh / 3.6);
+}
+
+/** A profile's posted speed, km/h: its own, or the class default, held to the class's range. */
+export function postedKmhOf(profile: RoadProfile): number {
+  const cls = roadClass(profile.class);
+  const posted = profile.postedKmh ?? cls.postedKmh.default;
+  return Math.min(cls.postedKmh.max, Math.max(cls.postedKmh.min, posted));
+}
+
+/** A profile's sim speed: its posted speed over 3.6. */
+export function profileSpeed(profile: RoadProfile): number {
+  return speedFromKmh(postedKmhOf(profile));
+}
+
+/**
+ * Game capacity of one travel lane of a class: saturation flow × the share of
+ * time the lane moves, or the free-flow figure, times the calibration
+ * constant, to the nearest catalogue step.
+ */
+/**
+ * The share of a signal cycle a lane of this class actually moves for — what
+ * separates a signalised arterial from a free-flowing motorway, and the g/C
+ * that a signal's delay is worked out on. A class quoted as free flow never
+ * meets a signal; it reads as half the cycle so the formula stays defined.
+ */
+export function greenShareFor(classId: RoadClassId): number {
+  const flow = roadClass(classId).laneFlow;
+  return 'greenRatio' in flow ? flow.greenRatio : 0.5;
+}
+
+export function laneCapacity(classId: RoadClassId): number {
+  const flow = roadClass(classId).laneFlow;
+  const vehPerHour =
+    'greenRatio' in flow ? SATURATION_FLOW_VEH_PER_HOUR * flow.greenRatio : flow.vehPerHour;
+  return (
+    Math.round((vehPerHour * CAPACITY_PER_VEH_PER_HOUR) / LANE_CAPACITY_STEP) * LANE_CAPACITY_STEP
+  );
+}
+
+/** Game capacity of one piece. A shared two-way travel lane counts for both directions. */
+export function pieceCapacity(piece: LanePiece, classId: RoadClassId): number {
+  switch (piece.kind) {
+    case 'travel': {
+      const lanes = (piece.flow ?? 'both') === 'both' ? 2 : 1;
+      return lanes * laneCapacity(classId) + (piece.tram ? TRANSIT_PIECE_CAPACITY.tram : 0);
+    }
+    case 'bus':
+      return TRANSIT_PIECE_CAPACITY.bus;
+    case 'tram':
+      return TRANSIT_PIECE_CAPACITY.tram;
+    case 'bike':
+      return TRANSIT_PIECE_CAPACITY.bike;
+    case 'rail':
+      return TRANSIT_PIECE_CAPACITY.rail;
+    default:
+      return 0;
+  }
+}
+
+/** Σ piece capacity — what replaces the per-tier scalar. */
+export function profileCapacity(profile: RoadProfile): number {
+  return profile.pieces.reduce((sum, p) => sum + pieceCapacity(p, profile.class), 0);
+}
+
+/**
+ * Traffic lanes in the profile: travel lanes, the reserved bus lanes, which
+ * are lanes with a different occupant, and a centre turn lane, which is the
+ * third lane of a three-lane street. A shared two-way lane counts for both
+ * directions. A tram reservation is no lane: its pieces are the guideway's
+ * median, and nothing drives on them.
+ *
+ * On a two-way road that is both directions summed; on a road every lane of
+ * which runs one way — a motorway, a slip road, a one-way street — it is that
+ * carriageway's own lanes, which is what those classes state their range in.
+ */
+export function laneCount(profile: RoadProfile): number {
+  return profile.pieces.reduce((n, p) => {
+    if (p.kind === 'centreTurn') return n + 1;
+    if (p.kind !== 'travel' && p.kind !== 'bus') return n;
+    return n + ((p.flow ?? 'both') === 'both' ? 2 : 1);
+  }, 0);
+}
+
+/** The pieces between the kerbs: everything but footways and verges. */
+export const CARRIAGEWAY_KINDS: ReadonlySet<LanePiece['kind']> = new Set([
+  'travel',
+  'centreTurn',
+  'parking',
+  'bike',
+  'bus',
+  'tram',
+  'rail',
+  'median',
+  'barrier',
+  'shoulder',
+]);
+
+/** Paved (or ballasted) width between the kerbs, metres. Sidewalks and verges are outside it. */
+export function carriagewayWidth(profile: RoadProfile): number {
+  return profile.pieces.reduce((w, p) => (CARRIAGEWAY_KINDS.has(p.kind) ? w + p.width : w), 0);
+}
+
+/** The lane width every preset was drawn with; a footway is half of it. */
+export const PRESET_LANE_WIDTH_M = 3.75;
+export const FOOTWAY_WIDTH_M = 0.5 * PRESET_LANE_WIDTH_M; // 1.875 m
+
+/** Metres from the centreline to the carriageway edge — what everything beside a road measures from. */
+export function carriagewayHalfWidthOf(profile: RoadProfile): number {
+  return carriagewayWidth(profile) / 2;
+}
+
+/**
+ * The radius this road's kerb turns through at a junction, metres.
+ *
+ * A property of the road, from the class, so a corner is as tight or as open
+ * as the vehicles that have to get round it — not as tight as the tile happens
+ * to allow. What the tile allows still caps it, but that is a limit imposed on
+ * the figure rather than the figure itself.
+ */
+export function kerbReturnRadiusOf(profile: RoadProfile): number {
+  return roadClass(profile.class).kerbReturnM;
+}
+
+/**
+ * The radius a bend in this road turns its centre line on, metres: the inner
+ * edge of the carriageway takes the class's kerb return, so the bend holds
+ * the ground a corner of the same road would.
+ */
+export function bendRadiusOf(profile: RoadProfile): number {
+  return carriagewayHalfWidthOf(profile) + kerbReturnRadiusOf(profile);
+}
+
+/**
+ * Width of the kerb strip a profile draws outside its carriageway.
+ *
+ * A road that SAYS how wide its pavement is gets exactly that. A road that
+ * only declares a kerb — a motorway, whose shoulders are inside the paved
+ * width already and which nobody may walk beside — gets a kerb, and never a
+ * full pavement merely because the tile had room for one. Drawing whatever
+ * fits is how a road comes to look like it has somewhere to walk when its own
+ * section says it has not.
+ *
+ * Either way it is clamped to what the tile has left, and is nothing at all
+ * where the profile has no kerbs.
+ */
+export function kerbWidthOf(profile: RoadProfile): number {
+  if (!hasKerbs(profile)) return 0;
+  const footway = profile.pieces.find((p) => p.kind === 'sidewalk');
+  const asked = footway ? footway.width : KERB_RESERVE_M;
+  return Math.max(0, Math.min(asked, TILE_METERS / 2 - carriagewayHalfWidthOf(profile)));
+}
+
+/**
+ * The strip a kerbed road keeps outside its carriageway however it spends the
+ * rest of the tile: somewhere for the kerb itself, and for the lamp column and
+ * the signal mast that stand behind it. It is the motorway's own half a metre,
+ * which is the narrowest kerb the game draws.
+ *
+ * A carriageway laid edge to edge across the tile has nowhere to put any of
+ * them — the paving beside it flares out into the verge looking for room, and
+ * the furniture stands in the road.
+ */
+export const KERB_RESERVE_M = 0.5;
+
+/** Kerb to kerb including footways, metres — what the tile has to hold. */
+export function profileWidth(profile: RoadProfile): number {
+  return profile.pieces.reduce((w, p) => w + p.width, 0);
+}
+
+/** Whether the profile fits one tile. What is left over is verge. */
+export function fitsTile(profile: RoadProfile): boolean {
+  return profileWidth(profile) <= TILE_METERS + 1e-6;
+}
+
+/**
+ * How wide a road may be at all: two tiles. Six lanes are 20.1 m and eight
+ * are 26.8 m, so neither is a road a 20 m tile can hold — they are CORRIDORS,
+ * laid as two parallel runs whose tiles each draw their own half of one
+ * cross-section. Two tiles is as wide as this design goes; the road stays on
+ * the grid, which is the decision that keeps everything else tractable.
+ */
+export const CORRIDOR_METERS = 2 * TILE_METERS;
+
+/** Whether the profile fits a two-tile corridor, which is the widest road there is. */
+export function fitsCorridor(profile: RoadProfile): boolean {
+  return profileWidth(profile) <= CORRIDOR_METERS + 1e-6;
+}
+
+/**
+ * Whether a class's roads may span two tiles at all. A class earns a corridor
+ * by NEEDING one: if its own largest road does not fit a tile, the corridor is
+ * the only way to build what the class has always claimed to run. Every other
+ * class stays on one tile, so a local street with parking down both kerbs is
+ * still too wide rather than quietly becoming a 32 m corridor with 20 m of
+ * verge either side.
+ */
+export function classAdmitsCorridor(classId: RoadClassId): boolean {
+  const { max } = roadClass(classId).lanes;
+  return max * laneWidthFor(classId) > TILE_METERS + 1e-6;
+}
+
+/**
+ * How many tiles ACROSS the road a profile needs: one for an ordinary street,
+ * two for a corridor, and zero for a cross-section that cannot be laid — too
+ * wide for two tiles, or too wide for one on a class that gets no second.
+ */
+export function tilesAcross(profile: RoadProfile): 0 | 1 | 2 {
+  if (fitsTile(profile)) return 1;
+  if (!classAdmitsCorridor(profile.class)) return 0;
+  return fitsCorridor(profile) ? 2 : 0;
+}
+
+/** Whether the profile is wide enough to need two tiles. */
+export function isCorridor(profile: RoadProfile): boolean {
+  return tilesAcross(profile) === 2;
+}
+
+/**
+ * A section in WORLD order: its pieces from the low offset to the high one, the
+ * way everything that draws a road lays them.
+ *
+ * A section is authored left to right in the direction of travel. Offsets grow
+ * east and south, so a road drawn north or east has its driver's left at the
+ * low offset and its pieces are already in world order; one drawn south or
+ * west has its left at the HIGH offset, and its pieces run the other way. Laid
+ * low-to-high without this, a southbound motorway put its wide shoulder
+ * against the median and a two-way street drawn south drove on the left.
+ *
+ * It has to come BEFORE a corridor is halved: the halves are stored by the side
+ * of the road they are on, low tile and high tile, so it is the world-ordered
+ * road that is cut in two. Each piece keeps its own flow — `fwd` is still the
+ * way the road was drawn, wherever that piece now lies.
+ */
+export function worldOrderedProfile(profile: RoadProfile, stored: number): RoadProfile {
+  if (!reversedInWorld(stored)) return profile;
+  return { ...profile, pieces: [...profile.pieces].reverse() };
+}
+
+/**
+ * Whether a road running this way has its section reversed in world order —
+ * its driver's left at the high offset, which is heading south or west. Anything
+ * that edits a world-ordered section by the driver's left or right asks this.
+ */
+export function reversedInWorld(stored: number): boolean {
+  const direction = flowDirection(stored);
+  return direction === RoadFlow.South || direction === RoadFlow.West;
+}
+
+/**
+ * Whether a corridor laid with this WHOLE cross-section is two carriageways: a
+ * median or a barrier lies at its middle. A motorway never is, being one
+ * carriageway running one way. Nothing else divides a road, so a corridor
+ * without one is a single carriageway that cars may cross.
+ */
+export function isDividedCorridor(profile: RoadProfile): boolean {
+  if (profile.class === 'highway') return false;
+  const middle = profileWidth(profile) / 2;
+  let at = 0;
+  for (const piece of profile.pieces) {
+    const end = at + piece.width;
+    // The piece ending at the middle, starting at it, or straddling it.
+    if (end >= middle - 1e-9 && at <= middle + 1e-9) {
+      if (piece.kind === 'median' || piece.kind === 'barrier') return true;
+    }
+    if (at > middle + 1e-9) break;
+    at = end;
+  }
+  return false;
+}
+
+/** The ids in a profile table whose corridor nothing divides (`GridState.oneCarriageway`). */
+export function oneCarriagewayIds(
+  table: Iterable<readonly [number, RoadProfile]>,
+): ReadonlySet<number> {
+  const ids = new Set<number>();
+  for (const [id, profile] of table) if (!isDividedCorridor(profile)) ids.add(id);
+  return ids;
+}
+
+/**
+ * One half of a corridor's cross-section, as a road in its own right.
+ *
+ * A six- or eight-lane divided road is not one wide carriageway: it is TWO,
+ * separated by what runs down the middle. So a corridor is split at its centre
+ * and each tile carries its own half, centred on itself — which is both what
+ * the real road is and what lets every renderer draw a corridor with the
+ * machinery it already has for an ordinary street.
+ *
+ * The piece straddling the middle — the median, nearly always — is divided
+ * between them, so each carriageway is finished on its inner edge by its own
+ * share of it rather than one tile carrying the whole median and the other
+ * ending in mid-air.
+ *
+ * A corridor that nothing divides is the exception: a motorway, an undivided
+ * arterial, a wide one-way street. It is one carriageway, too wide for a
+ * tile, and its halves say so with a `seam` on the inner edge — the edge that
+ * runs on onto the other tile, which the drawing pushes to the tile boundary
+ * rather than leaving the half centred — and the piece lying against it on
+ * the other tile, so the line the whole road paints between the two can be
+ * painted there. A motorway is always one carriageway; any other road is one
+ * wherever no median or barrier lies at its middle.
+ */
+export function corridorHalfProfile(profile: RoadProfile, half: CorridorHalf): RoadProfile {
+  if (half === 'none') return profile;
+  const middle = profileWidth(profile) / 2;
+  const left: LanePiece[] = [];
+  const right: LanePiece[] = [];
+  let at = 0;
+  let split = false;
+  for (const piece of profile.pieces) {
+    const end = at + piece.width;
+    if (end <= middle + 1e-9) left.push({ ...piece });
+    else if (at >= middle - 1e-9) right.push({ ...piece });
+    else {
+      left.push({ ...piece, width: middle - at });
+      right.push({ ...piece, width: end - middle });
+      split = true;
+    }
+    at = end;
+  }
+  const pieces = half === 'left' ? left : right;
+  if (isDividedCorridor(profile)) return { ...profile, pieces };
+  const across = split ? null : half === 'left' ? right[0] : left[left.length - 1];
+  return {
+    ...profile,
+    pieces,
+    seam: { side: half === 'left' ? 1 : -1, across: across ? { ...across } : null },
+  };
+}
+
+/**
+ * How far a cross-section's carriageway sits off its tile's centre, across the
+ * road, as a world offset (east and south positive). Nothing is off centre but
+ * half of a corridor nothing divides, which is pushed against the edge it
+ * shares with the other half, so that the two meet there.
+ */
+export function carriagewayShiftOf(profile: RoadProfile): number {
+  if (!profile.seam) return 0;
+  return profile.seam.side * Math.max(0, TILE_METERS / 2 - carriagewayHalfWidthOf(profile));
+}
+
+/** Raised kerbs on the unconnected sides: explicit, else wherever there is a footway. */
+export function hasKerbs(profile: RoadProfile): boolean {
+  return profile.kerbs ?? profile.pieces.some((p) => p.kind === 'sidewalk');
+}
+
+/**
+ * Somewhere to WALK beside the road — a footway, not merely the raised kerb a
+ * motorway has. It is the difference between a road a pedestrian may use and
+ * one they may not, which is what decides where a crossing belongs.
+ */
+export function hasFootway(profile: RoadProfile): boolean {
+  return profile.pieces.some((p) => p.kind === 'sidewalk');
+}
+
+/** Whether the surface takes paint: gravel and ballast do not. */
+export function isPaved(profile: RoadProfile): boolean {
+  return roadClass(profile.class).surface === 'paved';
+}
+
+// ---------------------------------------------------------------------------
+// Turn pockets: the lane an approach gains for the last few tiles before a
+// junction, so the drivers waiting to turn are not the drivers going straight.
+// ---------------------------------------------------------------------------
+
+/**
+ * The narrowest a turn pocket is worth building, and the narrowest a through
+ * lane may be squeezed to make room for one: 10 ft, which every US standard
+ * allows a lane in a constrained setting. A class whose running lanes are
+ * already narrower than that builds its pocket at its own lane width instead.
+ */
+export const TURN_POCKET_MIN_WIDTH_M = 3.05;
+
+/**
+ * Pieces a turn pocket may be carved out of: the kerbside parking or shoulder
+ * on its own half, and the median, which belongs to both halves and is where a
+ * divided road's turn bay has always been cut. A reserved lane — bus, tram,
+ * bike — is somebody else's road and is never taken.
+ */
+const POCKET_SOURCE_KINDS: ReadonlySet<LanePieceKind> = new Set(['parking', 'shoulder', 'median']);
+
+/**
+ * Where each carriageway piece sits across the tile, measured from the
+ * centreline, or null for a piece outside the kerbs. Sidewalks and verges only
+ * ever sit at the ends, so skipping them leaves the running offset intact.
+ */
+/**
+ * Where the median sits ACROSS the road, as an offset from the carriageway's
+ * centre; 0 when the section has none.
+ *
+ * On an ordinary divided road this is 0, because the median is what the two
+ * halves are divided by. On one HALF of a two-tile corridor it is not: that
+ * half carries only its own share of the median, at its inner edge, and a
+ * median drawn at the tile's centre instead lands down the middle of the
+ * running lanes — with whatever is planted in it.
+ */
+export function medianOffsetOf(profile: RoadProfile): number {
+  const centres = pieceCentres(profile);
+  const at = profile.pieces.findIndex((p) => p.kind === 'median');
+  return at < 0 ? 0 : (centres[at] ?? 0);
+}
+
+/**
+ * Where a central median or barrier stands across the carriageway, as an
+ * offset from its centre, or null for a section with neither.
+ */
+export function centralReserveOffsetOf(profile: RoadProfile): number | null {
+  const centres = pieceCentres(profile);
+  const at = profile.pieces.findIndex((p) => p.kind === 'median' || p.kind === 'barrier');
+  return at < 0 ? null : (centres[at] ?? null);
+}
+
+/**
+ * Whether a piece is a parking lane a car can stand in: a parking piece as
+ * deep as its style's stalls. What a turn bay leaves of one along its taper is
+ * narrower, a strip at the kerb with no stalls, no cars and no meters.
+ */
+export function isParkingLane(piece: LanePiece): boolean {
+  return (
+    piece.kind === 'parking' &&
+    piece.width >= PARKING_STYLES[parkingStyleOf(piece)].laneWidth - 0.01
+  );
+}
+
+/**
+ * Which sides of the carriageway carry a parking lane, in the order the
+ * profile is laid: `low` is the negative-offset side, `high` the positive.
+ */
+export function parkingSides(profile: RoadProfile): { low: boolean; high: boolean } {
+  const centres = pieceCentres(profile);
+  let low = false;
+  let high = false;
+  profile.pieces.forEach((p, i) => {
+    if (!isParkingLane(p)) return;
+    const at = centres[i] ?? 0;
+    if (at < 0) low = true;
+    else high = true;
+  });
+  return { low, high };
+}
+
+/**
+ * How far in from the carriageway's edge on one side the centre of that
+ * side's parking lane lies, in metres, or null when that side has none. The
+ * lane nearest the kerb wins; a bike lane laid between it and the kerb is
+ * counted in, so a car parked there stands in the parking lane, not on the
+ * bike lane.
+ */
+export function parkingLaneOffset(profile: RoadProfile, side: 'low' | 'high'): number | null {
+  return kerbParkingLane(profile, side)?.fromEdge ?? null;
+}
+
+/** The style of one side's parking lane, the one nearest the kerb, or null when that side has none. */
+export function parkingStyleOn(profile: RoadProfile, side: 'low' | 'high'): ParkingStyle | null {
+  const lane = kerbParkingLane(profile, side);
+  return lane ? parkingStyleOf(lane.piece) : null;
+}
+
+/**
+ * One side's parking lane nearest the kerb, and how far in from the
+ * carriageway's edge its centre is. What a turn bay has narrowed to a kerb
+ * strip is not a lane: no stall, no car, no meter.
+ */
+function kerbParkingLane(
+  profile: RoadProfile,
+  side: 'low' | 'high',
+): { piece: LanePiece; fromEdge: number } | null {
+  const half = carriagewayHalfWidthOf(profile);
+  const centres = pieceCentres(profile);
+  let best: { piece: LanePiece; fromEdge: number } | null = null;
+  profile.pieces.forEach((p, i) => {
+    const at = centres[i];
+    if (!isParkingLane(p) || at === null || at === undefined) return;
+    if (side === 'low' ? at >= 0 : at < 0) return;
+    const fromEdge = side === 'low' ? at + half : half - at;
+    if (best === null || fromEdge < best.fromEdge) best = { piece: p, fromEdge };
+  });
+  return best;
+}
+
+/**
+ * Metres from the carriageway's centre line to the middle of each plain travel
+ * lane, low side first: a lane that carries no tram rail and is no turn bay,
+ * which is the only kind a manhole cover may lie in.
+ */
+export function plainLaneCentres(profile: RoadProfile): number[] {
+  const centres = pieceCentres(profile);
+  const out: number[] = [];
+  profile.pieces.forEach((piece, i) => {
+    const at = centres[i];
+    if (piece.kind === 'travel' && piece.tram !== true && piece.bay !== true && at != null) {
+      out.push(at);
+    }
+  });
+  return out;
+}
+
+function pieceCentres(profile: RoadProfile): (number | null)[] {
+  let offset = -carriagewayHalfWidthOf(profile);
+  return profile.pieces.map((piece) => {
+    if (!CARRIAGEWAY_KINDS.has(piece.kind)) return null;
+    const centre = offset + piece.width / 2;
+    offset += piece.width;
+    return centre;
+  });
+}
+
+/**
+ * The same cross-section with a turn pocket added on the half that approaches
+ * a junction — `approachSide` being the sign of that half's offsets, so +1 is
+ * the half laid after the centreline and -1 the half before it. On a one-way
+ * every lane approaches and the pocket goes against the left kerb, which is
+ * the lane a left turn is made from.
+ *
+ * The width comes, in this order, from the verge the tile has not spent, from
+ * the kerbside parking or shoulder on that half, and last from the through
+ * lanes themselves, which a constrained retrofit narrows rather than widening
+ * the road. Null when none of that is enough: a pocket narrower than
+ * `TURN_POCKET_MIN_WIDTH_M` is not a lane, and a road with no travel lane on
+ * the approaching half has nothing to add one beside.
+ *
+ * `openness` is how far open the bay is on this tile, 0 to 1. A turn bay does
+ * not appear at full width out of nothing — it opens over a taper. The road
+ * gives up only what the opened bay needs, so the parking and the lanes shrink
+ * over the taper with it and the road never narrows toward the junction. The
+ * full bay decides whether the road can have one at all, and a partly open
+ * tile is never the one that refuses.
+ */
+export function withTurnPocket(
+  profile: RoadProfile,
+  approachSide: -1 | 1,
+  openness = 1,
+  /**
+   * Which world side a one-way road's driver has on their left, in the
+   * world-ordered section: the low side heading north or east, the high side
+   * heading south or west. A one-way's bay goes outside its left-hand lane.
+   */
+  oneWayLeft: -1 | 1 = -1,
+): RoadProfile | null {
+  // A road with a two-way left-turn lane down the middle already turns from a
+  // lane of its own, everywhere, so it has nothing to gain here.
+  if (profile.pieces.some((p) => p.kind === 'centreTurn')) return null;
+  const open = Math.min(1, Math.max(0, openness));
+  if (open <= 0) return profile;
+  const target = laneWidthFor(profile.class);
+  const minimum = Math.min(target, TURN_POCKET_MIN_WIDTH_M);
+  const oneWay = isOneWayProfile(profile);
+  const side = oneWay ? oneWayLeft : approachSide;
+  const centres = pieceCentres(profile);
+
+  const approaching = profile.pieces
+    .map((piece, index) => ({ piece, index, centre: centres[index] ?? 0 }))
+    .filter((e) => e.piece.kind === 'travel' && (oneWay || e.centre * side > 0));
+  if (approaching.length === 0) return null;
+
+  // A one-way's pocket sits outside its left-hand lane — the outermost one on
+  // its left side; a two-way's sits beside the centreline, which is the
+  // innermost lane of the approaching half. Either way it goes on the far side
+  // of that lane from where the section continues.
+  const beside = oneWay
+    ? approaching.reduce((a, b) => (b.centre * side > a.centre * side ? b : a))
+    : approaching.reduce((a, b) => (Math.abs(b.centre) < Math.abs(a.centre) ? b : a));
+  const insertBefore = (oneWay ? side === -1 : side === 1) ? beside.index : beside.index + 1;
+
+  // What the pocket may be carved out of: the outermost parking bay or
+  // shoulder on its own side of the road.
+  const sources = profile.pieces
+    .map((piece, index) => ({ piece, index, centre: centres[index] ?? 0 }))
+    .filter(
+      (e) =>
+        POCKET_SOURCE_KINDS.has(e.piece.kind) && (e.piece.kind === 'median' || e.centre * side > 0),
+    );
+  const source =
+    sources.length === 0
+      ? null
+      : sources.reduce((a, b) => (Math.abs(b.centre) > Math.abs(a.centre) ? b : a));
+
+  // A road whose footways are pieces of its own has already paid for its kerbs;
+  // one that draws them out of the leftover has not, and the bay may not spend
+  // the last of it. A carriageway filling the tile has nowhere to stand a
+  // signal, which is the one thing the bay is there for.
+  const reserve = hasKerbs(profile) && !hasFootway(profile) ? 2 * KERB_RESERVE_M : 0;
+  const slack = Math.max(0, TILE_METERS - profileWidth(profile) - reserve);
+  let width = Math.min(target, slack);
+  let takeSource = false;
+  if (width < minimum && source) {
+    takeSource = true;
+    width = Math.min(target, slack + source.piece.width);
+  }
+
+  // Last resort: the lanes beside the pocket give up what is left of it, each
+  // narrowed by its share of the shortfall.
+  const narrowed = new Map<number, number>();
+  let shortfall = 0;
+  if (width < minimum) {
+    shortfall = minimum - width;
+    const headroom = approaching.map((e) => ({ index: e.index, room: e.piece.width - minimum }));
+    const available = headroom.reduce((sum, h) => sum + Math.max(0, h.room), 0);
+    if (available + 1e-9 < shortfall) return null;
+    for (const h of headroom) {
+      if (h.room <= 0) continue;
+      narrowed.set(h.index, (shortfall * h.room) / available);
+    }
+    width = minimum;
+  }
+
+  // Everything above is settled by the bay at full width — whether the road
+  // can have one at all, and what it costs against the junction. Along the
+  // opening taper the road is widened by no more than the full bay widens it,
+  // and what else the opened bay needs comes out of the piece it is carved
+  // from, then the lanes, so each gives up a share that grows to its whole
+  // cost at the stop line. Where the full bay would leave the road narrower
+  // than it was — a source wider than the bay — the road is not widened at all
+  // and keeps what is left of that source.
+  const needed = width * open;
+  const sourceWidth = takeSource && source ? source.piece.width : 0;
+  const widened = Math.min(needed, Math.max(0, width - sourceWidth - shortfall));
+  const fromSource = Math.min(sourceWidth, needed - widened);
+  const fromLanes = Math.max(0, needed - widened - fromSource);
+  const squeeze = shortfall > 0 ? fromLanes / shortfall : 0;
+
+  const pocket: LanePiece = { kind: 'travel', width: needed, bay: true };
+  if (beside.piece.flow) pocket.flow = beside.piece.flow;
+
+  const pieces: LanePiece[] = [];
+  profile.pieces.forEach((piece, index) => {
+    if (index === insertBefore) pieces.push(pocket);
+    if (takeSource && index === source?.index) {
+      const left = piece.width - fromSource;
+      if (left > 1e-6) pieces.push({ ...piece, width: left });
+      return;
+    }
+    const cut = narrowed.get(index);
+    pieces.push(
+      cut === undefined ? { ...piece } : { ...piece, width: piece.width - cut * squeeze },
+    );
+  });
+  if (insertBefore >= profile.pieces.length) pieces.push(pocket);
+
+  const pocketed: RoadProfile = { ...profile, pieces };
+  // The same reserve the width came out of, applied to the answer: taking the
+  // bay out of the parking or the lanes must not put the carriageway back
+  // against the tile edge either.
+  return profileWidth(pocketed) <= TILE_METERS - reserve + 1e-6 ? pocketed : null;
+}
+
+/** Whether this cross-section can find the width for a turn pocket on that half. */
+export function canGainTurnPocket(profile: RoadProfile, approachSide: -1 | 1): boolean {
+  return withTurnPocket(profile, approachSide) !== null;
+}
+
+/**
+ * Classes a shared turn lane belongs on: ordinary two-way streets, the ones
+ * that meet each other at grade and separate opposing traffic with a centre
+ * line. A motorway and its slip roads have no at-grade turns to store, and an
+ * unpaved track or a service alley carries no paint at all.
+ */
+const SHARED_TURN_CLASSES: ReadonlySet<RoadClassId> = new Set<RoadClassId>([
+  'rural',
+  'local',
+  'urban',
+  'collector',
+  'arterial',
+]);
+
+/**
+ * The same cross-section with a TWO-WAY LEFT-TURN LANE down the middle — one
+ * lane at the centreline that traffic turns from in either direction.
+ *
+ * This is what a bay becomes where there is no room for a bay. A turn pocket
+ * belongs to one half of the road, so a stretch with a junction at each end
+ * would carry one bay on one side and the other on the other, tapering down
+ * and back up in between — a road that widens, narrows, and widens again on
+ * the other side over a couple of hundred metres. One lane shared both ways
+ * serves both junctions, is the same width all the way along, and is
+ * symmetrical, so nothing swaps sides.
+ *
+ * Null where the road cannot take one: a one-way has no opposing traffic to
+ * share it with, a road with a median or a turn lane already has its middle
+ * spoken for, and a road with no width to spare gets nothing rather than a
+ * lane too narrow to wait in.
+ */
+export function withCentreTurn(profile: RoadProfile): RoadProfile | null {
+  if (!SHARED_TURN_CLASSES.has(profile.class)) return null;
+  if (isOneWayProfile(profile)) return null;
+  if (profile.pieces.some((p) => p.kind === 'centreTurn' || p.kind === 'median')) return null;
+  const centres = pieceCentres(profile);
+  const travel = profile.pieces
+    .map((piece, index) => ({ piece, index, centre: centres[index] ?? 0 }))
+    .filter((e) => e.piece.kind === 'travel');
+  // It goes between the two directions, so there have to BE two directions.
+  const back = travel.filter((e) => e.centre < 0);
+  const fwd = travel.filter((e) => e.centre > 0);
+  if (back.length === 0 || fwd.length === 0) return null;
+
+  const target = DEFAULT_PIECE_WIDTHS.centreTurn;
+  const minimum = Math.min(target, TURN_POCKET_MIN_WIDTH_M);
+  const reserve = hasKerbs(profile) && !hasFootway(profile) ? 2 * KERB_RESERVE_M : 0;
+  const slack = Math.max(0, TILE_METERS - profileWidth(profile) - reserve);
+  let width = Math.min(target, slack);
+
+  // Last resort: the through lanes give up what is left of it, every one of
+  // them the same share of what it has to spare. A bay can only ask the half
+  // of the road it belongs to; a lane shared both ways asks ALL of them — and
+  // that is the difference between a four-lane street having room for one of
+  // these and having no room at all for the pair of bays it would otherwise
+  // want. Reserved lanes are not asked: a bus lane narrowed is a bus lane that
+  // no longer fits a bus.
+  const narrowed = new Map<number, number>();
+  if (width + 1e-9 < minimum) {
+    const shortfall = minimum - width;
+    const headroom = travel.map((e) => ({ index: e.index, room: e.piece.width - minimum }));
+    const available = headroom.reduce((sum, h) => sum + Math.max(0, h.room), 0);
+    if (available + 1e-9 < shortfall) return null;
+    for (const h of headroom) {
+      if (h.room <= 0) continue;
+      const piece = profile.pieces[h.index]!;
+      narrowed.set(h.index, piece.width - (shortfall * h.room) / available);
+    }
+    width = minimum;
+  }
+
+  const insertBefore = fwd.reduce((a, b) => (b.centre < a.centre ? b : a)).index;
+  const pieces: LanePiece[] = [];
+  profile.pieces.forEach((piece, index) => {
+    if (index === insertBefore) pieces.push({ kind: 'centreTurn', width });
+    const squeezed = narrowed.get(index);
+    pieces.push(squeezed === undefined ? { ...piece } : { ...piece, width: squeezed });
+  });
+  const turned: RoadProfile = { ...profile, pieces };
+  return profileWidth(turned) <= TILE_METERS - reserve + 1e-6 ? turned : null;
+}
+
+/**
+ * The same cross-section with an AUXILIARY LANE added against the kerb on one
+ * side — the lane a motorway grows beside a slip road, so that a driver
+ * joining has somewhere to get up to speed and one leaving has somewhere to
+ * slow down without doing it in the running lane.
+ *
+ * It goes OUTSIDE everything the road already carries on that side, because
+ * that is where the slip road arrives; the width comes from the verge the tile
+ * has not spent, then from the hard shoulder on that side down to the least a
+ * shoulder keeps beside an auxiliary lane, and never from the kerb reserve,
+ * since the lane still needs a kerb outside it. `openness` is how far open it
+ * is, 0 to 1, the same taper a turn bay opens over; the shoulder gives back
+ * what it lent as the lane closes.
+ *
+ * Null where the width is not there. A tile that can afford the widest street
+ * can afford this too, so the four-lane motorway — the road a slip road most
+ * often meets — grows one, walled or not; a cross-section already spending the
+ * tile, with no shoulder to narrow, does not.
+ */
+export function withAuxiliaryLane(
+  profile: RoadProfile,
+  side: -1 | 1,
+  openness = 1,
+): RoadProfile | null {
+  const open = Math.min(1, Math.max(0, openness));
+  if (open <= 0) return profile;
+  const target = laneWidthFor(profile.class);
+  const minimum = Math.min(target, TURN_POCKET_MIN_WIDTH_M);
+  const reserve = hasFootway(profile) ? 0 : 2 * KERB_RESERVE_M;
+  const slack = Math.max(0, TILE_METERS - profileWidth(profile) - reserve);
+
+  // Outside every running lane on that side, and inside everything that is not
+  // one — a lane does not go behind the pavement, and it does not go outside
+  // the hard shoulder either: a driver getting up to speed is on the road, not
+  // past the line they are meant to pull over behind.
+  const pieces = [...profile.pieces];
+  const isTravel = (p: LanePiece): boolean => p.kind === 'travel';
+  const at = side > 0 ? lastIndexWhere(pieces, isTravel) + 1 : firstIndexWhere(pieces, isTravel);
+
+  // The shoulder the lane goes inside of lends what it has over the floor.
+  let shoulderAt = -1;
+  if (side > 0) {
+    shoulderAt = pieces.findIndex((p, i) => i >= at && p.kind === 'shoulder');
+  } else {
+    for (let i = at - 1; i >= 0; i--) {
+      if (pieces[i]!.kind === 'shoulder') {
+        shoulderAt = i;
+        break;
+      }
+    }
+  }
+  const shoulder = shoulderAt >= 0 ? pieces[shoulderAt]! : undefined;
+  const lendable = shoulder ? Math.max(0, shoulder.width - AUXILIARY_SHOULDER_MIN_M) : 0;
+  if (slack + lendable + 1e-9 < minimum) return null;
+  const width = Math.min(target, slack + lendable);
+  const borrowed = Math.max(0, width - slack);
+  if (shoulder && borrowed > 0) {
+    pieces[shoulderAt] = { ...shoulder, width: shoulder.width - borrowed * open };
+  }
+
+  const flows = profile.pieces.filter(isTravel).map((p) => p.flow);
+  const lane: LanePiece = { kind: 'travel', width: width * open };
+  // It carries the traffic of the half it is added to, which is the half whose
+  // kerb it stands against.
+  const beside = side > 0 ? flows[flows.length - 1] : flows[0];
+  if (beside) lane.flow = beside;
+
+  pieces.splice(Math.max(0, at), 0, lane);
+  return { ...profile, pieces };
+}
+
+/**
+ * The least a hard shoulder keeps beside an auxiliary lane, metres: 1.2 m, the
+ * motorway's own median-side shoulder and the 4 ft a constrained freeway
+ * section is allowed to narrow an outside shoulder to beside such a lane.
+ */
+export const AUXILIARY_SHOULDER_MIN_M = 1.2;
+
+/** Whether this cross-section can find the width for an auxiliary lane. */
+export function canGainAuxiliaryLane(profile: RoadProfile, side: -1 | 1): boolean {
+  return withAuxiliaryLane(profile, side) !== null;
+}
+
+function firstIndexWhere(pieces: readonly LanePiece[], p: (x: LanePiece) => boolean): number {
+  const i = pieces.findIndex(p);
+  return i < 0 ? 0 : i;
+}
+
+function lastIndexWhere(pieces: readonly LanePiece[], p: (x: LanePiece) => boolean): number {
+  for (let i = pieces.length - 1; i >= 0; i--) if (p(pieces[i]!)) return i;
+  return pieces.length - 1;
+}
+
+// ---------------------------------------------------------------------------
+// Composition: the edits a player makes to a preset, and the profile they
+// produce. Edits are absolute for the sides they name and `null` where the
+// preset is left as it is, so "no edits" composes back to the preset exactly.
+// ---------------------------------------------------------------------------
+
+export type SideChoice = 'none' | 'left' | 'right' | 'both';
+
+/** What sits down the middle of a two-way road, between the directions. */
+export type MiddleChoice = 'none' | 'median' | 'turn';
+
+/**
+ * How a road carries a tramway. Mixed running puts the rails in the running
+ * lanes and the trams share them with the traffic. A reservation is faster: two
+ * tracks on an elevated guideway whose columns stand down the middle, so it
+ * costs the road a median and none of its lanes.
+ */
+export type TramChoice = 'none' | 'mixed' | 'reserved';
+
+export interface ProfileEdits {
+  /** Which kerbs get a parking lane. null = as the preset has. */
+  parking: SideChoice | null;
+  /** Which kerbs get a painted bike lane. null = as the preset has. */
+  bike: SideChoice | null;
+  /** Footways on both sides, or none. null = as the preset has. */
+  footways: boolean | null;
+  /**
+   * Travel lanes running forward — on a one-way road, the lanes it has at all.
+   * null = as the preset has.
+   */
+  lanes: number | null;
+  /**
+   * Travel lanes running back, when the road is not the same both ways: a
+   * three-lane road is two one way and one the other, which is only sayable
+   * now the tile knows which way is which. null = the same as forward.
+   */
+  lanesBack: number | null;
+  /** What separates the directions. null = as the preset has. */
+  middle: MiddleChoice | null;
+  /**
+   * Which kerbs get a reserved BUS LANE. It is a running lane, not an edge
+   * strip, so it goes outside the general lanes and inside the parking — and
+   * on a tile this wide it always costs a general lane, since six running
+   * lanes and two footways do not fit. null = as the preset has.
+   */
+  bus: SideChoice | null;
+  /** How the road carries a tramway, if it does. null = as the preset has. */
+  tram: TramChoice | null;
+  /** Posted speed in km/h, clamped to the class range. null = as the preset has. */
+  postedKmh: number | null;
+  /** Which sides of the road get a sound wall. null = as the preset has. */
+  soundWall: SideChoice | null;
+  /** The sound wall's height, metres. null = as the preset has, or the default. */
+  soundWallHeight: number | null;
+  /** How both kerbs' parking lanes park their cars. null = as the preset has. */
+  parkingStyle: ParkingStyle | null;
+}
+
+export const NO_EDITS: ProfileEdits = {
+  parking: null,
+  parkingStyle: null,
+  bike: null,
+  footways: null,
+  lanes: null,
+  lanesBack: null,
+  middle: null,
+  bus: null,
+  tram: null,
+  postedKmh: null,
+  soundWall: null,
+  soundWallHeight: null,
+};
+
+/**
+ * Travel-lane width by class, metres, from the US standards a road of that
+ * kind is built to: 12 ft on an arterial, a divided road, a motorway and its
+ * ramps; 11 ft on an urban street, a collector and a rural road; 10 ft on a
+ * local street, a one-way and an alley; 9 ft on a farm track. A turn lane is
+ * the class's own lane width, since it is a lane.
+ */
+const LANE_WIDTH_BY_CLASS: Readonly<Record<RoadClassId, number>> = {
+  dirt: 2.75,
+  alley: 3.05,
+  rural: 3.35,
+  local: 3.05,
+  urban: 3.35,
+  collector: 3.35,
+  arterial: 3.6,
+  divided: 3.6,
+  oneWay: 3.05,
+  highway: 3.6,
+  ramp: 3.6,
+  rail: 5.6,
+};
+
+/** The width a travel lane of this class is built to, in metres. */
+export function laneWidthFor(classId: RoadClassId): number {
+  return LANE_WIDTH_BY_CLASS[classId];
+}
+
+/**
+ * The lane counts a road of each class is BUILT IN. A road is picked from this
+ * list rather than dialled a lane at a time: a four-lane arterial is a kind of
+ * road, not a three-lane with one added. The counts are the steps; how far
+ * they may go is the class's own lane range in the catalogue, which
+ * `laneOptionsFor` holds them inside — a count the class does not allow is a
+ * count the tool must never offer, since offering one and then refusing it is
+ * how a player is told the tile is too narrow for a road that fits it
+ * perfectly well.
+ *
+ * The counts are both directions summed, except on the classes that ARE one
+ * carriageway — a motorway and its slip road — where they are the lanes that
+ * carriageway runs, because a dual carriageway is two of them side by side.
+ */
+const LANE_OPTIONS_BY_CLASS: Readonly<Record<RoadClassId, readonly number[]>> = {
+  dirt: [2],
+  alley: [2],
+  rural: [2, 4],
+  local: [2, 4],
+  oneWay: [1, 2, 3],
+  urban: [2, 4, 6],
+  collector: [2, 4, 6],
+  arterial: [2, 4, 6],
+  divided: [4, 6, 8],
+  // A motorway and its slip road are ONE carriageway, so their counts are one
+  // direction's lanes and every step in the range is a road somebody builds.
+  highway: [3, 4, 5, 6],
+  ramp: [1, 2],
+  rail: [],
+};
+
+/**
+ * The lane counts this class offers, total across both directions: the ones
+ * its own catalogue range allows AND the ones a tile can hold. Six lanes of an
+ * arterial is a real road, but at 3.6 m a lane it is 21.6 m of carriageway on
+ * a 20 m tile — a road that needs two of them, which is a corridor and not
+ * this. Offering a count that can never be laid, then refusing it for width,
+ * is the tool telling the player off for taking what it held out.
+ *
+ * The travel lanes alone decide it. What a player adds on top — parking, a
+ * bike lane, a footway — can still overrun the tile, and being told so is
+ * fair: that is a choice, and it can be taken back.
+ */
+export function laneOptionsFor(classId: RoadClassId): readonly number[] {
+  const { min, max } = roadClass(classId).lanes;
+  const lane = laneWidthFor(classId);
+  const inRange = LANE_OPTIONS_BY_CLASS[classId].filter((n) => n >= min && n <= max);
+  // A class that gets a corridor is offered every count that fits two tiles —
+  // six and eight lanes are real offers now, not counts held out and then
+  // refused. A class that gets none is still held to its own tile.
+  const budget = classAdmitsCorridor(classId) ? CORRIDOR_METERS : TILE_METERS;
+  const fits = inRange.filter((n) => n * lane <= budget + 1e-6);
+  // A class whose very smallest road overruns the tile still offers it, so the
+  // drawer is never empty and the width chip explains itself.
+  return fits.length > 0 ? fits : inRange.slice(0, 1);
+}
+
+/** The common US parking stall, 8.5 × 18 ft: its width and its length, metres. */
+export const PARKING_STALL_WIDTH_M = 2.6;
+export const PARKING_STALL_DEPTH_M = 5.5;
+
+/**
+ * Each parking style's geometry: the stall's angle to the kerb, how deep the
+ * lane is from its travel edge to the kerb, and how much kerb one stall takes.
+ * A parallel lane is the parking piece's own 2.25 m, and its stall is 22 ft
+ * (6.7 m) along the kerb, the 2009 MUTCD's Figure 3B-21. The others lay the
+ * 2.6 × 5.5 m stall at their angle: at 60° the lane is 5.5·sin 60° +
+ * 2.6·cos 60° ≈ 6.0 m deep and a stall takes 2.6 ÷ sin 60° ≈ 3.0 m of kerb; at
+ * 90° the lane is the stall's 5.5 m and a stall takes its 2.6 m.
+ */
+export const PARKING_STYLES: Readonly<
+  Record<ParkingStyle, { angleDeg: number; laneWidth: number; pitch: number }>
+> = {
+  parallel: { angleDeg: 0, laneWidth: 2.25, pitch: 6.7 },
+  angled: { angleDeg: 60, laneWidth: 6.0, pitch: 3.0 },
+  headIn: { angleDeg: 90, laneWidth: PARKING_STALL_DEPTH_M, pitch: PARKING_STALL_WIDTH_M },
+};
+
+/** The style a parking piece parks in; a piece that names none is parallel. */
+export function parkingStyleOf(piece: LanePiece): ParkingStyle {
+  return piece.parking ?? 'parallel';
+}
+
+/** Real-world default widths, metres, for a piece a player adds. */
+export const DEFAULT_PIECE_WIDTHS: Readonly<Record<LanePieceKind, number>> = {
+  travel: 3.5,
+  centreTurn: 3.6,
+  parking: PARKING_STYLES.parallel.laneWidth,
+  bike: 1.6,
+  bus: 3.5,
+  // A reservation's two pieces are the guideway's 2.4 m median: a 0.9 m column
+  // with 0.75 m each side to the kerb face, between the 1.5 ft minimum lateral
+  // offset and the 3 ft one at intersections.
+  tram: 1.2,
+  rail: 5.6,
+  median: 1.8,
+  barrier: 0.6,
+  shoulder: 1.5,
+  sidewalk: 1.9,
+  verge: 0,
+  soundWall: SOUND_WALL_BASE_WIDTH_M,
+};
+
+/** Pieces that make up the road proper; everything outside them is an edge. */
+const CORE_KINDS: ReadonlySet<LanePieceKind> = new Set([
+  'travel',
+  'centreTurn',
+  'median',
+  'barrier',
+  'shoulder',
+  'bus',
+  'tram',
+  'rail',
+]);
+
+function hasSide(choice: SideChoice, side: 'left' | 'right'): boolean {
+  return choice === 'both' || choice === side;
+}
+
+/** Edits with every field decided — what a profile actually holds. */
+export interface ResolvedEdits {
+  parking: SideChoice;
+  parkingStyle: ParkingStyle;
+  bike: SideChoice;
+  footways: boolean;
+  lanes: number;
+  lanesBack: number;
+  middle: MiddleChoice;
+  bus: SideChoice;
+  tram: TramChoice;
+  postedKmh: number;
+  soundWall: SideChoice;
+  soundWallHeight: number;
+}
+
+/** The travel lanes a profile carries forward; on a one-way road, all of them. */
+function lanesEachWay(profile: RoadProfile): number {
+  const travel = profile.pieces.filter((p) => p.kind === 'travel');
+  const forward = travel.filter((p) => p.flow === 'fwd').length;
+  return forward > 0 ? forward : travel.length;
+}
+
+/** The travel lanes a profile carries back; the same as forward where it says nothing else. */
+function lanesBackOf(profile: RoadProfile): number {
+  const travel = profile.pieces.filter((p) => p.kind === 'travel');
+  const back = travel.filter((p) => p.flow === 'back').length;
+  return back > 0 ? back : lanesEachWay(profile);
+}
+
+/** Whether every travel lane runs the same way, so the road has no two sides to separate. */
+export function isOneWayProfile(profile: RoadProfile): boolean {
+  const travel = profile.pieces.filter((p) => p.kind === 'travel');
+  // A road every lane of which runs the SAME way is one-way, whichever way
+  // that is. Counting only 'fwd' calls a road drawn the other way two-way, and
+  // a corridor's two halves carry opposite flows — so one of the two was being
+  // given a centreline it has not got and a bay sized for oncoming traffic.
+  const flow = travel[0]?.flow;
+  return travel.length > 0 && flow !== undefined && travel.every((p) => p.flow === flow);
+}
+
+/**
+ * Whether every travel lane of a section runs AGAINST the way its tile was
+ * drawn: the far half of a two-way corridor, which carries the road's `back`
+ * lanes. A one-way street's lanes run the way it was drawn, and so does the
+ * near half of a corridor.
+ */
+export function runsAgainstDrawing(profile: RoadProfile): boolean {
+  const travel = profile.pieces.filter((p) => p.kind === 'travel');
+  return travel.length > 0 && travel.every((p) => p.flow === 'back');
+}
+
+/** What a profile already holds, read the way the edits are written. */
+export function editsOf(profile: RoadProfile): ResolvedEdits {
+  const first = profile.pieces.findIndex((p) => CORE_KINDS.has(p.kind));
+  const last =
+    profile.pieces.length -
+    1 -
+    [...profile.pieces].reverse().findIndex((p) => CORE_KINDS.has(p.kind));
+  const left = first > 0 ? profile.pieces.slice(0, first) : [];
+  const right = first >= 0 ? profile.pieces.slice(last + 1) : [];
+  const choice = (kind: LanePieceKind): SideChoice => {
+    const l = left.some((p) => p.kind === kind);
+    const r = right.some((p) => p.kind === kind);
+    return l && r ? 'both' : l ? 'left' : r ? 'right' : 'none';
+  };
+  // A bus lane is a RUNNING lane, so it lives in the core rather than out at
+  // the kerb with the parking: it is the outermost core piece on its side.
+  const core = first >= 0 ? profile.pieces.slice(first, last + 1) : [];
+  const busOn = (which: 'left' | 'right'): boolean =>
+    (which === 'left' ? core[0] : core[core.length - 1])?.kind === 'bus';
+  const parkingPiece = profile.pieces.find((p) => p.kind === 'parking');
+  return {
+    parking: choice('parking'),
+    parkingStyle: parkingPiece ? parkingStyleOf(parkingPiece) : 'parallel',
+    bike: choice('bike'),
+    bus:
+      busOn('left') && busOn('right')
+        ? 'both'
+        : busOn('left')
+          ? 'left'
+          : busOn('right')
+            ? 'right'
+            : 'none',
+    // Rails of its own down the middle, or rails in the lane the cars use.
+    tram: profile.pieces.some((p) => p.kind === 'tram')
+      ? 'reserved'
+      : profile.pieces.some((p) => p.tram === true)
+        ? 'mixed'
+        : 'none',
+    footways: profile.pieces.some((p) => p.kind === 'sidewalk'),
+    lanes: lanesEachWay(profile),
+    lanesBack: lanesBackOf(profile),
+    middle: profile.pieces.some((p) => p.kind === 'median')
+      ? 'median'
+      : profile.pieces.some((p) => p.kind === 'centreTurn')
+        ? 'turn'
+        : 'none',
+    postedKmh: profile.postedKmh ?? roadClass(profile.class).postedKmh.default,
+    soundWall: choice('soundWall'),
+    soundWallHeight:
+      profile.pieces.find((p) => p.kind === 'soundWall')?.height ?? DEFAULT_SOUND_WALL_HEIGHT_M,
+  };
+}
+
+/**
+ * The lane counts each way a class allows. `oneWay` says the road runs one
+ * way, which is also true of every road of a class whose own range already
+ * counts a single carriageway.
+ */
+export function lanesEachWayRange(
+  classId: RoadClassId,
+  oneWay: boolean,
+): {
+  min: number;
+  max: number;
+} {
+  const { min, max } = roadClass(classId).lanes;
+  if (oneWay) return { min: Math.max(1, min), max };
+  return { min: Math.max(1, Math.ceil(min / 2)), max: Math.max(1, Math.floor(max / 2)) };
+}
+
+/**
+ * Rebuilds a core's travel lanes and what sits between them, keeping whatever
+ * else the core holds — a reserved bus lane, a shoulder, a barrier — in place
+ * outside the lanes. New lanes are the class-default width rather than the
+ * preset's, since a preset's widths are chosen for its own lane count.
+ */
+function rebuildCore(
+  core: readonly LanePiece[],
+  lanes: number,
+  lanesBack: number,
+  middle: MiddleChoice,
+  oneWay: boolean,
+  widthOf: (kind: LanePieceKind) => number,
+  laneWidth: number,
+  bus: SideChoice,
+  tram: TramChoice,
+  /** Whether the road has a footway — a kerb a bus could actually stop at. */
+  footways: boolean,
+): LanePiece[] {
+  const first = core.findIndex((p) => p.kind === 'travel');
+  const last = core.length - 1 - [...core].reverse().findIndex((p) => p.kind === 'travel');
+  // Bus lanes and a tram reservation are rebuilt from the choice, so whatever
+  // the base had of them is dropped here rather than kept and doubled.
+  const keep = (p: LanePiece): boolean => p.kind !== 'bus' && p.kind !== 'tram';
+  const before = (first < 0 ? [] : core.slice(0, first)).filter(keep);
+  const after = (first < 0 ? [] : core.slice(last + 1)).filter(keep);
+  const lane = (flow: LaneFlow): LanePiece => ({
+    kind: 'travel',
+    width: laneWidth,
+    flow,
+    // Mixed running: the rails are IN the lane and the trams share it.
+    ...(tram === 'mixed' ? { tram: true } : {}),
+  });
+  const run = (flow: LaneFlow, count: number): LanePiece[] =>
+    Array.from({ length: count }, () => lane(flow));
+  const busLane = (flow: LaneFlow): LanePiece[] => [{ kind: 'bus', width: widthOf('bus'), flow }];
+  // Where the reserved lane goes depends on what the road is FOR. A street's
+  // bus lane is kerbside, because that is where the stops are and where a bus
+  // pulls in. A motorway has no stops to pull in at, and its reserved lane is
+  // the inner one — which is where every HOV and express lane runs, and the
+  // only place a lane can be reserved without cutting across the slip roads.
+  const median = !footways;
+  const busLeft = !median && hasSide(bus, 'left') ? busLane(oneWay ? 'fwd' : 'back') : [];
+  const busRight = !median && hasSide(bus, 'right') ? busLane('fwd') : [];
+  const busMiddle = median
+    ? [
+        ...(hasSide(bus, 'left') ? busLane(oneWay ? 'fwd' : 'back') : []),
+        ...(hasSide(bus, 'right') ? busLane('fwd') : []),
+      ]
+    : [];
+  if (oneWay) {
+    // One carriageway has one inner side, and on a motorway that is where the
+    // reservation goes — ahead of the running lanes, against the median. A
+    // one-way STREET keeps its kerbside lanes, because that is where a bus
+    // stops. Dropping the lane instead leaves the tool offering a choice that
+    // changes nothing.
+    return [...before, ...busLeft, ...busMiddle, ...run('fwd', lanes), ...busRight, ...after].map(
+      (p) => ({ ...p }),
+    );
+  }
+  // A reservation is TWO tracks, one each way, and it separates the directions
+  // the way a median does — which is why it takes the middle and not a kerb.
+  const separator: LanePiece[] =
+    tram === 'reserved'
+      ? [
+          { kind: 'tram', width: widthOf('tram'), flow: 'back' },
+          { kind: 'tram', width: widthOf('tram'), flow: 'fwd' },
+        ]
+      : busMiddle.length > 0
+        ? busMiddle
+        : middle === 'median'
+          ? [{ kind: 'median', width: widthOf('median') }]
+          : middle === 'turn'
+            ? [{ kind: 'centreTurn', width: widthOf('centreTurn') }]
+            : [];
+  return [
+    ...before,
+    ...busLeft,
+    ...run('back', lanesBack),
+    ...separator,
+    ...run('fwd', lanes),
+    ...busRight,
+    ...after,
+  ].map((p) => ({ ...p }));
+}
+
+/**
+ * Applies edits to a base profile. The edges are rebuilt from the kerb inward
+ * as footway, bike lane, parking lane, in the order a parking-protected bike
+ * lane puts them; left is the `back` side and right the `fwd` side, the way
+ * every preset lays its pieces. The core keeps the preset's own lanes until
+ * the player changes their number or what separates them, at which point it is
+ * rebuilt around them. Widths come from the base where it has the piece and
+ * from the real-world defaults where it does not.
+ */
+export function composeProfile(base: RoadProfile, edits: ProfileEdits): RoadProfile {
+  const current = editsOf(base);
+  // Every piece a class does not carry is clamped away here, on the same table
+  // the tool reads to decide what to offer. The two have to agree: a road the
+  // composer builds out of pieces its class refuses is one the game will not
+  // lay, and no amount of dialling gets the player out of it.
+  const admits = new Set(roadClass(base.class).admits);
+  const forKind = <T extends string>(kind: LanePieceKind, choice: T, none: T): T =>
+    admits.has(kind) ? choice : none;
+  const parking = forKind('parking', edits.parking ?? current.parking, 'none');
+  const parkingStyle = edits.parkingStyle ?? current.parkingStyle;
+  const bike = forKind('bike', edits.bike ?? current.bike, 'none');
+  const footways = edits.footways ?? current.footways;
+  const lanes = edits.lanes ?? current.lanes;
+  const lanesBack = edits.lanesBack ?? edits.lanes ?? current.lanesBack;
+  const middle = edits.middle ?? current.middle;
+  const bus = forKind('bus', edits.bus ?? current.bus, 'none');
+  // A tramway is clamped whichever way it runs: rails down a motorway's
+  // running lane are no more a thing than a tram reservation on it.
+  const tram = forKind('tram', edits.tram ?? current.tram, 'none');
+  const soundWall = forKind('soundWall', edits.soundWall ?? current.soundWall, 'none');
+  const soundWallHeight = edits.soundWallHeight ?? current.soundWallHeight;
+
+  const first = base.pieces.findIndex((p) => CORE_KINDS.has(p.kind));
+  const lastFromEnd = [...base.pieces].reverse().findIndex((p) => CORE_KINDS.has(p.kind));
+  const baseCore =
+    first < 0 ? [...base.pieces] : base.pieces.slice(first, base.pieces.length - lastFromEnd);
+  // A piece the base already has keeps its width, so recomposing a preset with
+  // no changes gives the preset back; a piece the player adds gets the default.
+  const widthOf = (kind: LanePieceKind): number =>
+    base.pieces.find((p) => p.kind === kind)?.width ?? DEFAULT_PIECE_WIDTHS[kind];
+  // A parallel lane keeps the base's own parallel width; an angled or head-in
+  // one is as deep as its stall at its angle, whatever the base had.
+  const parkingLane = (): LanePiece =>
+    parkingStyle === 'parallel'
+      ? {
+          kind: 'parking',
+          width:
+            base.pieces.find((p) => p.kind === 'parking' && parkingStyleOf(p) === 'parallel')
+              ?.width ?? DEFAULT_PIECE_WIDTHS.parking,
+        }
+      : { kind: 'parking', width: PARKING_STYLES[parkingStyle].laneWidth, parking: parkingStyle };
+
+  // Mixed running is a FLAG on the lanes the road already has — the rails go
+  // in the lane and nothing moves — so it is applied to the core rather than
+  // rebuilt from it. Rebuilding re-sizes every lane to the class default,
+  // which is how a median or a reservation finds the room it needs, and
+  // exactly what should not happen when the road has not changed shape.
+  const railsInLane = (pieces: readonly LanePiece[]): LanePiece[] =>
+    pieces.map((p) =>
+      p.kind === 'travel'
+        ? { ...p, ...(tram === 'mixed' ? { tram: true } : { tram: undefined }) }
+        : { ...p },
+    );
+  const structural =
+    lanes !== current.lanes ||
+    lanesBack !== current.lanesBack ||
+    middle !== current.middle ||
+    bus !== current.bus ||
+    (tram === 'reserved') !== (current.tram === 'reserved');
+
+  const core = !structural
+    ? tram === current.tram
+      ? baseCore
+      : railsInLane(baseCore)
+    : rebuildCore(
+        baseCore,
+        lanes,
+        lanesBack,
+        middle,
+        isOneWayProfile(base),
+        widthOf,
+        laneWidthFor(base.class),
+        bus,
+        tram,
+        footways,
+      );
+
+  const edge = (side: 'left' | 'right'): LanePiece[] => {
+    const flow = side === 'left' ? 'back' : 'fwd';
+    const out: LanePiece[] = [];
+    // Outermost of all: a noise wall stands at the edge of the road's land.
+    if (hasSide(soundWall, side)) {
+      out.push({ kind: 'soundWall', width: widthOf('soundWall'), height: soundWallHeight });
+    }
+    if (footways) out.push({ kind: 'sidewalk', width: widthOf('sidewalk') });
+    if (hasSide(bike, side)) out.push({ kind: 'bike', width: widthOf('bike'), flow });
+    if (hasSide(parking, side)) out.push(parkingLane());
+    return out;
+  };
+
+  const pieces = [...edge('left'), ...core.map((p) => ({ ...p })), ...edge('right').reverse()];
+  const composed: RoadProfile = { class: base.class, pieces };
+  // A posted speed is carried only when it says something the class default
+  // does not, so setting a preset's speed back to the default gives the preset
+  // itself back rather than a custom profile that behaves identically.
+  const cls = roadClass(base.class);
+  const posted = edits.postedKmh ?? base.postedKmh ?? null;
+  if (posted !== null) {
+    const clamped = Math.min(cls.postedKmh.max, Math.max(cls.postedKmh.min, posted));
+    if (base.postedKmh !== undefined || clamped !== cls.postedKmh.default) {
+      composed.postedKmh = clamped;
+    }
+  }
+  // A kerb the preset declared explicitly stays explicit; a preset that relied
+  // on its footways for kerbs keeps kerbs only while it keeps footways.
+  if (base.kerbs !== undefined) composed.kerbs = base.kerbs;
+  return composed;
+}
+
+/** Structural equality, ignoring piece object identity. */
+export function profilesEqual(a: RoadProfile, b: RoadProfile): boolean {
+  if (a.class !== b.class) return false;
+  if ((a.postedKmh ?? null) !== (b.postedKmh ?? null)) return false;
+  if ((a.kerbs ?? null) !== (b.kerbs ?? null)) return false;
+  if (a.pieces.length !== b.pieces.length) return false;
+  return a.pieces.every((p, i) => {
+    const q = b.pieces[i]!;
+    return (
+      p.kind === q.kind &&
+      Math.abs(p.width - q.width) < 1e-9 &&
+      (p.flow ?? null) === (q.flow ?? null) &&
+      (p.tram ?? false) === (q.tram ?? false) &&
+      (p.height ?? null) === (q.height ?? null) &&
+      parkingStyleOf(p) === parkingStyleOf(q)
+    );
+  });
+}
+
+/** Whether a composed profile may be laid: it fits the tile and keeps its class's rules. */
+export function isLayable(profile: RoadProfile): boolean {
+  return layRefusal(profile) === null;
+}
+
+/**
+ * Why a composed profile may not be laid, said the way the tool says it, or
+ * null when it may. The reasons are different things and read as different
+ * things: a road can be too wide for the tile, or perfectly narrow and still
+ * not the kind of road its class is.
+ */
+export function layRefusal(profile: RoadProfile): string | null {
+  // A big road wider than a tile is a corridor, laid across two of them. A
+  // road whose class gets no corridor is still simply too wide for its tile,
+  // and a corridor-class road wider than two tiles is too wide for anything.
+  if (tilesAcross(profile) === 0) {
+    return classAdmitsCorridor(profile.class) ? 'Too wide for a corridor' : 'Too wide for the tile';
+  }
+  const cls = roadClass(profile.class);
+  const name = cls.name.toLowerCase();
+  if (!admitsAllPieces(profile)) return `A ${name} doesn't carry that`;
+  if (!withinLaneRange(profile)) {
+    const { min, max } = cls.lanes;
+    return min === max ? `A ${name} runs ${min} lanes` : `A ${name} runs ${min} to ${max} lanes`;
+  }
+  return soundWallRefusal(profile);
+}
+
+/**
+ * Why a section's sound walls cannot stand where it puts them, or null. A
+ * wall is the outermost thing on its side, at one of the heights walls are
+ * built to, and it needs room: on every walled side the carriageway's
+ * half-width and the wall's base have to fit inside half a tile — on a
+ * corridor, inside the half that carries it, pushed where that half is.
+ */
+function soundWallRefusal(profile: RoadProfile): string | null {
+  const walls = profile.pieces.filter((p) => p.kind === 'soundWall');
+  if (walls.length === 0) return null;
+  const last = profile.pieces.length - 1;
+  const outermost = profile.pieces.every((p, i) => p.kind !== 'soundWall' || i === 0 || i === last);
+  if (!outermost) return 'A sound wall stands at the edge of the road';
+  const heights: readonly number[] = SOUND_WALL_HEIGHTS_M;
+  if (walls.some((w) => !heights.includes(w.height ?? Number.NaN))) {
+    return `A sound wall is ${SOUND_WALL_HEIGHTS_M.join(', ')} m tall`;
+  }
+  const halves: RoadProfile[] =
+    tilesAcross(profile) === 2
+      ? [corridorHalfProfile(profile, 'left'), corridorHalfProfile(profile, 'right')]
+      : [profile];
+  const edge = TILE_METERS / 2 + 1e-6;
+  for (const half of halves) {
+    const shift = carriagewayShiftOf(half);
+    const reach = carriagewayHalfWidthOf(half);
+    const first = half.pieces[0];
+    const end = half.pieces[half.pieces.length - 1];
+    const lowWall = first?.kind === 'soundWall' ? first.width : 0;
+    const highWall = end?.kind === 'soundWall' ? end.width : 0;
+    if (
+      (lowWall > 0 && reach + lowWall - shift > edge) ||
+      (highWall > 0 && reach + highWall + shift > edge)
+    ) {
+      return 'No room beside the carriageway for a sound wall';
+    }
+  }
+  return null;
+}
+
+/** Every piece the profile holds is one its class admits. */
+export function admitsAllPieces(profile: RoadProfile): boolean {
+  const admits = new Set(roadClass(profile.class).admits);
+  return profile.pieces.every((p) => admits.has(p.kind));
+}
+
+/** Lane count within the class's range. */
+export function withinLaneRange(profile: RoadProfile): boolean {
+  const { min, max } = roadClass(profile.class).lanes;
+  const n = laneCount(profile);
+  return n >= min && n <= max;
+}
+
+/**
+ * Which classes a class refuses to touch. Every pair not listed here joins,
+ * because a city is built out of roads meeting other roads and a step in
+ * width is a transition, not an error. The refusals are the joins that would
+ * be absurd on the ground: a motorway or a slip road running straight onto a
+ * farm track or a service alley, which could carry neither its speed nor its
+ * volume. Rail is a separate network that crosses a street at grade without
+ * joining it, so it refuses nothing.
+ */
+const NEVER_MEETS: Partial<Record<RoadClassId, readonly RoadClassId[]>> = {
+  ramp: ['dirt', 'alley'],
+};
+
+/**
+ * What a motorway will touch. A motorway is limited access: traffic reaches it
+ * down a slip road and nowhere else, which is most of what makes it a motorway
+ * rather than a very wide street. A crossroads on one puts a standing queue
+ * across four lanes of traffic at speed.
+ *
+ * Written as what it ACCEPTS rather than what it refuses, so a class added
+ * later stays off the motorway until somebody decides to let it on, which is
+ * the safe way round.
+ *
+ * The motorway and the slip road unlock at the same milestone, so this can
+ * never leave a player holding a motorway with no way to reach it.
+ */
+const MOTORWAY_MEETS: ReadonlySet<RoadClassId> = new Set<RoadClassId>(['highway', 'ramp']);
+
+function refuses(a: RoadClassId, b: RoadClassId): boolean {
+  if (a === 'rail' || b === 'rail') return false;
+  if (a === 'highway') return !MOTORWAY_MEETS.has(b);
+  return (NEVER_MEETS[a] ?? []).includes(b);
+}
+
+/**
+ * Where each class sits in the road hierarchy. A road only ever replaces one
+ * BELOW it, so a farm track never cuts a motorway and a bike lane never wipes
+ * an arterial. The order is the real one — surface first, then how much
+ * traffic the road is built to carry — and it is deliberately not the order
+ * the tier numbers happen to be in, which is the order they were added in.
+ */
+const CLASS_RANK: Readonly<Record<RoadClassId, number>> = {
+  dirt: 0,
+  alley: 1,
+  rural: 2,
+  local: 3,
+  oneWay: 4,
+  urban: 5,
+  collector: 6,
+  arterial: 7,
+  divided: 8,
+  ramp: 9,
+  highway: 10,
+  rail: 11,
+};
+
+/**
+ * Classes that are an ACCESS rather than a leg of the traffic network.
+ *
+ * An alley exists to reach the back of a building — bins, deliveries, a fire
+ * appliance — and carries no through traffic anybody plans a route around. So
+ * a street it meets does not treat it as a leg: it takes no turn bay for it,
+ * does not sweep its footway round into it, and does not bend itself to become
+ * it. The footway runs past the mouth and the alley climbs over it, which is
+ * what a dropped kerb is.
+ *
+ * A farm track is NOT one of these. It is a poor road, but it is a road: a
+ * lane that bends into a track really does bend, and the pavement really does
+ * end there.
+ */
+const SERVICE_CLASSES: ReadonlySet<RoadClassId> = new Set<RoadClassId>(['alley']);
+
+/** Whether a class is an access rather than a leg of the network. */
+export function isServiceClass(id: RoadClassId): boolean {
+  return SERVICE_CLASSES.has(id);
+}
+
+/**
+ * A class's place in the hierarchy on its own, without the transit bonus the
+ * profile rank adds. This is the FUNCTIONAL CLASSIFICATION a traffic engineer
+ * reads when deciding which road at a junction is the minor one.
+ */
+export function classRank(id: RoadClassId): number {
+  return CLASS_RANK[id];
+}
+
+/**
+ * A profile's place in the hierarchy. A road carrying a reserved bus or tram
+ * lane outranks the same road without one, so a stray drag cannot quietly wipe
+ * a transit line it crosses.
+ */
+export function roadRank(profile: RoadProfile): number {
+  const transit = profile.pieces.some(
+    (p) => p.kind === 'bus' || p.kind === 'tram' || p.tram === true,
+  );
+  return CLASS_RANK[profile.class] * 2 + (transit ? 1 : 0);
+}
+
+/**
+ * Whether two classes are ranked against each other at all. Rail sits outside
+ * the road ranking: whichever number is higher, rail never takes a tile from a
+ * road nor a road from rail, and only replace mode lays one over the other.
+ */
+export function rankedTogether(a: RoadClassId, b: RoadClassId): boolean {
+  return (a === 'rail') === (b === 'rail');
+}
+
+/** The hierarchy rank of a tier, which is the rank of the preset it names. */
+export function rankForTier(tier: RoadTier): number {
+  return roadRank(presetProfileForTier(tier));
+}
+
+/**
+ * Whether a drag of `tier` takes a tile that holds `current`: an empty tile,
+ * or a road it outranks and is ranked against at all.
+ */
+export function tierOutranks(tier: RoadTier, current: RoadTier): boolean {
+  if (current === RoadTier.None) return true;
+  if (!rankedTogether(presetProfileForTier(tier).class, presetProfileForTier(current).class)) {
+    return false;
+  }
+  return rankForTier(tier) > rankForTier(current);
+}
+
+/** Whether a road of class `a` may touch a road of class `b`, in either order. */
+export function canJoin(a: RoadClassId, b: RoadClassId): boolean {
+  return !refuses(a, b) && !refuses(b, a);
+}
+
+/** "a dirt road", "an alley" — the article a class name takes when it is read out. */
+export function withArticle(name: string): string {
+  const lower = name.toLowerCase();
+  return `${'aeiou'.includes(lower[0] ?? '') ? 'an' : 'a'} ${lower}`;
+}
+
+/**
+ * Why a road of class `a` may not touch one of class `b`, phrased for the
+ * cursor chip from the side that carries the rule, or null when they may.
+ */
+export function joinRefusal(a: RoadClassId, b: RoadClassId): string | null {
+  if (canJoin(a, b)) return null;
+  const [ruled, other] = refuses(a, b) ? [a, b] : [b, a];
+  // The motorway's refusal has somewhere to send the player, so it says so —
+  // but only where the ramp would take it. A ramp will not run onto a farm
+  // track either, and pointing at one there would be an instruction that fails.
+  if (ruled === 'highway' && canJoin('ramp', other)) {
+    return `A ${roadClass(ruled).name.toLowerCase()} meets ${withArticle(
+      roadClass(other).name,
+    )} through a ramp`;
+  }
+  return `A ${roadClass(ruled).name.toLowerCase()} can't meet ${withArticle(roadClass(other).name)}`;
+}

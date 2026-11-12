@@ -1,0 +1,1728 @@
+/**
+ * Zoned-lot growth system: spawns, grows, and retires
+ * buildings on res/com/ind zoned tiles. Pure simulation logic operating on
+ * GridState + BuildingRegistry -- no three.js/DOM, no Math.random/Date.now.
+ *
+ * It also owns every building's `problems` bits, plopped generators included,
+ * so one cadence and one pass decide what the advisor and the info panel are
+ * told is wrong.
+ *
+ * Cadence: `tick` is expected to be called once per sim tick (TICK_RATE,
+ * see shared/constants). Construction countdowns advance every call; the
+ * heavier scan/problems/level-up passes only run every GROWTH_INTERVAL
+ * ticks, over a rotating stride-window of the grid so a full map is
+ * covered over many passes rather than rescanned every time.
+ */
+import {
+  ROAD_CHECK_RADIUS,
+  SEWER_MILESTONE,
+  TICKS_PER_YEAR,
+  TILE_METERS,
+  inBounds,
+  tileIndex,
+} from '../shared/constants';
+import { BuildingState, FieldId, Problem, RoadTier, ZoneType, isStreetTier } from '../shared/types';
+import type { KerbSurroundings } from '../shared/kerblayout';
+import { kerbCreditAlongFrame } from '../world/kerbcredit';
+import { claimedTiles, frameCorners } from '../shared/lotframe';
+import { holdsLotParkingAt, lotLayoutFor } from '../shared/lotparking';
+import { drawsLotParking, isDenseLotKind } from '../shared/parkingcode';
+import { missingSchooling, type EducationRung } from '../shared/schooling';
+import { SoilGrade, isFarmable } from '../shared/soil';
+import type {
+  BuildingCatalogEntry,
+  BuildingDelta,
+  BuildingInstance,
+  DemandLevels,
+  FarmKind,
+  FramedRun,
+  GridState,
+  GrowthWaiting,
+  ParcelFrame,
+  Sector,
+  TilePoint,
+  ZonedUnserved,
+} from '../shared/types';
+import { farmKindOf } from '../shared/buildingkind';
+import { LOT_EXTENT, LOT_STANDING_FLOOR, PLATTED_ZONES, platCandidates } from '../shared/lots';
+import { footprintForRotation } from '../shared/footprint';
+import { BuildingRegistry, lotTiles, standingTiles } from './buildings';
+import type { ProfileLookup } from '../world/freeroads';
+import { canPlaceTiles } from '../world/grid';
+import type { JobsBySector } from './economy';
+import {
+  cityWaterUse,
+  dirtRoadWithinReach,
+  dirtRoadWithinReachOf,
+  sewageOf,
+  utilityCanDeliver,
+  utilityUnits,
+  type UtilityLine,
+} from './network';
+import { freeCellsOn, roadCellsOf } from '../world/roadnet';
+import {
+  platOf,
+  platReaches,
+  platSourceOf,
+  runsAlongKerbs,
+  takesFrontageLots,
+  takesWholeParcels,
+  type Front,
+  type Plat,
+} from '../world/plat';
+
+/**
+ * Deterministic RNG surface injected into the growth system.
+ * Not part of shared/types.ts; declared locally (structurally identical to
+ * src/core/rng.ts's Rng, which this module never imports directly).
+ */
+export interface Rng {
+  /** Next float in [0, 1). */
+  next(): number;
+  /** Next integer in [0, maxExclusive). */
+  int(maxExclusive: number): number;
+  /** Next float in [a, b). */
+  range(a: number, b: number): number;
+  /** A new, independent, deterministic Rng stream. */
+  fork(streamId: number): Rng;
+}
+
+export const GROWTH_INTERVAL = 10;
+const CONSTRUCTION_TICKS = 100;
+/** Share of prime-land houses torn down for a plex in a game year. */
+const CONVERSION_PER_YEAR = 0.02;
+/** The per-pass chance that compounds to CONVERSION_PER_YEAR over a year of passes. */
+export const CONVERSION_CHANCE_PER_PASS =
+  1 - (1 - CONVERSION_PER_YEAR) ** (GROWTH_INTERVAL / TICKS_PER_YEAR);
+const ABANDON_BLOCKER_STREAK = 3;
+const DESPAWN_ABANDONED_PASSES = 10;
+/** Number of GROWTH_INTERVAL passes needed to sweep the whole map once. */
+const SCAN_STRIDE = 32;
+const LEVEL_2_LAND_VALUE = 140;
+const LEVEL_3_LAND_VALUE = 190;
+const HIGH_CRIME = 170;
+const HIGH_POLLUTION = 170;
+const LOW_DEMAND = -0.5;
+
+function zoneSector(zone: ZoneType): Sector | null {
+  switch (zone) {
+    // The new city-builder zones all draw on residential demand.
+    // ResMediumRow/ResMedium are pure residential; Mixed's building carries
+    // both residents and jobs, but its *demand* pull is residential (com
+    // demand already reads the jobs those buildings add, no separate case
+    // needed here).
+    case ZoneType.ResLow:
+    case ZoneType.ResHigh:
+    case ZoneType.ResMediumRow:
+    case ZoneType.ResMedium:
+    case ZoneType.Mixed:
+      return 'res';
+    case ZoneType.ComLow:
+    case ZoneType.ComHigh:
+      return 'com';
+    // A farm's jobs are the basic jobs a small town lives by, like a mill's.
+    case ZoneType.Industrial:
+    case ZoneType.IndHeavy:
+    case ZoneType.Agriculture:
+      return 'ind';
+    default:
+      return null;
+  }
+}
+
+/** The soil a farm kind needs under its land: crops the best, pasture anything farmable. */
+const FARM_GRADE: Readonly<Record<FarmKind, SoilGrade>> = {
+  crops: SoilGrade.Prime,
+  orchard: SoilGrade.Fertile,
+  pasture: SoilGrade.Marginal,
+};
+
+/** The kind of farm a lot's soil grows, or null where it grows none. */
+export function farmKindFor(grade: SoilGrade): FarmKind | null {
+  if (grade >= SoilGrade.Prime) return 'crops';
+  if (grade >= SoilGrade.Fertile) return 'orchard';
+  if (grade >= SoilGrade.Marginal) return 'pasture';
+  return null;
+}
+
+/** How likely a farm is to start on a lot, by the lot's soil, in place of land value. */
+const FARM_DESIRABILITY: Readonly<Record<SoilGrade, number>> = {
+  [SoilGrade.Unfit]: 0,
+  [SoilGrade.Marginal]: 0.6,
+  [SoilGrade.Fertile]: 0.8,
+  [SoilGrade.Prime]: 1,
+};
+
+/** The grade at least half the w×d lot at (x, z) reaches. */
+export function lotGrade(g: GridState, x: number, z: number, w: number, d: number): SoilGrade {
+  const counts = [0, 0, 0, 0];
+  const tiles = lotTiles(x, z, w, d);
+  for (const idx of tiles) {
+    const grade = readTile(g.soil, idx);
+    counts[grade] = (counts[grade] ?? 0) + 1;
+  }
+  let reached = 0;
+  for (let grade = SoilGrade.Prime; grade > SoilGrade.Unfit; grade--) {
+    reached += counts[grade] ?? 0;
+    if (reached * 2 >= tiles.length) return grade as SoilGrade;
+  }
+  return SoilGrade.Unfit;
+}
+
+/**
+ * Every tile of the w×d lot at (x, z) on the map and zoned `zone`: a building
+ * stands only on land zoned for it, never spilling onto the ground beside.
+ */
+function isZonedLot(
+  g: GridState,
+  zone: ZoneType,
+  x: number,
+  z: number,
+  w: number,
+  d: number,
+): boolean {
+  for (let dz = 0; dz < d; dz++) {
+    for (let dx = 0; dx < w; dx++) {
+      if (!inBounds(x + dx, z + dz)) return false;
+      if (readTile(g.zone, tileIndex(x + dx, z + dz)) !== zone) return false;
+    }
+  }
+  return true;
+}
+
+/** Every tile of the lot on the map, zoned Agriculture and on soil a farm can work. */
+function isFarmLot(g: GridState, x: number, z: number, w: number, d: number): boolean {
+  if (!isZonedLot(g, ZoneType.Agriculture, x, z, w, d)) return false;
+  for (let dz = 0; dz < d; dz++) {
+    for (let dx = 0; dx < w; dx++) {
+      if (!isFarmable(readTile(g.soil, tileIndex(x + dx, z + dz)))) return false;
+    }
+  }
+  return true;
+}
+
+/** Safe read of a possibly-out-of-range typed array slot (noUncheckedIndexedAccess). */
+function readTile(arr: Uint8Array | Uint32Array, idx: number): number {
+  const v = arr[idx];
+  return v === undefined ? 0 : v;
+}
+
+function fieldAt(g: GridState, field: FieldId, idx: number): number {
+  const arr = g.fields[field];
+  if (arr === undefined) return 0;
+  return readTile(arr, idx);
+}
+
+/** Any road tile within Manhattan distance `radius` of (x, z)? */
+function hasNearbyRoad(g: GridState, x: number, z: number, radius: number): boolean {
+  const cells = g.roads ? roadCellsOf(g) : null;
+  for (let dz = -radius; dz <= radius; dz++) {
+    const spread = radius - Math.abs(dz);
+    for (let dx = -spread; dx <= spread; dx++) {
+      const tx = x + dx;
+      const tz = z + dz;
+      if (!inBounds(tx, tz)) continue;
+      const idx = tileIndex(tx, tz);
+      if (isStreetTier(readTile(g.roadTier, idx))) return true;
+      // A road off the grid serves its lots as well as one on it.
+      if (cells && freeCellsOn(cells, idx).some((c) => isStreetTier(cells.tier[c]!))) return true;
+    }
+  }
+  return false;
+}
+
+/** True only if every tile of the w*d footprint at (x, z) is in bounds and unstamped. */
+function footprintFree(g: GridState, x: number, z: number, w: number, d: number): boolean {
+  for (let dz = 0; dz < d; dz++) {
+    for (let dx = 0; dx < w; dx++) {
+      const tx = x + dx;
+      const tz = z + dz;
+      if (!inBounds(tx, tz)) return false;
+      if (readTile(g.buildingId, tileIndex(tx, tz)) !== 0) return false;
+    }
+  }
+  return true;
+}
+
+/** Clears footprint tiles currently stamped with `expectedId` (no-op elsewhere). */
+function clearStamp(
+  g: GridState,
+  x: number,
+  z: number,
+  w: number,
+  d: number,
+  expectedId: number,
+): void {
+  for (let dz = 0; dz < d; dz++) {
+    for (let dx = 0; dx < w; dx++) {
+      const idx = tileIndex(x + dx, z + dz);
+      if (readTile(g.buildingId, idx) === expectedId) g.buildingId[idx] = 0;
+    }
+  }
+}
+
+/** Unconditionally stamps footprint tiles with `id`. Used to roll back a failed level-up. */
+function writeStamp(g: GridState, x: number, z: number, w: number, d: number, id: number): void {
+  for (let dz = 0; dz < d; dz++) {
+    for (let dx = 0; dx < w; dx++) {
+      g.buildingId[tileIndex(x + dx, z + dz)] = id;
+    }
+  }
+}
+
+/** Stamps a building back onto the ground it stood on: its rectangle, or the tiles its frame claims. */
+function restoreStamp(g: GridState, inst: BuildingInstance, w: number, d: number): void {
+  for (const t of standingTiles(g.size, inst.x, inst.z, w, d, inst.frame)) {
+    g.buildingId[tileIndex(t.x, t.z)] = inst.id;
+  }
+}
+
+/**
+ * True when ANY of a building's standing `tiles` is served by `layer`.
+ *
+ * Power and water only reach one tile beyond a road, while a footprint always
+ * extends from its origin corner towards +x/+z. Testing the origin alone
+ * therefore made service depend on which side the street was: a lot fronting
+ * a road to its north or west was served, while the identical lot fronting a
+ * road to its south or east never was — its only served row would push the
+ * footprint into the road, and the row that fits was out of reach. A lot is
+ * connected as soon as one of its tiles is.
+ */
+export function footprintServed(layer: Uint8Array, tiles: readonly TilePoint[]): boolean {
+  for (const t of tiles) {
+    if (!inBounds(t.x, t.z)) continue;
+    if (readTile(layer, tileIndex(t.x, t.z))) return true;
+  }
+  return false;
+}
+
+/** What the utility pass left for growth: whom each cut, and what each has spare. */
+export interface GrowthSupply {
+  power: UtilityLine;
+  water: UtilityLine;
+  sewer: UtilityLine;
+}
+
+/** A grid with room for anything and nobody cut, for callers that run no utility pass. */
+export const UNMETERED_SUPPLY: GrowthSupply = {
+  power: { cut: new Set(), spare: Infinity },
+  water: { cut: new Set(), spare: Infinity },
+  sewer: { cut: new Set(), spare: Infinity },
+};
+
+/** What a pass still has to hand out, in utility units; it counts down as the pass builds. */
+interface Spare {
+  power: number;
+  water: number;
+  sewer: number;
+}
+
+/** An economy with room for any business, for callers that run no demand model. */
+export const UNLIMITED_ROOM: JobsBySector = { com: Infinity, ind: Infinity };
+
+/**
+ * The business kinds among `candidates` whose jobs fit the sector's `room`,
+ * plus the smallest of them whatever the room, so growth never stalls at a
+ * gap smaller than any building. Residential kinds pass untouched.
+ */
+export function withinRoom(
+  candidates: readonly BuildingCatalogEntry[],
+  sector: Sector,
+  room: JobsBySector,
+): BuildingCatalogEntry[] {
+  if (sector === 'res' || candidates.length === 0) return [...candidates];
+  const smallest = Math.min(...candidates.map((e) => e.jobs ?? 0));
+  const limit = Math.max(room[sector], smallest);
+  return candidates.filter((e) => (e.jobs ?? 0) <= limit);
+}
+
+/** Something growth would build or level up but for the supply: the pass it last asked in, and what it wanted, in utility units. */
+interface Waiting {
+  pass: number;
+  use: number;
+  /** The ground a new building would take; none for a level-up, which stands where it is. */
+  tiles: readonly number[];
+}
+
+/** The shortage bits for a building the utility pass cut. */
+function shortageOf(supply: GrowthSupply, id: number): number {
+  return (
+    (supply.power.cut.has(id) ? Problem.PowerShortage : 0) |
+    (supply.water.cut.has(id) ? Problem.WaterShortage : 0) |
+    (supply.sewer.cut.has(id) ? Problem.SewerShortage : 0)
+  );
+}
+
+function computeProblems(
+  g: GridState,
+  x: number,
+  z: number,
+  entry: BuildingCatalogEntry,
+  demandForSector: number,
+  milestoneLevel: number,
+  tiles: readonly TilePoint[] = [{ x, z }],
+): number {
+  const idx = tileIndex(x, z);
+  const sector = entry.zone === undefined ? null : zoneSector(entry.zone);
+  const reached =
+    farmKindOf(entry) !== null
+      ? dirtRoadWithinReachOf(g, tiles)
+      : hasNearbyRoad(g, x, z, ROAD_CHECK_RADIUS);
+  let problems = 0;
+  if (!footprintServed(g.power, tiles)) problems |= Problem.NoPower;
+  if (cityWaterUse(g, entry, tiles) > 0 && !footprintServed(g.watered, tiles)) {
+    problems |= Problem.NoWater;
+  }
+  if (sewageOf(g, entry, tiles, milestoneLevel) > 0 && !footprintServed(g.sewered, tiles)) {
+    problems |= Problem.NoSewer;
+  }
+  if (!reached) problems |= Problem.NoRoad;
+  if (fieldAt(g, FieldId.Crime, idx) > HIGH_CRIME) problems |= Problem.HighCrime;
+  if (sector === 'res' && fieldAt(g, FieldId.Pollution, idx) > HIGH_POLLUTION)
+    problems |= Problem.HighPollution;
+  if (demandForSector < LOW_DEMAND) problems |= Problem.LowDemand;
+  return problems;
+}
+
+/**
+ * For homes and shops, land value alone clears L2. L3 additionally needs the
+ * schooling its zone waits on, each rung's own field over the gate (see
+ * `level3Schooling`). Industry never asks: it grows on demand and room.
+ */
+function meetsLevelUpRequirement(
+  g: GridState,
+  x: number,
+  z: number,
+  zone: ZoneType,
+  targetLevel: number,
+): boolean {
+  const idx = tileIndex(x, z);
+  const landValue = fieldAt(g, FieldId.LandValue, idx);
+  const threshold = targetLevel >= 3 ? LEVEL_3_LAND_VALUE : LEVEL_2_LAND_VALUE;
+  if (landValue <= threshold) return false;
+  return targetLevel < 3 || schoolsMissingAt(g, idx, zone).length === 0;
+}
+
+/** The schools a zone's level 3 still lacks on tile `idx`. */
+export function schoolsMissingAt(g: GridState, idx: number, zone: ZoneType): EducationRung[] {
+  return missingSchooling(zone, (field) => fieldAt(g, field, idx));
+}
+
+/**
+ * Whether a building at level 2 is held there by its schooling alone: land value
+ * clears level 3 and a school its zone waits on is missing.
+ */
+function heldBySchooling(g: GridState, x: number, z: number, zone: ZoneType): boolean {
+  const idx = tileIndex(x, z);
+  return (
+    fieldAt(g, FieldId.LandValue, idx) > LEVEL_3_LAND_VALUE &&
+    schoolsMissingAt(g, idx, zone).length > 0
+  );
+}
+
+/**
+ * The kinds a lot may grow: the zone's level-1 entries unlocked at
+ * `milestoneLevel` whose footprint `fits` the lot, in catalog order. A larger
+ * lot for a kind's building is never a kind of its own: it is one of the
+ * footprints `footprintsOf` offers once the kind is drawn.
+ */
+export function spawnCandidates(
+  catalog: readonly BuildingCatalogEntry[],
+  zone: ZoneType,
+  milestoneLevel: number,
+  fits: (entry: BuildingCatalogEntry) => boolean,
+): BuildingCatalogEntry[] {
+  return catalog.filter(
+    (e) =>
+      e.zone === zone &&
+      e.level === 1 &&
+      e.bodyFootprint === undefined &&
+      e.unlockMilestone <= milestoneLevel &&
+      fits(e),
+  );
+}
+
+/**
+ * The footprints a kind's building may stand on at the level `entry` is:
+ * the entry itself and every larger lot the catalog holds for the same
+ * building, smallest first (ties in catalog order). A level-1 office, hotel,
+ * mixed-use block or mid-rise tries its car-park lots first and keeps its own
+ * footprint last, where it parks at the kerb: a car park is never a reason
+ * for a dense zone to stop growing.
+ */
+export function footprintsOf(
+  catalog: readonly BuildingCatalogEntry[],
+  entry: BuildingCatalogEntry,
+): BuildingCatalogEntry[] {
+  const area = (e: BuildingCatalogEntry): number => e.footprint.w * e.footprint.d;
+  const lots =
+    entry.kind === undefined
+      ? []
+      : catalog.filter(
+          (e) =>
+            e.bodyFootprint !== undefined &&
+            e.zone === entry.zone &&
+            e.kind === entry.kind &&
+            e.level === entry.level &&
+            e.lot === entry.lot,
+        );
+  const bySize = lots.sort((a, b) => area(a) - area(b));
+  if (entry.level === 1 && isDenseLotKind(entry.kind)) return [...bySize, entry];
+  return [entry, ...bySize].sort((a, b) => area(a) - area(b));
+}
+
+/** Whether a building may stand at (x, z) turned `rotation` and meet its parking code there. */
+type ParkingCheck = (
+  entry: BuildingCatalogEntry,
+  x: number,
+  z: number,
+  rotation: 0 | 1 | 2 | 3,
+) => boolean;
+
+/**
+ * The parking code as one growth pass reads it: a suburban commercial or
+ * industrial footprint holds, on its lot, its requirement less the stalls the
+ * street paints along its frontage, with its accessible spaces and berths.
+ * The kerb's stalls are read once, on first ask, since nothing in a pass
+ * changes the roads.
+ */
+function parkingCheckFor(g: GridState, kerb: (() => KerbSurroundings) | null): ParkingCheck {
+  let surroundings: KerbSurroundings | null | undefined;
+  const roadAt = (x: number, z: number): boolean =>
+    inBounds(x, z) && readTile(g.roadTier, tileIndex(x, z)) !== RoadTier.None;
+  return (entry, x, z, rotation) => {
+    if (!drawsLotParking(entry)) return true;
+    if (surroundings === undefined) surroundings = kerb ? kerb() : null;
+    return holdsLotParkingAt(entry, x, z, rotation, roadAt, surroundings);
+  };
+}
+
+/**
+ * One of `candidates` by its `share` of the real stock: `roll` in [0, 1)
+ * against their cumulative weights. A candidate with no share weighs 1.
+ */
+export function drawKind(
+  candidates: readonly BuildingCatalogEntry[],
+  roll: number,
+): BuildingCatalogEntry {
+  const total = candidates.reduce((sum, e) => sum + (e.share ?? 1), 0);
+  let threshold = roll * total;
+  for (const e of candidates) {
+    threshold -= e.share ?? 1;
+    if (threshold < 0) return e;
+  }
+  return candidates[candidates.length - 1]!;
+}
+
+/** 0..1: land value helps, pollution hurts (res most, com some, ind none). */
+function desirabilityFor(g: GridState, x: number, z: number, sector: Sector): number {
+  const idx = tileIndex(x, z);
+  const landValue = fieldAt(g, FieldId.LandValue, idx);
+  const pollution = fieldAt(g, FieldId.Pollution, idx);
+  const pollutionWeight = sector === 'res' ? 0.5 : sector === 'com' ? 0.2 : 0;
+  const raw = (landValue / 255) * 0.6 + 0.4 - (pollution / 255) * pollutionWeight;
+  return Math.max(0, Math.min(1, raw));
+}
+
+/**
+ * The plat of a zone, cut on first ask and kept for the pass, from the same
+ * reading the lens draws.
+ */
+function platCutter(g: GridState, profileOf: ProfileLookup): PlatPass {
+  const source = platSourceOf(
+    g,
+    g.roads ? roadCellsOf(g) : null,
+    g.fields[FieldId.LandValue],
+    profileOf,
+  );
+  const plats = new Map<ZoneType, Plat>();
+  const runs = new Map<string, FramedRun[]>();
+  const platFor = (zone: ZoneType): Plat => {
+    let plat = plats.get(zone);
+    if (!plat) {
+      plat = platOf(source, zone);
+      plats.set(zone, plat);
+    }
+    return plat;
+  };
+  return {
+    streetAt: source.streetAt,
+    platFor,
+    runsFor: (zone, wM) => {
+      const key = `${zone}:${wM}`;
+      let found = runs.get(key);
+      if (!found) {
+        found = runsAlongKerbs(platFor(zone), wM);
+        runs.set(key, found);
+      }
+      return found;
+    },
+  };
+}
+
+/** The plat of the pass: a zone's cut, the runs of its framed parcels by frontage, and the streets it was cut from. */
+interface PlatPass {
+  platFor: (zone: ZoneType) => Plat;
+  runsFor: (zone: ZoneType, wM: number) => readonly FramedRun[];
+  streetAt: (x: number, z: number) => boolean;
+}
+
+/** Whether the w×d rectangle at (x, z) covers a tile of a parcel cut along a curved kerb: that ground grows only in the parcel's frame, never under a box that happens to fit. */
+function coversFramedParcel(plat: Plat, x: number, z: number, w: number, d: number): boolean {
+  for (let dz = 0; dz < d; dz++) {
+    for (let dx = 0; dx < w; dx++) {
+      if (!inBounds(x + dx, z + dz)) continue;
+      if ((plat.parcelAt[tileIndex(x + dx, z + dz)] ?? -1) >= plat.parcels.length) return true;
+    }
+  }
+  return false;
+}
+
+/** Where a building with no lot stands, and turned how. */
+interface Placement {
+  x: number;
+  z: number;
+  rotation: 0 | 1;
+}
+
+/** Where a kind stands on a curved kerb: its footprint, the run's frame and the tiles its rectangle there claims. */
+interface FramedSite {
+  entry: BuildingCatalogEntry;
+  frame: ParcelFrame;
+  tiles: TilePoint[];
+}
+
+/**
+ * Where `e` stands when the scan reaches (x, z): only on a tile on its
+ * parcel's street edge, so every kind competes at the same row whichever side
+ * the street is on. The building starts there along the street, turned a
+ * quarter when the parcel fronts east or west, and its min corner steps back
+ * from the street edge on a south or east front. Null where the tile is not a
+ * street-row tile or the building takes no frontage lots there.
+ */
+function frontagePlacement(
+  plat: Plat,
+  e: BuildingCatalogEntry,
+  x: number,
+  z: number,
+): Placement | null {
+  const n = plat.parcelAt[tileIndex(x, z)] ?? -1;
+  if (n < 0) return null;
+  const p = plat.parcels[n]!;
+  const onStreetRow =
+    p.front === 'N'
+      ? z === p.z
+      : p.front === 'S'
+        ? z === p.z + p.d - 1
+        : p.front === 'W'
+          ? x === p.x
+          : x === p.x + p.w - 1;
+  if (!onStreetRow) return null;
+  const turned = (p.front === 'E' || p.front === 'W') && e.footprint.w !== e.footprint.d;
+  const rotation = turned ? 1 : 0;
+  const { w, d } = footprintForRotation(e, rotation);
+  const mx = p.front === 'E' ? x - w + 1 : x;
+  const mz = p.front === 'S' ? z - d + 1 : z;
+  return takesFrontageLots(plat, mx, mz, w, d, p.front) ? { x: mx, z: mz, rotation } : null;
+}
+
+export class GrowthSystem {
+  private readonly catalog: BuildingCatalogEntry[];
+  private readonly catalogIndex: Map<string, BuildingCatalogEntry>;
+  /** Each zone's first building that draws water at all: a farm pumps its own well. */
+  private readonly waterEntries: ReadonlyMap<ZoneType, BuildingCatalogEntry>;
+  private readonly rng: Rng;
+  private readonly canPlace: (g: GridState, x: number, z: number, w: number, d: number) => boolean;
+  /** The cross-section behind a road profile id, for the width of a road off the grid. */
+  private readonly profileOf: ProfileLookup;
+
+  /** Building id -> construction ticks remaining. */
+  private readonly constructing = new Map<number, number>();
+  /** Building id -> consecutive passes with a NoPower/NoWater/NoRoad blocker while Active. */
+  private readonly blockerStreak = new Map<number, number>();
+  /** Building id -> passes elapsed since becoming Abandoned. */
+  private readonly abandonedPasses = new Map<number, number>();
+  /**
+   * Lots (by tile index) and buildings (by negated id) held back for want of
+   * power or water. Each visit forgets the wait and the supply check records
+   * it again, so a lot the scan comes back to once a sweep stays counted for
+   * exactly as long as it keeps waiting.
+   */
+  private readonly waiting = {
+    power: new Map<number, Waiting>(),
+    water: new Map<number, Waiting>(),
+    sewer: new Map<number, Waiting>(),
+  };
+
+  /** Sandbox: every kind a lot can grow is unlocked; the milestone still rules the septic rung. */
+  unlockAll = false;
+
+  /** A dev tool's hold: while set, no construction countdown moves. Never saved; false unless a dev build sets it. */
+  holdConstruction = false;
+
+  private unlockLevel(milestoneLevel: number): number {
+    return this.unlockAll ? Number.POSITIVE_INFINITY : milestoneLevel;
+  }
+
+  constructor(
+    catalog: BuildingCatalogEntry[],
+    rng: Rng,
+    canPlace: (g: GridState, x: number, z: number, w: number, d: number) => boolean,
+    profileOf: ProfileLookup = () => null,
+  ) {
+    this.catalog = catalog;
+    this.profileOf = profileOf;
+    this.catalogIndex = new Map(catalog.map((entry) => [entry.id, entry]));
+    const waterEntries = new Map<ZoneType, BuildingCatalogEntry>();
+    for (const e of catalog) {
+      if (e.zone === undefined || e.level !== 1 || e.waterUse <= 0) continue;
+      if (!waterEntries.has(e.zone)) waterEntries.set(e.zone, e);
+    }
+    this.waterEntries = waterEntries;
+    this.rng = rng;
+    this.canPlace = canPlace;
+  }
+
+  tick(
+    g: GridState,
+    registry: BuildingRegistry,
+    demand: DemandLevels,
+    milestoneLevel: number,
+    tickNo: number,
+    supply: GrowthSupply = UNMETERED_SUPPLY,
+    room: JobsBySector = UNLIMITED_ROOM,
+    /** The roads as the kerb stall layout reads them, built on demand; null, no street paints a stall. */
+    kerb: (() => KerbSurroundings) | null = null,
+  ): BuildingDelta {
+    const added: BuildingInstance[] = [];
+    const removed: number[] = [];
+    const updated: BuildingInstance[] = [];
+
+    this.advanceConstruction(registry, updated);
+
+    if (tickNo % GROWTH_INTERVAL === 0) {
+      const pass = Math.floor(tickNo / GROWTH_INTERVAL);
+      const spare: Spare = {
+        power: supply.power.spare,
+        water: supply.water.spare,
+        sewer: supply.sewer.spare,
+      };
+      // The room, like the spare supply, is handed out once per pass.
+      const roomLeft: JobsBySector = { ...room };
+      this.forgetStaleWaits(pass);
+      this.processProblemsAndAbandonment(
+        g,
+        registry,
+        demand,
+        supply,
+        milestoneLevel,
+        removed,
+        updated,
+      );
+      this.flagUnservedUtilities(g, registry, updated);
+      const plats = platCutter(g, this.profileOf);
+      const parks = parkingCheckFor(g, kerb);
+      this.runLevelUps(
+        g,
+        registry,
+        demand,
+        milestoneLevel,
+        pass,
+        spare,
+        roomLeft,
+        plats,
+        parks,
+        added,
+        removed,
+      );
+      this.runSpawnScan(
+        g,
+        registry,
+        demand,
+        milestoneLevel,
+        pass,
+        spare,
+        roomLeft,
+        plats,
+        parks,
+        added,
+      );
+    }
+
+    return { added, removed, updated };
+  }
+
+  /**
+   * How many lots and buildings are waiting for power, for water and for a
+   * drain: held back within the last sweep, still standing as they were, and
+   * still wanting more than the grid has spare now.
+   */
+  waitingFor(g: GridState, registry: BuildingRegistry, supply: GrowthSupply): GrowthWaiting {
+    const stillThere = (key: number): boolean =>
+      key < 0
+        ? registry.get(-key)?.state === BuildingState.Active
+        : readTile(g.buildingId, key) === 0 &&
+          zoneSector(readTile(g.zone, key) as ZoneType) !== null;
+    const count = (held: ReadonlyMap<number, Waiting>, spare: number): number => {
+      // Candidate lots overlap — a 2×2 home could start on any of four tiles —
+      // so a lot counts only where no lot before it has claimed the ground.
+      const claimed = new Set<number>();
+      let n = 0;
+      for (const [key, wait] of [...held].sort((a, b) => a[0] - b[0])) {
+        if (wait.use <= spare || !stillThere(key)) continue;
+        if (wait.tiles.some((t) => claimed.has(t))) continue;
+        for (const t of wait.tiles) claimed.add(t);
+        n += 1;
+      }
+      return n;
+    };
+    return {
+      power: count(this.waiting.power, supply.power.spare),
+      water: count(this.waiting.water, supply.water.spare),
+      sewer: count(this.waiting.sewer, supply.sewer.spare),
+    };
+  }
+
+  /**
+   * Empty zoned tiles standing beside a road yet without power, or without
+   * water or a drain where their zone's buildings draw it. A served road hands
+   * its utility to every tile beside it, so a tile here is one its own road
+   * fails: a gravel road carries no cable, a street the mains never reach
+   * carries no water, and a street no drain reaches carries no sewer. A tile a
+   * house would stand on a well on wants no water and no sewer, and no tile
+   * wants a sewer while the town is still on septic tanks. Ground zoned too
+   * deep to touch the road is left out, since more supply would not grow it
+   * either.
+   */
+  zonedUnserved(g: GridState, milestoneLevel: number): ZonedUnserved {
+    const sewered = milestoneLevel >= SEWER_MILESTONE;
+    const cells = g.roads ? roadCellsOf(g) : null;
+    const isRoad = (x: number, z: number): boolean => {
+      if (!inBounds(x, z)) return false;
+      const idx = tileIndex(x, z);
+      if (isStreetTier(readTile(g.roadTier, idx))) return true;
+      return cells !== null && freeCellsOn(cells, idx).some((c) => isStreetTier(cells.tier[c]!));
+    };
+    const out: ZonedUnserved = { power: 0, water: 0, sewer: 0 };
+    for (let z = 0; z < g.size; z++) {
+      for (let x = 0; x < g.size; x++) {
+        const idx = tileIndex(x, z);
+        if (readTile(g.buildingId, idx) !== 0) continue;
+        const zone = readTile(g.zone, idx) as ZoneType;
+        if (zoneSector(zone) === null) continue;
+        const lacksPower = !readTile(g.power, idx);
+        const drinks = this.waterEntries.get(zone);
+        const dry = drinks !== undefined && !readTile(g.watered, idx);
+        const undrained = sewered && drinks !== undefined && !readTile(g.sewered, idx);
+        if (!lacksPower && !dry && !undrained) continue;
+        if (!isRoad(x - 1, z) && !isRoad(x + 1, z) && !isRoad(x, z - 1) && !isRoad(x, z + 1)) {
+          continue;
+        }
+        // A tile a house would stand on a well on wants neither water nor a sewer.
+        const onMains = drinks !== undefined && cityWaterUse(g, drinks, [{ x, z }]) > 0;
+        if (lacksPower) {
+          out.power += 1;
+          out.powerAt ??= { x, z };
+        }
+        if (dry && onMains) {
+          out.water += 1;
+          out.waterAt ??= { x, z };
+        }
+        if (undrained && onMains) {
+          out.sewer += 1;
+          out.sewerAt ??= { x, z };
+        }
+      }
+    }
+    return out;
+  }
+
+  /** Drops waits a sweep old, or from a later pass than this one (a load went back in time). */
+  private forgetStaleWaits(pass: number): void {
+    for (const held of [this.waiting.power, this.waiting.water, this.waiting.sewer]) {
+      for (const [key, wait] of held) {
+        if (pass - wait.pass >= SCAN_STRIDE || wait.pass > pass) held.delete(key);
+      }
+    }
+  }
+
+  private forgetWait(key: number): void {
+    this.waiting.power.delete(key);
+    this.waiting.water.delete(key);
+    this.waiting.sewer.delete(key);
+  }
+
+  /**
+   * Whether the pass has spare supply for `power`, `water` and `sewer` more
+   * (utility units), recording `key` — standing on `tiles` — as waiting for
+   * whichever it lacks.
+   */
+  private suppliedFor(
+    key: number,
+    tiles: readonly number[],
+    pass: number,
+    spare: Spare,
+    power: number,
+    water: number,
+    sewer: number,
+  ): boolean {
+    const lacksPower = power > spare.power;
+    const lacksWater = water > spare.water;
+    const lacksSewer = sewer > spare.sewer;
+    if (lacksPower) this.waiting.power.set(key, { pass, use: power, tiles });
+    if (lacksWater) this.waiting.water.set(key, { pass, use: water, tiles });
+    if (lacksSewer) this.waiting.sewer.set(key, { pass, use: sewer, tiles });
+    return !lacksPower && !lacksWater && !lacksSewer;
+  }
+
+  private advanceConstruction(registry: BuildingRegistry, updated: BuildingInstance[]): void {
+    if (this.holdConstruction) return;
+    for (const [id, remaining] of Array.from(this.constructing.entries())) {
+      const next = remaining - 1;
+      if (next > 0) {
+        this.constructing.set(id, next);
+        continue;
+      }
+      this.constructing.delete(id);
+      const inst = registry.get(id);
+      if (inst && inst.state === BuildingState.Constructing) {
+        inst.state = BuildingState.Active;
+        delete inst.vacancies;
+        updated.push(inst);
+      }
+    }
+  }
+
+  private processProblemsAndAbandonment(
+    g: GridState,
+    registry: BuildingRegistry,
+    demand: DemandLevels,
+    supply: GrowthSupply,
+    milestoneLevel: number,
+    removed: number[],
+    updated: BuildingInstance[],
+  ): void {
+    for (const inst of registry.all()) {
+      if (inst.state === BuildingState.Constructing) continue;
+      const entry = this.catalogIndex.get(inst.catalogId);
+      if (!entry || entry.zone === undefined) continue; // only grown (zoned) buildings age
+
+      const sector = zoneSector(entry.zone);
+      const demandForSector = sector ? demand[sector] : 0;
+      const footprint = footprintForRotation(entry, inst.rotation);
+      const newProblems =
+        computeProblems(
+          g,
+          inst.x,
+          inst.z,
+          entry,
+          demandForSector,
+          milestoneLevel,
+          standingTiles(g.size, inst.x, inst.z, footprint.w, footprint.d, inst.frame),
+        ) |
+        shortageOf(supply, inst.id) |
+        (inst.level === 2 && heldBySchooling(g, inst.x, inst.z, entry.zone)
+          ? Problem.NeedsSchool
+          : 0);
+      const hasBlocker = (newProblems & (Problem.NoPower | Problem.NoWater | Problem.NoRoad)) !== 0;
+
+      if (inst.state === BuildingState.Active) {
+        if (hasBlocker) {
+          const streak = (this.blockerStreak.get(inst.id) ?? 0) + 1;
+          if (streak >= ABANDON_BLOCKER_STREAK) {
+            this.blockerStreak.delete(inst.id);
+            inst.problems = newProblems;
+            inst.state = BuildingState.Abandoned;
+            this.abandonedPasses.set(inst.id, 0);
+            updated.push(inst);
+            continue;
+          }
+          this.blockerStreak.set(inst.id, streak);
+        } else if (this.blockerStreak.has(inst.id)) {
+          this.blockerStreak.delete(inst.id);
+        }
+        if (inst.problems !== newProblems) {
+          inst.problems = newProblems;
+          updated.push(inst);
+        }
+      } else if (inst.state === BuildingState.Abandoned) {
+        if (!hasBlocker) {
+          inst.state = BuildingState.Active;
+          inst.problems = newProblems;
+          this.abandonedPasses.delete(inst.id);
+          updated.push(inst);
+          continue;
+        }
+        const passes = (this.abandonedPasses.get(inst.id) ?? 0) + 1;
+        if (passes >= DESPAWN_ABANDONED_PASSES) {
+          this.abandonedPasses.delete(inst.id);
+          registry.remove(g, inst.id);
+          removed.push(inst.id);
+          continue;
+        }
+        this.abandonedPasses.set(inst.id, passes);
+        if (inst.problems !== newProblems) {
+          inst.problems = newProblems;
+          updated.push(inst);
+        }
+      }
+    }
+  }
+
+  /**
+   * A generator counts towards the city's supply whether anything reaches it
+   * or not, so one that cannot deliver has to say so: otherwise the totals
+   * read healthy, no tile is served, and the city quietly stops growing with
+   * nothing on screen to contradict the player. It is the delivery that is in
+   * question, so a turbine a line reaches is connected and says nothing.
+   *
+   * Only the flag: a plopped generator never abandons, whatever the streak.
+   */
+  private flagUnservedUtilities(
+    g: GridState,
+    registry: BuildingRegistry,
+    updated: BuildingInstance[],
+  ): void {
+    for (const inst of registry.all()) {
+      if (inst.state !== BuildingState.Active) continue;
+      const entry = this.catalogIndex.get(inst.catalogId);
+      if (!entry?.utility) continue;
+
+      const { w, d } = footprintForRotation(entry, inst.rotation);
+      const delivers = utilityCanDeliver(g, entry.utility, lotTiles(inst.x, inst.z, w, d));
+      const problems = delivers ? inst.problems & ~Problem.NoRoad : inst.problems | Problem.NoRoad;
+      if (problems === inst.problems) continue;
+      inst.problems = problems;
+      updated.push(inst);
+    }
+  }
+
+  private runLevelUps(
+    g: GridState,
+    registry: BuildingRegistry,
+    demand: DemandLevels,
+    milestoneLevel: number,
+    pass: number,
+    spare: Spare,
+    room: JobsBySector,
+    plats: PlatPass,
+    parks: ParkingCheck,
+    added: BuildingInstance[],
+    removed: number[],
+  ): void {
+    for (const inst of registry.all()) {
+      if (inst.state !== BuildingState.Active) continue;
+      const entry = this.catalogIndex.get(inst.catalogId);
+      if (!entry || entry.zone === undefined) continue;
+      // Level 3 has no level above it but can still be torn down for a plex.
+      const leveled =
+        inst.level < 3 &&
+        this.tryLevelUp(
+          g,
+          registry,
+          demand,
+          milestoneLevel,
+          pass,
+          spare,
+          room,
+          plats,
+          parks,
+          inst,
+          entry,
+          added,
+          removed,
+        );
+      if (!leveled)
+        this.tryConvert(g, registry, milestoneLevel, spare, inst, entry, added, removed);
+    }
+  }
+
+  /**
+   * The power, water and sewer, in utility units, that `to` standing on its
+   * tiles draws over `from` standing on its.
+   */
+  private utilityDelta(
+    g: GridState,
+    milestoneLevel: number,
+    from: { entry: BuildingCatalogEntry; tiles: readonly TilePoint[] },
+    to: { entry: BuildingCatalogEntry; tiles: readonly TilePoint[] },
+  ): { power: number; water: number; sewer: number } {
+    return {
+      power: utilityUnits(to.entry.powerUse) - utilityUnits(from.entry.powerUse),
+      water:
+        utilityUnits(cityWaterUse(g, to.entry, to.tiles)) -
+        utilityUnits(cityWaterUse(g, from.entry, from.tiles)),
+      sewer:
+        utilityUnits(sewageOf(g, to.entry, to.tiles, milestoneLevel)) -
+        utilityUnits(sewageOf(g, from.entry, from.tiles, milestoneLevel)),
+    };
+  }
+
+  /**
+   * A detached house on land worth an estate lot may be torn down for a
+   * duplex or fourplex of the same zone and lot, on the same footprint, drawn
+   * by share. It is rebuilt under construction and only where the grid can
+   * carry the homes it adds.
+   */
+  private tryConvert(
+    g: GridState,
+    registry: BuildingRegistry,
+    milestoneLevel: number,
+    spare: Spare,
+    inst: BuildingInstance,
+    entry: BuildingCatalogEntry,
+    added: BuildingInstance[],
+    removed: number[],
+  ): boolean {
+    if (entry.kind !== 'detached' || (entry.lot !== 'half' && entry.lot !== 'normal')) return false;
+    if (fieldAt(g, FieldId.LandValue, tileIndex(inst.x, inst.z)) < LOT_STANDING_FLOOR.estate) {
+      return false;
+    }
+    if (this.rng.next() >= CONVERSION_CHANCE_PER_PASS) return false;
+    const candidates = spawnCandidates(
+      this.catalog,
+      entry.zone!,
+      milestoneLevel,
+      (e) =>
+        (e.kind === 'duplex' || e.kind === 'fourplex') &&
+        e.lot === entry.lot &&
+        e.footprint.w === entry.footprint.w &&
+        e.footprint.d === entry.footprint.d,
+    );
+    if (candidates.length === 0) return false;
+    const plex = drawKind(candidates, candidates.length > 1 ? this.rng.next() : 0);
+
+    const { x, z, rotation } = inst;
+    const footprint = footprintForRotation(entry, rotation);
+    const tiles = standingTiles(g.size, x, z, footprint.w, footprint.d, inst.frame);
+    const { power, water, sewer } = this.utilityDelta(
+      g,
+      milestoneLevel,
+      { entry, tiles },
+      { entry: plex, tiles },
+    );
+    // A teardown the grid cannot carry does not happen; unlike a lot, it is
+    // not waiting to grow.
+    if (power > spare.power || water > spare.water || sewer > spare.sewer) return false;
+
+    registry.remove(g, inst.id);
+    const placed = registry.place(g, plex, x, z, rotation, BuildingState.Constructing, inst.frame);
+    if (!placed) {
+      // Unreachable: the plex stands on the footprint just cleared. Restore
+      // rather than silently drop the tile.
+      restoreStamp(g, inst, footprint.w, footprint.d);
+      return false;
+    }
+    spare.power -= power;
+    spare.water -= water;
+    spare.sewer -= sewer;
+
+    this.constructing.set(placed.id, CONSTRUCTION_TICKS);
+    this.blockerStreak.delete(inst.id);
+    removed.push(inst.id);
+    added.push(placed);
+    return true;
+  }
+
+  private tryLevelUp(
+    g: GridState,
+    registry: BuildingRegistry,
+    demand: DemandLevels,
+    milestoneLevel: number,
+    pass: number,
+    spare: Spare,
+    room: JobsBySector,
+    plats: PlatPass,
+    parks: ParkingCheck,
+    inst: BuildingInstance,
+    entry: BuildingCatalogEntry,
+    added: BuildingInstance[],
+    removed: number[],
+  ): boolean {
+    const waitKey = -inst.id;
+    this.forgetWait(waitKey);
+    const zone = entry.zone;
+    if (zone === undefined) return false;
+    const sector = zoneSector(zone);
+    if (!sector) return false;
+
+    const targetLevel = inst.level + 1;
+    const farm = farmKindOf(entry);
+    // Industry grows on its order book: a works or a farm levels up while the
+    // town wants more basic work, and land value, which pushes real industry
+    // out of town, plays no part. Homes and shops still need the land value.
+    if (sector === 'ind') {
+      if (demand.ind <= 0) return false;
+    } else if (!meetsLevelUpRequirement(g, inst.x, inst.z, zone, targetLevel)) {
+      return false;
+    }
+
+    // A building keeps its kind, and its lot, for life: the next level of the
+    // same kind on the same parcel.
+    const nextKind = this.catalog.find(
+      (e) =>
+        e.zone === zone &&
+        e.level === targetLevel &&
+        e.kind === entry.kind &&
+        e.lot === entry.lot &&
+        e.bodyFootprint === undefined &&
+        (e.lot === undefined ||
+          (e.footprint.w === entry.footprint.w && e.footprint.d === entry.footprint.d)),
+    );
+    if (!nextKind || nextKind.unlockMilestone > this.unlockLevel(milestoneLevel)) return false;
+    // A building on a curved parcel improves in place only: a next level that
+    // grows its footprint would claim ground its frame has never been checked
+    // over, so it waits.
+    if (
+      inst.frame !== undefined &&
+      (nextKind.footprint.w !== entry.footprint.w || nextKind.footprint.d !== entry.footprint.d)
+    ) {
+      return false;
+    }
+    // A business grows only where the town has room for the jobs it adds.
+    const jobsAdded = (nextKind.jobs ?? 0) - (entry.jobs ?? 0);
+    if (sector !== 'res' && farm === null && jobsAdded > room[sector]) return false;
+
+    const { x, z, rotation } = inst;
+    const oldFootprint = footprintForRotation(entry, rotation);
+
+    let chosen: { next: BuildingCatalogEntry; nx: number; nz: number } | null = null;
+    if (inst.frame !== undefined) {
+      // A house on a curved parcel keeps its parcel: the next level of a
+      // lotted kind has the same footprint, stands in the same frame, and its
+      // drive still meets its own kerb.
+      chosen = { next: nextKind, nx: x, nz: z };
+    } else {
+      // Temporarily clear this building's own stamp so the (possibly larger)
+      // new footprint can be checked on a clean grid, then commit or roll back.
+      clearStamp(g, x, z, oldFootprint.w, oldFootprint.d, inst.id);
+      // Of the next level's footprints, smallest first, the first that stands
+      // here and meets its parking code. A building never gives up ground it
+      // stands on, so only those that hold its own lot are tried.
+      for (const next of footprintsOf(this.catalog, nextKind)) {
+        if (next.footprint.w < entry.footprint.w || next.footprint.d < entry.footprint.d) continue;
+        // A dense kind's larger lot is the next level on the lot its car park
+        // stood on, never a bigger lot for a building that stood on its own.
+        if (
+          next.bodyFootprint !== undefined &&
+          isDenseLotKind(next.kind) &&
+          (entry.bodyFootprint === undefined ||
+            next.footprint.w !== entry.footprint.w ||
+            next.footprint.d !== entry.footprint.d)
+        ) {
+          continue;
+        }
+        const at = this.levelUpSite(g, plats, parks, inst, entry, next, zone, farm);
+        if (at) {
+          chosen = { next, ...at };
+          break;
+        }
+      }
+      if (chosen === null) {
+        writeStamp(g, x, z, oldFootprint.w, oldFootprint.d, inst.id);
+        return false;
+      }
+    }
+    const { next: nextEntry, nx, nz } = chosen;
+    const newFootprint = footprintForRotation(nextEntry, rotation);
+    // A bigger building draws more, and nobody builds it on a grid that
+    // cannot carry the difference.
+    const { power, water, sewer } = this.utilityDelta(
+      g,
+      milestoneLevel,
+      { entry, tiles: standingTiles(g.size, x, z, oldFootprint.w, oldFootprint.d, inst.frame) },
+      {
+        entry: nextEntry,
+        tiles: standingTiles(g.size, nx, nz, newFootprint.w, newFootprint.d, inst.frame),
+      },
+    );
+    if (
+      !this.suppliedFor(waitKey, [], pass, spare, power, water, sewer) ||
+      (farm !== null && this.rng.next() >= demand.ind)
+    ) {
+      if (inst.frame === undefined) writeStamp(g, x, z, oldFootprint.w, oldFootprint.d, inst.id);
+      return false;
+    }
+
+    registry.remove(g, inst.id);
+    const placed = registry.place(
+      g,
+      nextEntry,
+      nx,
+      nz,
+      rotation,
+      BuildingState.Constructing,
+      inst.frame,
+    );
+    if (!placed) {
+      // Unreachable: footprintFree + canPlace were just confirmed true with
+      // no intervening mutation. Restore rather than silently drop the tile.
+      restoreStamp(g, inst, oldFootprint.w, oldFootprint.d);
+      return false;
+    }
+    spare.power -= power;
+    spare.water -= water;
+    spare.sewer -= sewer;
+    if (sector !== 'res') room[sector] -= jobsAdded;
+
+    this.constructing.set(placed.id, CONSTRUCTION_TICKS);
+    this.blockerStreak.delete(inst.id);
+    removed.push(inst.id);
+    added.push(placed);
+    return true;
+  }
+
+  /**
+   * Where `inst` stands once it is rebuilt as `next`, its own stamp cleared:
+   * the min corner of the new footprint, or null where it does not fit. It
+   * fits on land zoned for it, on the frontage of the parcels it covers in a
+   * platted zone, and on a lot that meets its parking code.
+   */
+  private levelUpSite(
+    g: GridState,
+    plats: PlatPass,
+    parks: ParkingCheck,
+    inst: BuildingInstance,
+    entry: BuildingCatalogEntry,
+    next: BuildingCatalogEntry,
+    zone: ZoneType,
+    farm: FarmKind | null,
+  ): { nx: number; nz: number } | null {
+    const { x, z, rotation } = inst;
+    const oldFootprint = footprintForRotation(entry, rotation);
+    const newFootprint = footprintForRotation(next, rotation);
+
+    // A building on a platted zone that grows into a new footprint still
+    // stands on the frontage of the parcels it now covers.
+    const regrown = newFootprint.w !== oldFootprint.w || newFootprint.d !== oldFootprint.d;
+    const platted = regrown && entry.lot === undefined && PLATTED_ZONES.includes(zone);
+    const plat = platted ? plats.platFor(zone) : null;
+
+    // The street edge stays where it is: on a south or east front the min
+    // corner steps back as the building grows deeper.
+    let front: Front | undefined;
+    let nx = x;
+    let nz = z;
+    if (plat !== null) {
+      const alongX = (at: number): boolean =>
+        Array.from({ length: oldFootprint.w }, (_, i) => x + i).some((tx) =>
+          plats.streetAt(tx, at),
+        );
+      const alongZ = (at: number): boolean =>
+        Array.from({ length: oldFootprint.d }, (_, i) => z + i).some((tz) =>
+          plats.streetAt(at, tz),
+        );
+      if (rotation % 2 === 0) {
+        front = alongX(z - 1) ? 'N' : alongX(z + oldFootprint.d) ? 'S' : undefined;
+      } else {
+        front = alongZ(x - 1) ? 'W' : alongZ(x + oldFootprint.w) ? 'E' : undefined;
+      }
+      if (front === 'S') nz = z + oldFootprint.d - newFootprint.d;
+      if (front === 'E') nx = x + oldFootprint.w - newFootprint.w;
+    }
+
+    // A building on a street edge may grow into its own yard and touch no
+    // parcel. With no street on its edges it must still cover parcels that
+    // front the sides its rotation faces: upright north or south, turned east
+    // or west.
+    const sides: readonly Front[] =
+      front !== undefined ? [front] : rotation % 2 === 0 ? ['N', 'S'] : ['W', 'E'];
+
+    const fitsAt = (ax: number, az: number): boolean =>
+      (plat === null ||
+        !platReaches(plat, x, z) ||
+        sides.some((f) =>
+          takesFrontageLots(plat, ax, az, newFootprint.w, newFootprint.d, f, front !== undefined),
+        )) &&
+      this.canPlace(g, ax, az, newFootprint.w, newFootprint.d) &&
+      footprintFree(g, ax, az, newFootprint.w, newFootprint.d) &&
+      (farm === null
+        ? isZonedLot(g, zone, ax, az, newFootprint.w, newFootprint.d)
+        : isFarmLot(g, ax, az, newFootprint.w, newFootprint.d) &&
+          lotGrade(g, ax, az, newFootprint.w, newFootprint.d) >= FARM_GRADE[farm]) &&
+      parks(next, ax, az, rotation);
+    // Growing along the street may take the free lots on either side: try
+    // each shift from the min corner outward, nearest to the old spot first.
+    const alongGrowth =
+      front === 'N' || front === 'S'
+        ? newFootprint.w - oldFootprint.w
+        : front === 'W' || front === 'E'
+          ? newFootprint.d - oldFootprint.d
+          : 0;
+    const anchors = Array.from({ length: Math.max(alongGrowth, 0) + 1 }, (_, k) =>
+      front === 'N' || front === 'S' ? { ax: nx - k, az: nz } : { ax: nx, az: nz - k },
+    );
+    const anchor = anchors.find((a) => fitsAt(a.ax, a.az));
+    return anchor === undefined ? null : { nx: anchor.ax, nz: anchor.az };
+  }
+
+  private runSpawnScan(
+    g: GridState,
+    registry: BuildingRegistry,
+    demand: DemandLevels,
+    milestoneLevel: number,
+    pass: number,
+    spare: Spare,
+    room: JobsBySector,
+    plats: PlatPass,
+    parks: ParkingCheck,
+    added: BuildingInstance[],
+  ): void {
+    const size = g.size;
+    const totalTiles = size * size;
+    const passIndex = pass % SCAN_STRIDE;
+
+    for (let flat = passIndex; flat < totalTiles; flat += SCAN_STRIDE) {
+      this.forgetWait(flat);
+      if (readTile(g.buildingId, flat) !== 0) continue;
+      const zone = readTile(g.zone, flat) as ZoneType;
+      const sector = zoneSector(zone);
+      if (!sector) continue;
+
+      const x = flat % size;
+      const z = Math.floor(flat / size);
+      if (zone === ZoneType.Agriculture) {
+        this.trySpawnFarm(g, registry, demand, milestoneLevel, pass, spare, room, added, x, z);
+        continue;
+      }
+      // A parcel cut along a curved kerb fronts its road by construction and
+      // grows from its first tile alone, a building turned to its street; its
+      // other tiles are that parcel's ground.
+      const plat = plats.platFor(zone);
+      const framedIndex = (plat.parcelAt[flat] ?? -1) - plat.parcels.length;
+      if (framedIndex >= 0) {
+        const first = plat.framed[framedIndex]!.tiles[0]!;
+        if (first.x === x && first.z === z) {
+          this.trySpawnFramed(
+            g,
+            registry,
+            demand,
+            milestoneLevel,
+            pass,
+            spare,
+            room,
+            plats,
+            added,
+            zone,
+            framedIndex,
+          );
+        }
+        continue;
+      }
+      if (!hasNearbyRoad(g, x, z, ROAD_CHECK_RADIUS)) continue;
+
+      // The lot picks its building: among the zone's kinds that fit here, on
+      // land zoned for them and within the room the economy has for their
+      // jobs, one is drawn by how common it is in the real stock.
+      // A building with no lot of its own, in a platted zone the plat reaches,
+      // stands on the frontage of the parcels it covers, and is considered
+      // only at a street-row tile of one, wherever its min corner then falls.
+      // A kind that parks to code stands on the smallest of its footprints
+      // whose lot meets its code there, the kerb's stalls along it counted.
+      const frontageZone = PLATTED_ZONES.includes(zone) && platReaches(plat, x, z);
+      const placements = new Map<
+        BuildingCatalogEntry,
+        { entry: BuildingCatalogEntry } & Placement
+      >();
+      const fitting = spawnCandidates(
+        this.catalog,
+        zone,
+        this.unlockLevel(milestoneLevel),
+        (kind) => {
+          for (const e of footprintsOf(this.catalog, kind)) {
+            const at =
+              frontageZone && e.lot === undefined
+                ? frontagePlacement(plat, e, x, z)
+                : ({ x, z, rotation: 0 } as const);
+            if (at === null) continue;
+            const { w, d } = footprintForRotation(e, at.rotation);
+            if (
+              !isZonedLot(g, zone, at.x, at.z, w, d) ||
+              !this.canPlace(g, at.x, at.z, w, d) ||
+              coversFramedParcel(plat, at.x, at.z, w, d)
+            ) {
+              continue;
+            }
+            if (!parks(e, at.x, at.z, at.rotation)) continue;
+            placements.set(kind, { entry: e, ...at });
+            return true;
+          }
+          return false;
+        },
+      );
+      // A house stands on a parcel of the plat cut from its street, or, where
+      // no street's plat reaches the tile, on the lot the land warrants.
+      // A kind takes whole parcels of its lot, never half of one.
+      const platted = !platReaches(plat, x, z)
+        ? platCandidates(fitting, zone, fieldAt(g, FieldId.LandValue, flat))
+        : fitting.filter(
+            (e) =>
+              e.lot === undefined ||
+              takesWholeParcels(plat, x, z, e.footprint.w, e.footprint.d, e.lot),
+          );
+      const candidates = withinRoom(platted, sector, room);
+      if (candidates.length === 0) continue;
+      const kind = drawKind(candidates, candidates.length > 1 ? this.rng.next() : 0);
+
+      const { entry, x: ax, z: az, rotation } = placements.get(kind)!;
+      const { w, d } = footprintForRotation(entry, rotation);
+      // Service is judged over the whole lot, so it cannot depend on which
+      // side of the building the street happens to sit (see footprintServed).
+      // Once the town is off septic tanks, a lot a drain does not reach grows
+      // nothing: its sewage would have nowhere to go.
+      if (
+        !this.servedOn(g, entry, standingTiles(g.size, ax, az, w, d, undefined), milestoneLevel)
+      ) {
+        continue;
+      }
+
+      const demandForSector = demand[sector];
+      if (demandForSector <= 0) continue;
+      const desirability = desirabilityFor(g, ax, az, sector);
+      this.spawnIfSupplied(
+        g,
+        registry,
+        entry,
+        ax,
+        az,
+        rotation,
+        demandForSector * desirability,
+        milestoneLevel,
+        pass,
+        spare,
+        room,
+        added,
+      );
+    }
+  }
+
+  /**
+   * A building on a parcel cut along a curved kerb. A kind one parcel wide
+   * stands in the parcel; a wider one takes the run of parcels its unturned
+   * frontage meets starting here, and each run is walked from its first
+   * parcel only, so it grows once. A lotted kind takes parcels of its own lot
+   * at their depth; a kind with no lot takes any, and where it is deeper than
+   * them runs into the zoned, free, unparcelled ground behind. Every kind
+   * claims the tiles its rectangle in the run's frame holds, as the registry
+   * will stamp them, and one is drawn by share as on a grid lot. A kind that
+   * parks to code holds its code on that lot, the kerb's lane along the
+   * frontage credited. The parcels were cut on zoned, free ground and front
+   * their own kerb, so only the ground, the services and the economy are
+   * asked.
+   */
+  private trySpawnFramed(
+    g: GridState,
+    registry: BuildingRegistry,
+    demand: DemandLevels,
+    milestoneLevel: number,
+    pass: number,
+    spare: Spare,
+    room: JobsBySector,
+    plats: PlatPass,
+    added: BuildingInstance[],
+    zone: ZoneType,
+    index: number,
+  ): void {
+    const plat = plats.platFor(zone);
+    const parcel = plat.framed[index]!;
+    const sector = zoneSector(zone);
+    if (!sector) return;
+    if (!canPlaceTiles(g, parcel.tiles)) return;
+    const extent = g.size * TILE_METERS;
+    const onMap = (p: { x: number; z: number }): boolean =>
+      p.x >= 0 && p.z >= 0 && p.x <= extent && p.z <= extent;
+    const credits = new Map<number, number>();
+    const kerbCredit = (frame: ParcelFrame, wM: number): number => {
+      let credit = credits.get(wM);
+      if (credit === undefined) {
+        credit = g.roads ? kerbCreditAlongFrame(g.roads, frame, wM, this.profileOf) : 0;
+        credits.set(wM, credit);
+      }
+      return credit;
+    };
+    const siteFor = (e: BuildingCatalogEntry): FramedSite | null => {
+      const wM = e.footprint.w * TILE_METERS;
+      const dM = e.footprint.d * TILE_METERS;
+      if (
+        e.lot !== undefined &&
+        (e.lot !== parcel.lot || e.footprint.d !== LOT_EXTENT[e.lot].depth)
+      ) {
+        return null;
+      }
+      const run = plats.runsFor(zone, wM).find((r) => r.parcels[0] === index);
+      if (run === undefined) return null;
+      if (e.lot !== undefined && !run.parcels.every((n) => plat.framed[n]!.lot === e.lot)) {
+        return null;
+      }
+      if (!frameCorners(run.frame, wM, dM).every(onMap)) return null;
+      const inRun = new Set(run.tiles.map((t) => tileIndex(t.x, t.z)));
+      const tiles = claimedTiles(run.frame, wM, dM, g.size);
+      if (tiles.length === 0 || !canPlaceTiles(g, tiles)) return null;
+      for (const t of tiles) {
+        const i = tileIndex(t.x, t.z);
+        if (inRun.has(i)) continue;
+        if (readTile(g.zone, i) !== zone || plat.parcelAt[i] !== -1) return null;
+      }
+      if (
+        drawsLotParking(e) &&
+        !(lotLayoutFor(e, 0, true, kerbCredit(run.frame, wM))?.fits ?? true)
+      ) {
+        return null;
+      }
+      return { entry: e, frame: run.frame, tiles };
+    };
+    const sites = new Map<BuildingCatalogEntry, FramedSite>();
+    const fitting = spawnCandidates(
+      this.catalog,
+      zone,
+      this.unlockLevel(milestoneLevel),
+      (kind) => {
+        for (const e of footprintsOf(this.catalog, kind)) {
+          const site = siteFor(e);
+          if (site === null) continue;
+          sites.set(kind, site);
+          return true;
+        }
+        return false;
+      },
+    );
+    const candidates = withinRoom(fitting, sector, room);
+    if (candidates.length === 0) return;
+    const kind = drawKind(candidates, candidates.length > 1 ? this.rng.next() : 0);
+    const { entry, frame, tiles } = sites.get(kind)!;
+    if (!this.servedOn(g, entry, tiles, milestoneLevel)) return;
+    const demandForSector = demand[sector];
+    if (demandForSector <= 0) return;
+    const { x, z } = tiles[0]!;
+    this.spawnIfSupplied(
+      g,
+      registry,
+      entry,
+      x,
+      z,
+      0,
+      demandForSector * desirabilityFor(g, x, z, sector),
+      milestoneLevel,
+      pass,
+      spare,
+      room,
+      added,
+      frame,
+      tiles,
+    );
+  }
+
+  /**
+   * Whether the grid serves a building of `entry` standing on `tiles`: power
+   * on one of them, water where it draws any, and once the town is off septic
+   * tanks a drain where it sends any, since its sewage would otherwise have
+   * nowhere to go.
+   */
+  private servedOn(
+    g: GridState,
+    entry: BuildingCatalogEntry,
+    tiles: readonly TilePoint[],
+    milestoneLevel: number,
+  ): boolean {
+    return (
+      footprintServed(g.power, tiles) &&
+      (cityWaterUse(g, entry, tiles) <= 0 || footprintServed(g.watered, tiles)) &&
+      (sewageOf(g, entry, tiles, milestoneLevel) <= 0 || footprintServed(g.sewered, tiles))
+    );
+  }
+
+  /**
+   * A farm on the lot at (x, z): every tile of it Agriculture land a farm can
+   * work, a dirt road within reach and power on it — never city water, which
+   * a farm does without. Its soil decides the kind and how likely it is.
+   */
+  private trySpawnFarm(
+    g: GridState,
+    registry: BuildingRegistry,
+    demand: DemandLevels,
+    milestoneLevel: number,
+    pass: number,
+    spare: Spare,
+    room: JobsBySector,
+    added: BuildingInstance[],
+    x: number,
+    z: number,
+  ): void {
+    if (demand.ind <= 0) return;
+    const first = this.catalog.find(
+      (e) =>
+        e.zone === ZoneType.Agriculture &&
+        e.level === 1 &&
+        e.unlockMilestone <= this.unlockLevel(milestoneLevel),
+    );
+    if (!first) return;
+    const { w, d } = footprintForRotation(first, 0);
+    if (!isFarmLot(g, x, z, w, d) || !this.canPlace(g, x, z, w, d)) return;
+    if (!dirtRoadWithinReach(g, x, z, w, d)) return;
+    if (!footprintServed(g.power, standingTiles(g.size, x, z, w, d, undefined))) return;
+
+    const grade = lotGrade(g, x, z, w, d);
+    const kind = farmKindFor(grade);
+    const entry = this.catalog.find(
+      (e) =>
+        e.zone === ZoneType.Agriculture &&
+        e.level === 1 &&
+        e.kind === kind &&
+        e.unlockMilestone <= this.unlockLevel(milestoneLevel),
+    );
+    if (!entry) return;
+    this.spawnIfSupplied(
+      g,
+      registry,
+      entry,
+      x,
+      z,
+      0,
+      demand.ind * FARM_DESIRABILITY[grade],
+      milestoneLevel,
+      pass,
+      spare,
+      room,
+      added,
+    );
+  }
+
+  /** Starts `entry` at (x, z) with `probability`, if the grid can carry what it draws. */
+  private spawnIfSupplied(
+    g: GridState,
+    registry: BuildingRegistry,
+    entry: BuildingCatalogEntry,
+    x: number,
+    z: number,
+    rotation: 0 | 1,
+    probability: number,
+    milestoneLevel: number,
+    pass: number,
+    spare: Spare,
+    room: JobsBySector,
+    added: BuildingInstance[],
+    frame?: ParcelFrame,
+    claimed?: readonly TilePoint[],
+  ): void {
+    if (probability <= 0) return;
+    const { w, d } = footprintForRotation(entry, rotation);
+    // Nobody moves into a home the grid cannot light, water or drain.
+    const tiles = claimed ?? standingTiles(g.size, x, z, w, d, undefined);
+    const power = utilityUnits(entry.powerUse);
+    const water = utilityUnits(cityWaterUse(g, entry, tiles));
+    const sewer = utilityUnits(sewageOf(g, entry, tiles, milestoneLevel));
+    const lot = claimed ? claimed.map((t) => tileIndex(t.x, t.z)) : lotTiles(x, z, w, d);
+    if (!this.suppliedFor(tileIndex(x, z), lot, pass, spare, power, water, sewer)) return;
+    if (this.rng.next() >= probability) return;
+
+    const placed = registry.place(g, entry, x, z, rotation, BuildingState.Constructing, frame);
+    if (!placed) return;
+    spare.power -= power;
+    spare.water -= water;
+    spare.sewer -= sewer;
+    const sector = entry.zone === undefined ? null : zoneSector(entry.zone);
+    if (sector && sector !== 'res') room[sector] -= entry.jobs ?? 0;
+    this.constructing.set(placed.id, CONSTRUCTION_TICKS);
+    added.push(placed);
+  }
+}

@@ -1,0 +1,1152 @@
+/**
+ * Building instancing: one InstancedMesh per catalog entry ("bucket"),
+ * capacity-doubling storage, and swap-with-last removal so ids always
+ * resolve to a live, contiguous instance slot.
+ */
+import * as THREE from 'three';
+import { MeshStandardNodeMaterial } from 'three/webgpu';
+import type { Node } from 'three/webgpu';
+import {
+  abs,
+  attribute,
+  bool,
+  distance,
+  float,
+  floor,
+  fract,
+  hash,
+  hue,
+  mix,
+  normalGeometry,
+  normalLocal,
+  saturation,
+  select,
+  sin,
+  uniform,
+  uv,
+  vec3,
+} from 'three/tsl';
+import {
+  BuildingCatalogEntry,
+  BuildingDelta,
+  BuildingInstance,
+  BuildingState,
+} from '../shared/types';
+import { NIGHT_WINDOW_LIT_MAX, NIGHT_WINDOW_LIT_MIN, TILE_METERS } from '../shared/constants';
+import { footprintForRotation } from '../shared/footprint';
+import { encodeId, buildIdColorArray } from './picking';
+import {
+  bodyMetresFor,
+  computeSetbacks,
+  frontageSetbackFor,
+  type FrontageSetback,
+  tierHeightOf,
+  type SetbackBox,
+} from './massing';
+import { NO_STREETS, type StreetLookup } from './frontage';
+import { framedBodyPlacement } from './houselot';
+import type { KerbCreditOf } from './lotplan';
+import type { KerbSurroundings } from '../shared/kerblayout';
+import { maxHeightOverRect, maxHeightUnderBody, minHeightOverRect } from './footprint';
+import { isFarmEntry } from './archetypes';
+import { nightTintNode } from './nightlook';
+import { BARN_EAVE_SHARE, planFarm, type FarmRect } from './farmlot';
+import {
+  ACCENT_BLUE,
+  ACCENT_RED,
+  FACADE_HASH_SLOT_MULTIPLIER,
+  HASH_SLOT_HUE_JITTER,
+  HASH_SLOT_INDUSTRIAL_ACCENT,
+  HASH_SLOT_INDUSTRIAL_WALL,
+  HASH_SLOT_KIND_WALL,
+  HASH_SLOT_ROOF_ROTATION,
+  HUE_JITTER_FRACTION,
+  INDUSTRIAL_ACCENT_HEIGHT_FRACTION,
+  INDUSTRIAL_ROOF_COLOR,
+  INDUSTRIAL_WALL_PALETTE,
+  FRAME_DARKEN,
+  housePaneMargins,
+  storefrontCut,
+  MAX_WALL_SATURATION,
+  MIN_ROOF_WALL_DISTANCE,
+  MULLION_MARGIN_PUNCHED,
+  ROOF_PALETTE,
+  RGB,
+  bodyPaletteFor,
+  deriveFacadeParams,
+  glassTintFor,
+  groundFloorBand,
+  isRowHouseArchetype,
+  paletteUnits,
+  parapetBand,
+  residentialBodyShares,
+  rgbToHsl,
+  roofPaletteFor,
+  shareThresholds,
+  WINDOW_SEED_SLOTS,
+  windowGrid,
+  windowlessBody,
+  type MaterialShare,
+} from './facade';
+import { PLINTH_TOP } from './plotground';
+
+const INITIAL_CAPACITY = 64;
+/** Constructing buildings render at this fraction of their final height. */
+const CONSTRUCTING_HEIGHT_SCALE = 0.25;
+/**
+ * Catalog ids whose visual identity comes from a utilitykits.ts detail kit
+ * render their footprint as a thin ground PAD (a paved lot the kit sits on),
+ * not the full facade box — a fixed low height regardless of the catalog
+ * entry's tall model height, so a 24m water tower gets a subtle concrete pad
+ * (matching the model) rather than a big raised dark block. Still a real,
+ * pickable/outlinable slab through the shared instancer path.
+ */
+const PLINTH_PAD_HEIGHT = PLINTH_TOP;
+/** The one box a barn or a plinth is drawn as; its size is written when the slot is, not read from here. */
+const ONE_BOX: SetbackBox = { w: 1, d: 1, h: 1, yOffset: 0 };
+
+const TINT_ACTIVE: readonly [number, number, number] = [1, 1, 1];
+const TINT_CONSTRUCTING: readonly [number, number, number] = [0.55, 0.55, 0.55];
+const TINT_ABANDONED: readonly [number, number, number] = [0.25, 0.25, 0.25];
+
+/** Problems are surfaced by the UI (icons); the mesh tint only reflects lifecycle state. */
+function tintFor(state: BuildingState): readonly [number, number, number] {
+  if (state === BuildingState.Constructing) return TINT_CONSTRUCTING;
+  if (state === BuildingState.Abandoned) return TINT_ABANDONED;
+  return TINT_ACTIVE;
+}
+
+// ---------------------------------------------------------------------------
+// Night cycle: per-instance emissive windows (pure parts).
+// Window grid (rows/cols) is derived from footprint x height; a
+// hash(buildingId, windowIndex) decides each window's lit threshold so
+// ~NIGHT_WINDOW_LIT_MIN..MAX of a building's windows glow, warm with an
+// occasional cool one, switching on progressively as nightFactor sweeps
+// through dusk. Abandoned (and Constructing) buildings stay dark — lit
+// windows are an Active-state signal.
+// ---------------------------------------------------------------------------
+
+/** Reserved seed slot (never a real grid cell — facade.ts clamps every grid below this) used to derive a building's own lit fraction. */
+const WINDOW_FRACTION_SLOT = WINDOW_SEED_SLOTS - 1;
+/** Fraction of a building's windows that are the occasional cool tone rather than warm. */
+const WINDOW_COOL_PROBABILITY = 0.18;
+export const WARM_WINDOW_COLOR = 0xffd9a0;
+export const COOL_WINDOW_COLOR = 0xcfe4ff;
+/**
+ * A lit pane's emissive at full night. Under the renderer's neutral tone
+ * mapping this keeps the warm pane's brightest channel under white, so a
+ * pane keeps its colour and the bloom pass, not the strength, gives it its
+ * halo.
+ */
+export const WINDOW_EMISSIVE_STRENGTH = 1.5;
+/** The night factor from which a shop's storefront glazing is lit from inside: early in the dusk sweep, as shops light before homes do. */
+export const STOREFRONT_LIT_FROM = 0.3;
+
+/** Industrial ground floor: a row of wide roll-up loading doors per face. */
+const INDUSTRIAL_DOOR_BAYS = 3;
+/** Side margin within each door bay (mullion between doors), as a fraction of the bay. */
+const INDUSTRIAL_DOOR_MARGIN = 0.16;
+/** Door height as a fraction of the ground-floor band. */
+const INDUSTRIAL_DOOR_HEIGHT_FRACTION = 0.82;
+/** Sectional metal roll-up door tone. */
+const INDUSTRIAL_DOOR_COLOR: readonly [number, number, number] = [0.44, 0.46, 0.49];
+
+export { isRowHouseArchetype };
+
+/**
+ * Window grid (cols x rows) derived from a catalog entry's footprint x height.
+ * Rows are cut to one tier of the body: a level-2 or 3 building is drawn as
+ * stacked tiers in this same bucket, each carrying its own rows. Pure.
+ */
+export function windowGridSize(entry: BuildingCatalogEntry): { cols: number; rows: number } {
+  return windowGrid(entry, tierHeightOf(entry));
+}
+
+/**
+ * 32-bit avalanche mix ("triple32", public domain) -> [0,1). Deterministic;
+ * never Math.random.
+ */
+function hash1(n: number): number {
+  let h = n >>> 0;
+  h = Math.imul(h ^ (h >>> 16), 0x45d9f3b) >>> 0;
+  h = Math.imul(h ^ (h >>> 16), 0x45d9f3b) >>> 0;
+  h = (h ^ (h >>> 16)) >>> 0;
+  return h / 4294967296;
+}
+
+/** Deterministic hash(buildingId, windowIndex) -> [0,1); this *is* the window's lit threshold. */
+export function windowHash(buildingId: number, windowIndex: number): number {
+  return hash1(buildingId * WINDOW_SEED_SLOTS + windowIndex);
+}
+
+/**
+ * The fraction of a building's windows that end up lit at full night — a
+ * per-building constant in [NIGHT_WINDOW_LIT_MIN, NIGHT_WINDOW_LIT_MAX)
+ * derived from the building's own id, so the mix is stable per building
+ * rather than identical across the whole city.
+ */
+export function windowLitFraction(buildingId: number): number {
+  const h = windowHash(buildingId, WINDOW_FRACTION_SLOT);
+  return NIGHT_WINDOW_LIT_MIN + h * (NIGHT_WINDOW_LIT_MAX - NIGHT_WINDOW_LIT_MIN);
+}
+
+/**
+ * Is this window lit at the given nightFactor? Each window's hash IS its lit
+ * threshold; comparing it against `nightFactor * windowLitFraction(id)` means
+ * more windows cross the threshold as nightFactor rises (progressive dusk
+ * sweep, "the city wakes up over ~20s"), the set of lit windows only grows
+ * as nightFactor increases (monotonic — no flicker-off), and at nightFactor=1
+ * the lit fraction converges on windowLitFraction(id).
+ */
+export function isWindowLit(buildingId: number, windowIndex: number, nightFactor: number): boolean {
+  return windowHash(buildingId, windowIndex) < nightFactor * windowLitFraction(buildingId);
+}
+
+/** Occasional cool `#cfe4ff` window among the otherwise-warm `#ffd9a0` majority. Salted apart from windowHash so color choice doesn't correlate with lit-order. */
+export function isWindowCool(buildingId: number, windowIndex: number): boolean {
+  return hash1(buildingId * WINDOW_SEED_SLOTS * 2 + windowIndex * 2 + 1) < WINDOW_COOL_PROBABILITY;
+}
+
+/** Abandoned (and mid-construction) buildings stay dark — lit windows are an Active-state signal only. */
+export function isBuildingLitEligible(state: BuildingState): boolean {
+  return state === BuildingState.Active;
+}
+
+// ---------------------------------------------------------------------------
+// Day facade: extends the window grid above into a full day-time facade on
+// the SAME instanced material — mullions, window panes (glass tint +
+// per-window reflectance from the existing per-window hash), a family wall
+// base (facade.ts's deriveFacadeParams), a ground-floor storefront band with
+// a rotation-aware entrance, a parapet lip, a distinct roof plate, and the
+// industrial specifics. Per-instance jitter/rotation (wallColor/roofColor)
+// can't be pre-baked into a material shared by every instance of an
+// archetype, so it's mirrored here as TSL hash nodes reading the real
+// per-instance aBuildingId attribute — the same way the night code above
+// already mirrors windowHash's CPU formula with the TSL `hash()` node. The
+// night emissive (emissiveNode, above) is independent.
+// ---------------------------------------------------------------------------
+
+/** Punched-window inset margin as a fraction of a grid cell; larger = smaller pane, more visible frame. */
+const MULLION_MARGIN_CURTAIN = 0.06; // glass family: glazing dominates, thin mullions
+// MULLION_MARGIN_PUNCHED (facade.ts): masonry/concrete/plaster punched openings
+const MULLION_MARGIN_INDUSTRIAL = 0.34; // "sparse small windows"
+const MULLION_MARGIN_GROUND_FLOOR = 0.03; // storefront: taller glazing, thin frame
+
+const GLASS_TINT_CURTAIN: RGB = [0.55, 0.68, 0.8];
+export const GLASS_TINT_PUNCHED: RGB = [0.22, 0.26, 0.3]; // deep-set punched glass, in shadow
+const GLASS_REFLECTANCE_MIN = 0.85;
+const GLASS_REFLECTANCE_MAX = 1.15;
+/** Salts a fresh draw off the existing per-window seed, decorrelated from the lit-threshold/warm-cool draws already taken from it. */
+const WINDOW_REFLECTANCE_SALT_MUL = 11.0;
+const WINDOW_REFLECTANCE_SALT_ADD = 5.0;
+/** Sparse-window existence draw — a different salt again; only consulted for industrial archetypes, and never touches the night lit-gate. */
+const WINDOW_EXISTS_SALT_MUL = 17.0;
+const WINDOW_EXISTS_SALT_ADD = 7.0;
+const INDUSTRIAL_WINDOW_DENSITY = 0.32;
+
+const DARK_STOREFRONT_FRAME: RGB = [0.09, 0.09, 0.1];
+const DOOR_COLOR: RGB = [0.1, 0.08, 0.07];
+const ENTRANCE_HALF_WIDTH = 0.12; // fraction of the entrance face's width
+const ENTRANCE_HEIGHT_FRACTION = 0.85; // fraction of the ground-floor band height
+
+const SPANDREL_DARKEN = 0.6; // masonry spandrel band: a darkened wall color
+const SPANDREL_BAND_FRACTION = 0.14; // fraction of one floor's height, at each row edge
+
+const PARAPET_DARKEN = 0.6; // non-industrial parapet: a darkened wall color
+const ROOF_CAP_DARKEN = 0.85; // industrial "roof cap band": a darkened roof color
+
+const CORRUGATION_FREQUENCY = 40 * Math.PI * 2; // ~40 fine vertical ribs across the facade width
+const CORRUGATION_MIN = 0.9;
+const CORRUGATION_MAX = 1.1;
+const INDUSTRIAL_ACCENT_HALF_THICKNESS = 0.035; // fraction of total height
+
+/**
+ * Builds a `select` cascade that picks one of a small fixed RGB palette by a
+ * runtime float index (expected to already be an integral float in
+ * [0, options.length)) — used for the roof white/grey/tan rotation and the
+ * industrial wall palette.
+ */
+function selectFromPalette(indexNode: Node<'float'>, options: readonly RGB[]): Node<'vec3'> {
+  function build(i: number): Node<'vec3'> {
+    const color = options[i];
+    if (!color) throw new RangeError(`selectFromPalette: empty palette at index ${i}`);
+    if (i === options.length - 1) return vec3(...color);
+    return select(indexNode.equal(i), vec3(...color), build(i + 1));
+  }
+  return build(0);
+}
+
+/**
+ * Builds a `select` cascade that picks a chart material by the run of the
+ * cumulative shares a runtime draw `u` in [0, 1) lands in, walking the same
+ * thresholds facade.ts's pickByShare walks on the CPU.
+ */
+function selectByShare(uNode: Node<'float'>, shares: readonly MaterialShare[]): Node<'vec3'> {
+  const thresholds = shareThresholds(shares);
+  const units = paletteUnits(thresholds.map((t) => t.material));
+  function build(i: number): Node<'vec3'> {
+    const color = units[i];
+    if (!color) throw new RangeError(`selectByShare: empty share table at index ${i}`);
+    if (i === thresholds.length - 1) return vec3(...color);
+    return select(uNode.lessThan(thresholds[i]!.upTo), vec3(...color), build(i + 1));
+  }
+  return build(0);
+}
+
+/**
+ * Per-instance wall base color: a residential kind draws a chart material by
+ * the share the US builds in it (facade.ts's residentialBodyShares), a kind
+ * with a body palette rotates among
+ * its chart materials, unclamped; a kindless industrial entry rotates
+ * among the steel-blue/light-grey/off-white palette; everything else
+ * desaturates the catalog color down to MAX_WALL_SATURATION (via three's own
+ * `saturation()` color-adjustment node — a cheap, robust luminance-lerp
+ * desaturation rather than a hand-rolled HSL round-trip in the shader).
+ * Every path finishes with the same deterministic ±HUE_JITTER_FRACTION hue
+ * rotation (three's `hue()` node), mirroring facade.ts's deriveWallColor
+ * formula.
+ */
+function buildWallColorNode(
+  entry: BuildingCatalogEntry,
+  buildingIdAttr: Node<'float'>,
+  isIndustrial: boolean,
+): Node<'vec3'> {
+  const hueSeed = buildingIdAttr.mul(FACADE_HASH_SLOT_MULTIPLIER).add(HASH_SLOT_HUE_JITTER);
+  const hueJitterRadians = hash(hueSeed)
+    .mul(2)
+    .sub(1)
+    .mul(HUE_JITTER_FRACTION * Math.PI * 2);
+
+  const kindSeed = buildingIdAttr.mul(FACADE_HASH_SLOT_MULTIPLIER).add(HASH_SLOT_KIND_WALL);
+  const residentialShares = residentialBodyShares(entry.kind);
+  const kindPalette = bodyPaletteFor(entry.kind, entry.level);
+  let base: Node<'vec3'>;
+  if (residentialShares) {
+    base = selectByShare(hash(kindSeed), residentialShares);
+  } else if (kindPalette) {
+    const units = paletteUnits(kindPalette);
+    const index = floor(hash(kindSeed).mul(units.length));
+    base = selectFromPalette(index, units);
+  } else if (isIndustrial) {
+    const rotationSeed = buildingIdAttr
+      .mul(FACADE_HASH_SLOT_MULTIPLIER)
+      .add(HASH_SLOT_INDUSTRIAL_WALL);
+    const index = floor(hash(rotationSeed).mul(INDUSTRIAL_WALL_PALETTE.length));
+    base = selectFromPalette(index, INDUSTRIAL_WALL_PALETTE);
+  } else {
+    const catalogColor = new THREE.Color(entry.color);
+    const { s: originalSaturation } = rgbToHsl(catalogColor.r, catalogColor.g, catalogColor.b);
+    const saturationAdjustment =
+      originalSaturation > MAX_WALL_SATURATION ? MAX_WALL_SATURATION / originalSaturation : 1;
+    base = saturation(vec3(catalogColor.r, catalogColor.g, catalogColor.b), saturationAdjustment);
+  }
+
+  return hue(base, hueJitterRadians);
+}
+
+/**
+ * White/grey/tan rotation by id hash, retried once against the next
+ * palette entry if the hash pick lands too close to the wall color
+ * ("distinct from walls"). facade.ts's rotateRoofColor does the full
+ * 3-attempt cycle for its CPU-tested reference; a single retry is enough
+ * here since the 3 palette entries already sit >0.2 apart pairwise.
+ * A kind with a roof palette gets one of its own materials by the same
+ * hash, no distance check: the kind decides the roof, mirroring facade.ts's
+ * kindRoofColor. A kindless industrial entry gets the fixed grey roof plate.
+ */
+function buildRoofColorNode(
+  entry: BuildingCatalogEntry,
+  buildingIdAttr: Node<'float'>,
+  wallColorNode: Node<'vec3'>,
+  isIndustrial: boolean,
+): Node<'vec3'> {
+  const rotationSeed = buildingIdAttr.mul(FACADE_HASH_SLOT_MULTIPLIER).add(HASH_SLOT_ROOF_ROTATION);
+  const kindPalette = roofPaletteFor(entry.kind);
+  if (kindPalette) {
+    const units = paletteUnits(kindPalette);
+    return selectFromPalette(floor(hash(rotationSeed).mul(units.length)), units);
+  }
+  if (isIndustrial) return vec3(...INDUSTRIAL_ROOF_COLOR);
+
+  const baseIndex = floor(hash(rotationSeed).mul(ROOF_PALETTE.length));
+  const nextIndex = baseIndex.add(1).mod(ROOF_PALETTE.length);
+
+  const candidate = selectFromPalette(baseIndex, ROOF_PALETTE);
+  const alternate = selectFromPalette(nextIndex, ROOF_PALETTE);
+  const tooClose = distance(candidate, wallColorNode).lessThan(MIN_ROOF_WALL_DISTANCE);
+  return select(tooClose, alternate, candidate);
+}
+
+interface Bucket {
+  entry: BuildingCatalogEntry;
+  material: MeshStandardNodeMaterial;
+  mesh: THREE.InstancedMesh;
+  capacity: number;
+  count: number;
+  /** slot -> building id, valid for indices [0, count). A building with stacked tiers holds one slot per tier. */
+  slotToId: number[];
+  /** building id -> its slots, base tier first; the inverse of slotToId. */
+  idToSlots: Map<number, number[]>;
+  /** slot -> normalized (0..1) RGB, encodeId(id)/255. Not yet GPU-uploaded. */
+  idColor: Float32Array;
+  /** Per-instance building id (float), read by the window-emissive shader. */
+  windowSeed: THREE.InstancedBufferAttribute;
+  /** Per-instance 1=Active/0=Constructing|Abandoned; gates window emissive so only Active buildings light up. */
+  windowActive: THREE.InstancedBufferAttribute;
+  /** Per-instance tier index, 0 for the base: the ground floor and entrance are its alone, and each tier's windows are its own. */
+  tier: THREE.InstancedBufferAttribute;
+}
+
+interface BucketMesh {
+  mesh: THREE.InstancedMesh;
+  windowSeed: THREE.InstancedBufferAttribute;
+  windowActive: THREE.InstancedBufferAttribute;
+  tier: THREE.InstancedBufferAttribute;
+}
+
+// Reused scratch objects: apply()/copySlot() run synchronously and never
+// interleave, so a single shared instance per type avoids per-call allocation.
+const _matrix = new THREE.Matrix4();
+const _position = new THREE.Vector3();
+const _quaternion = new THREE.Quaternion();
+const _scale = new THREE.Vector3();
+const _color = new THREE.Color();
+const _yAxis = new THREE.Vector3(0, 1, 0);
+
+export class BuildingInstancer {
+  private readonly scene: THREE.Scene;
+  private readonly heightAt: (x: number, z: number) => number;
+  private readonly geometry = new THREE.BoxGeometry(1, 1, 1);
+  private readonly buckets = new Map<string, Bucket>();
+  /** building id -> catalogId, tracks which bucket currently holds an id (levels migrate buckets). */
+  private readonly idLocation = new Map<number, string>();
+  /**
+   * Shared across every bucket's material graph: one uniform update from
+   * setNightFactor() drives every archetype's window/body-tint shader at
+   * once, no per-bucket bookkeeping needed.
+   */
+  private readonly nightFactorUniform = uniform(0);
+  /** Catalog ids rendered as a low plinth (see createPlinthMaterial/writeInstance) instead of the full facade box. Empty unless the 4th constructor arg is passed. */
+  private readonly plinthIds: ReadonlySet<string>;
+  /** Answers "is this grid tile a road" for the frontage parking setback (see writeInstance); the default never finds one. */
+  private readonly roadAt: (x: number, z: number) => boolean;
+  /** The streets a home's front yard is measured from; the default finds none, and every home stays centred. */
+  private readonly street: StreetLookup;
+  /** Where the dirt roads a farm's gate opens onto are, which decides where its barn stands. */
+  private readonly dirtAt: (x: number, z: number) => boolean;
+  /** The stalls the streets paint, which a car park counts toward its code; null credits none. */
+  private readonly kerb: KerbSurroundings | null;
+  /** The kerb stalls a framed lot's frontage earns from its free road; null credits none. */
+  private readonly kerbCreditOf: KerbCreditOf | null;
+
+  constructor(
+    scene: THREE.Scene,
+    catalog: BuildingCatalogEntry[],
+    heightAt: (x: number, z: number) => number,
+    plinthIds?: Set<string>,
+    roadAt?: (x: number, z: number) => boolean,
+    street: StreetLookup = NO_STREETS,
+    dirtAt: (x: number, z: number) => boolean = () => false,
+    kerb: KerbSurroundings | null = null,
+    kerbCreditOf: KerbCreditOf | null = null,
+  ) {
+    this.scene = scene;
+    this.heightAt = heightAt;
+    this.plinthIds = plinthIds ?? new Set();
+    this.roadAt = roadAt ?? ((): boolean => false);
+    this.street = street;
+    this.dirtAt = dirtAt;
+    this.kerb = kerb;
+    this.kerbCreditOf = kerbCreditOf;
+    for (const entry of catalog) {
+      this.buckets.set(entry.id, this.createBucket(entry));
+    }
+  }
+
+  apply(delta: BuildingDelta): void {
+    const touched = new Set<Bucket>();
+    for (const instance of delta.added) this.upsert(instance, touched);
+    for (const instance of delta.updated) this.upsert(instance, touched);
+    for (const id of delta.removed) this.removeId(id, touched);
+
+    for (const bucket of touched) {
+      bucket.mesh.count = bucket.count;
+      // A bucket with no instances is not drawn. There is one bucket per
+      // catalog entry, created up front, so an early city otherwise submits a
+      // few dozen draw calls a frame with a vertex count of zero — which the
+      // WebGPU backend warns about, and which is work either way.
+      bucket.mesh.visible = bucket.count > 0;
+      bucket.mesh.instanceMatrix.needsUpdate = true;
+      if (bucket.mesh.instanceColor) bucket.mesh.instanceColor.needsUpdate = true;
+      bucket.windowSeed.needsUpdate = true;
+      bucket.windowActive.needsUpdate = true;
+      bucket.tier.needsUpdate = true;
+      // Invalidate the frustum-culling sphere so three.js recomputes it from
+      // the new instance set on the next cull pass (it caches the sphere the
+      // first time it's null — a bucket first rendered empty would otherwise
+      // stay culled forever once buildings appear).
+      bucket.mesh.boundingSphere = null;
+    }
+  }
+
+  /** 0 (day) .. 1 (night) — drives every archetype's window emissive + night body tint at once. */
+  setNightFactor(nightFactor: number): void {
+    this.nightFactorUniform.value = Math.min(1, Math.max(0, nightFactor));
+  }
+
+  /** Current nightFactor, for tests/introspection. */
+  nightFactor(): number {
+    return this.nightFactorUniform.value;
+  }
+
+  /** 1 if the instance at this slot is eligible for lit windows (Active), else 0. For tests/introspection. */
+  activeAt(catalogId: string, instanceIndex: number): number | null {
+    const bucket = this.buckets.get(catalogId);
+    if (!bucket) return null;
+    if (instanceIndex < 0 || instanceIndex >= bucket.count) return null;
+    return bucket.windowActive.array[instanceIndex] ?? null;
+  }
+
+  instanceCount(): number {
+    let total = 0;
+    for (const bucket of this.buckets.values()) total += bucket.count;
+    return total;
+  }
+
+  buildingIdAt(instancePick: { catalogId: string; instanceIndex: number }): number | null {
+    const bucket = this.buckets.get(instancePick.catalogId);
+    if (!bucket) return null;
+    if (instancePick.instanceIndex < 0 || instancePick.instanceIndex >= bucket.count) return null;
+    return bucket.slotToId[instancePick.instanceIndex] ?? null;
+  }
+
+  /** Live view of the meshes currently worth raycasting against, for IdPicker. */
+  getPickables(): { catalogId: string; mesh: THREE.InstancedMesh }[] {
+    const result: { catalogId: string; mesh: THREE.InstancedMesh }[] = [];
+    for (const bucket of this.buckets.values()) {
+      if (bucket.count > 0) result.push({ catalogId: bucket.entry.id, mesh: bucket.mesh });
+    }
+    return result;
+  }
+
+  /** Decoded-back-to-bytes id-color at a slot, for IdPicker's cross-check. */
+  idColorAt(catalogId: string, instanceIndex: number): [number, number, number] | null {
+    const bucket = this.buckets.get(catalogId);
+    if (!bucket) return null;
+    if (instanceIndex < 0 || instanceIndex >= bucket.count) return null;
+    const base = instanceIndex * 3;
+    const r = bucket.idColor[base];
+    const g = bucket.idColor[base + 1];
+    const b = bucket.idColor[base + 2];
+    if (r === undefined || g === undefined || b === undefined) return null;
+    return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
+  }
+
+  private createBucket(entry: BuildingCatalogEntry): Bucket {
+    // A barn is board-sided and windowless: the plain body a plinth has, in the barn's own colour.
+    const material =
+      this.plinthIds.has(entry.id) || isFarmEntry(entry)
+        ? this.createPlinthMaterial(entry)
+        : this.createMaterial(entry);
+    const { mesh, windowSeed, windowActive, tier } = this.createMesh(material, INITIAL_CAPACITY);
+    this.scene.add(mesh);
+    return {
+      entry,
+      material,
+      mesh,
+      capacity: INITIAL_CAPACITY,
+      count: 0,
+      slotToId: new Array(INITIAL_CAPACITY).fill(0),
+      idToSlots: new Map(),
+      idColor: new Float32Array(INITIAL_CAPACITY * 3),
+      windowSeed,
+      windowActive,
+      tier,
+    };
+  }
+
+  /**
+   * One MeshStandardNodeMaterial per archetype (TSL), so window-emissive +
+   * day facade + night body tint cost zero extra draw calls. emissiveNode
+   * is the night system. colorNode is the day facade — family wall base,
+   * mullions/window panes reading the SAME col/row/windowSeed grid the night
+   * code derives (so a cell that can glow at night is the same rectangle that
+   * reads as glass by day), ground-floor storefront + entrance,
+   * spandrel/corrugation/accent per family, and a parapet lip over a distinct
+   * roof plate — multiplied by the nightFactor-driven dark blue-grey lerp.
+   */
+  private createMaterial(entry: BuildingCatalogEntry): MeshStandardNodeMaterial {
+    const material = new MeshStandardNodeMaterial({ roughness: 1, metalness: 0 });
+    const { cols, rows } = windowGridSize(entry);
+    const isIndustrial = entry.category === 'ind';
+
+    // Archetype-level facade parameters: family/windowInset/spandrel
+    // never vary per instance, so buildingId is an unused placeholder here.
+    // (wallColor/roofColor from this SAME call are per-instance in spirit —
+    // they need a real buildingId — so they're not read from this result;
+    // the per-instance jitter/rotation is instead mirrored below as TSL hash
+    // nodes reading the real aBuildingId attribute, exactly like the night
+    // code already mirrors windowHash's CPU formula with the TSL `hash()`.)
+    const { family, windowInset, spandrel, accentStripe } = deriveFacadeParams(entry, 0);
+    // The bands are cut to one tier: every tier of a stacked body is one
+    // instance of this bucket, so the parapet lip crowns each terrace while
+    // the storefront band, below, is gated to the base tier.
+    const tierHeight = tierHeightOf(entry);
+    const groundBandThreshold = groundFloorBand(tierHeight);
+    const parapetThreshold = parapetBand(tierHeight);
+    // A house's panes are window-sized in metres, and a house has no
+    // storefront: its ground floor is cut like the floors above it.
+    const housePane = housePaneMargins(entry, tierHeight);
+
+    const buildingIdAttr = attribute<'float'>('aBuildingId', 'float');
+    const activeAttr = attribute<'float'>('aActive', 'float');
+    const tierAttr = attribute<'float'>('aTier', 'float');
+    const isBaseTier = tierAttr.lessThan(0.5);
+
+    const uvNode = uv();
+    const col = floor(uvNode.x.mul(cols));
+    const row = floor(uvNode.y.mul(rows));
+    // Windows are numbered on up the stack, so a tier's lit pattern is its own.
+    const windowIndex = row
+      .mul(cols)
+      .add(col)
+      .add(tierAttr.mul(cols * rows));
+    const windowSeed = buildingIdAttr.mul(WINDOW_SEED_SLOTS).add(windowIndex);
+
+    const litThreshold = hash(windowSeed);
+    const fractionSeed = buildingIdAttr.mul(WINDOW_SEED_SLOTS).add(WINDOW_FRACTION_SLOT);
+    const litFraction = float(NIGHT_WINDOW_LIT_MIN).add(
+      hash(fractionSeed).mul(NIGHT_WINDOW_LIT_MAX - NIGHT_WINDOW_LIT_MIN),
+    );
+    const isLit = litThreshold.lessThan(this.nightFactorUniform.mul(litFraction));
+
+    const isWall = abs(normalLocal.y).lessThan(0.5); // roof/floor caps never show windows
+    const colorSeed = windowSeed.mul(7.0).add(3.0); // decorrelated from the lit threshold above
+    const isCool = hash(colorSeed).lessThan(WINDOW_COOL_PROBABILITY);
+    const warmColor = new THREE.Color(WARM_WINDOW_COLOR);
+    const coolColor = new THREE.Color(COOL_WINDOW_COLOR);
+    const windowColorNode = select(
+      isCool,
+      vec3(coolColor.r, coolColor.g, coolColor.b),
+      vec3(warmColor.r, warmColor.g, warmColor.b),
+    );
+
+    // --- window grid: pane vs mullion frame -------------------------------
+    // Computed BEFORE the emissive so a lit window at night is exactly the
+    // glass PANE you see by day (mullion-inset sub-rectangle), not the whole
+    // grid cell — otherwise night reads as big glowing rectangles instead of
+    // real windows. windowInset (punched vs curtain-wall) and the ground
+    // floor's taller storefront glazing change the inset margin; industrial
+    // additionally thins the pane population via an independently-salted hash.
+    const isGroundFloor = housePane
+      ? bool(false)
+      : uvNode.y.lessThan(groundBandThreshold).and(isBaseTier);
+    const cellU = fract(uvNode.x.mul(cols));
+    const cellV = fract(uvNode.y.mul(rows));
+    const baseMargin = isIndustrial
+      ? MULLION_MARGIN_INDUSTRIAL
+      : windowInset
+        ? MULLION_MARGIN_PUNCHED
+        : MULLION_MARGIN_CURTAIN;
+    const margin = select(isGroundFloor, float(MULLION_MARGIN_GROUND_FLOOR), float(baseMargin));
+    const marginX = housePane ? float(housePane.x) : margin;
+    const marginY = housePane ? float(housePane.y) : margin;
+    const insidePaneX = cellU.greaterThan(marginX).and(cellU.lessThan(float(1).sub(marginX)));
+    const insidePaneY = cellV.greaterThan(marginY).and(cellV.lessThan(float(1).sub(marginY)));
+    // A windowless body (a food plant's insulated panel) shows no pane at
+    // all, by day or lit at night; the grid still cuts its storeys.
+    let isPane: Node<'bool'> = windowlessBody(entry) ? bool(false) : insidePaneX.and(insidePaneY);
+    // A commercial ground floor is a storefront: bays of glass between dark
+    // mullions over a dark bulkhead, so a lit shopfront is a row of windows.
+    const storefront = housePane ? null : storefrontCut(entry, tierHeight);
+    if (storefront) {
+      const bayU = fract(uvNode.x.mul(storefront.bays));
+      const inBayX = bayU
+        .greaterThan(storefront.marginX)
+        .and(bayU.lessThan(1 - storefront.marginX));
+      const inBayY = uvNode.y
+        .greaterThan(storefront.sillFraction)
+        .and(uvNode.y.lessThan(storefront.headFraction));
+      isPane = select(isGroundFloor, inBayX.and(inBayY), isPane);
+    }
+    if (isIndustrial) {
+      const existsSeed = windowSeed.mul(WINDOW_EXISTS_SALT_MUL).add(WINDOW_EXISTS_SALT_ADD);
+      isPane = isPane.and(hash(existsSeed).lessThan(INDUSTRIAL_WINDOW_DENSITY));
+    }
+
+    // --- night emissive: only the glass pane glows (a defined window, not a
+    // full-cell rectangle) — same across residential/commercial/industrial ---
+    // A shop's storefront glazing is lit from inside as one, warm, once the
+    // evening is in; its floors above follow the per-window hash like any
+    // other building, which is what tells a shop from an office at night.
+    const storefrontLit = entry.category === 'com' && family !== 'glass';
+    const isWindowLit = storefrontLit
+      ? select(isGroundFloor, this.nightFactorUniform.greaterThan(STOREFRONT_LIT_FROM), isLit)
+      : isLit;
+    const paneColorNode = storefrontLit
+      ? select(isGroundFloor, vec3(warmColor.r, warmColor.g, warmColor.b), windowColorNode)
+      : windowColorNode;
+    const gate = isWall.and(isWindowLit).and(isPane).and(activeAttr.greaterThan(0.5));
+    const emissiveOn = paneColorNode.mul(this.nightFactorUniform).mul(WINDOW_EMISSIVE_STRENGTH);
+    material.emissiveNode = select(gate, emissiveOn, vec3(0, 0, 0));
+
+    // --- day facade -------------------------------------------------------
+    const wallColorNode = buildWallColorNode(entry, buildingIdAttr, isIndustrial);
+    const roofColorNode = buildRoofColorNode(entry, buildingIdAttr, wallColorNode, isIndustrial);
+    const isParapet = uvNode.y.greaterThan(1 - parapetThreshold);
+
+    // Solid wall base (the frame/mullion color where there is no pane):
+    // industrial gets a fine corrugated stripe ripple; masonry gets
+    // a darker spandrel band at every floor edge.
+    let solidWall: Node<'vec3'> = wallColorNode;
+    if (isIndustrial) {
+      const corrugation = sin(uvNode.x.mul(CORRUGATION_FREQUENCY)).mul(0.5).add(0.5);
+      solidWall = wallColorNode.mul(mix(CORRUGATION_MIN, CORRUGATION_MAX, corrugation));
+    }
+    if (spandrel) {
+      const rowFrac = fract(uvNode.y.mul(rows));
+      const nearRowEdge = rowFrac
+        .lessThan(SPANDREL_BAND_FRACTION)
+        .or(rowFrac.greaterThan(1 - SPANDREL_BAND_FRACTION));
+      solidWall = select(nearRowEdge, wallColorNode.mul(SPANDREL_DARKEN), solidWall);
+    }
+
+    const reflectanceSeed = windowSeed
+      .mul(WINDOW_REFLECTANCE_SALT_MUL)
+      .add(WINDOW_REFLECTANCE_SALT_ADD);
+    const reflectance = hash(reflectanceSeed);
+    // An office's cells tint with the chart's glass for its level; every
+    // other kind keeps the family pane.
+    const glassBase =
+      glassTintFor(entry.kind, entry.level) ??
+      (family === 'glass' ? GLASS_TINT_CURTAIN : GLASS_TINT_PUNCHED);
+    const glassColor = vec3(...glassBase).mul(
+      mix(GLASS_REFLECTANCE_MIN, GLASS_REFLECTANCE_MAX, reflectance),
+    );
+    const frameColor = select(
+      isGroundFloor,
+      vec3(...DARK_STOREFRONT_FRAME),
+      solidWall.mul(FRAME_DARKEN),
+    );
+
+    // Boarded/plain look for Constructing/Abandoned instances reuses the
+    // EXISTING aActive attribute (no new per-instance data): glazing only
+    // renders for Active buildings ("Abandoned: boarded dark cells"),
+    // layering on top of instanceColor's existing dark/grey state tint.
+    const paneColor = select(activeAttr.greaterThan(0.5), glassColor, frameColor);
+    let wallWithWindows: Node<'vec3'> = select(isPane, paneColor, frameColor);
+
+    // Industrial accent stripe band at 2/3 height, red or blue by hash, on
+    // the sheds only: a warehouse's band is the kit's tilt-up band.
+    if (accentStripe) {
+      const accentSeed = buildingIdAttr
+        .mul(FACADE_HASH_SLOT_MULTIPLIER)
+        .add(HASH_SLOT_INDUSTRIAL_ACCENT);
+      const accentColor = select(
+        hash(accentSeed).lessThan(0.5),
+        vec3(...ACCENT_RED),
+        vec3(...ACCENT_BLUE),
+      );
+      const isAccentBand = uvNode.y
+        .greaterThan(INDUSTRIAL_ACCENT_HEIGHT_FRACTION - INDUSTRIAL_ACCENT_HALF_THICKNESS)
+        .and(
+          uvNode.y.lessThan(INDUSTRIAL_ACCENT_HEIGHT_FRACTION + INDUSTRIAL_ACCENT_HALF_THICKNESS),
+        );
+      wallWithWindows = select(isAccentBand, accentColor, wallWithWindows);
+    }
+
+    // Entrance rectangle: the box's local +Z face, its front. `normalGeometry`
+    // is the unrotated vertex normal (`normalLocal` is the one three.js turns
+    // by the instance matrix), and the instance matrix turns the box by
+    // rotation * 90 degrees, so the door rides the building's front to whichever
+    // side that turn puts it on, as a kit's street side does (shared/kitfront.ts),
+    // with no per-instance data and no change to the one draw per bucket.
+    const isEntranceFace = normalGeometry.z.greaterThan(0.5);
+    const isEntranceX = uvNode.x
+      .greaterThan(0.5 - ENTRANCE_HALF_WIDTH)
+      .and(uvNode.x.lessThan(0.5 + ENTRANCE_HALF_WIDTH));
+    const isEntranceY = uvNode.y.lessThan(groundBandThreshold * ENTRANCE_HEIGHT_FRACTION);
+    const isEntrance = isEntranceFace.and(isEntranceX).and(isEntranceY).and(isBaseTier);
+    let withEntrance: Node<'vec3'> = select(isEntrance, vec3(...DOOR_COLOR), wallWithWindows);
+
+    // Industrial overhang doors: a repeating row of wide roll-up loading doors
+    // across the ground floor of every face, overriding the ground-floor
+    // windows — the warehouse/loading-dock read.
+    if (isIndustrial) {
+      const bay = fract(uvNode.x.mul(INDUSTRIAL_DOOR_BAYS));
+      const inBayX = bay
+        .greaterThan(INDUSTRIAL_DOOR_MARGIN)
+        .and(bay.lessThan(1 - INDUSTRIAL_DOOR_MARGIN));
+      const inDoorY = uvNode.y.lessThan(groundBandThreshold * INDUSTRIAL_DOOR_HEIGHT_FRACTION);
+      const isOverhangDoor = inBayX.and(inDoorY).and(isBaseTier);
+      withEntrance = select(isOverhangDoor, vec3(...INDUSTRIAL_DOOR_COLOR), withEntrance);
+    }
+
+    // Parapet lip always wins at the very top edge.
+    const parapetColor = isIndustrial
+      ? roofColorNode.mul(ROOF_CAP_DARKEN)
+      : solidWall.mul(PARAPET_DARKEN);
+    const wallExpression = select(isParapet, parapetColor, withEntrance);
+
+    const dayColorNode = select(isWall, wallExpression, roofColorNode);
+    material.colorNode = dayColorNode.mul(nightTintNode(this.nightFactorUniform));
+
+    return material;
+  }
+
+  /**
+   * For plinth-designated catalog ids (utilitykits.ts owns their real visual
+   * identity), the facade box collapses to a low slab — this is the material
+   * that goes with it: a PLAIN, flat, desaturated concrete tone from the
+   * catalog color, with only the shared night body-tint multiply on top.
+   * Deliberately NO window/facade graph at all (no attribute()/hash() reads,
+   * no emissiveNode assignment) — a plinth must never show glowing office
+   * windows. emissiveNode therefore stays at NodeMaterial's own default
+   * (null), unlike createMaterial's buckets above.
+   */
+  private createPlinthMaterial(entry: BuildingCatalogEntry): MeshStandardNodeMaterial {
+    const material = new MeshStandardNodeMaterial({ roughness: 1, metalness: 0 });
+    const catalogColor = new THREE.Color(entry.color);
+    const { s: originalSaturation } = rgbToHsl(catalogColor.r, catalogColor.g, catalogColor.b);
+    // A barn's paint is a measured swatch already (the catalog gives it the
+    // palette's red plaster, weathered wood or white), and a barn muted to the
+    // town's wall saturation stops reading as a barn.
+    const ceiling = isFarmEntry(entry) ? 1 : MAX_WALL_SATURATION;
+    const saturationAdjustment = originalSaturation > ceiling ? ceiling / originalSaturation : 1;
+    const desaturated = saturation(
+      vec3(catalogColor.r, catalogColor.g, catalogColor.b),
+      saturationAdjustment,
+    );
+    material.colorNode = desaturated.mul(nightTintNode(this.nightFactorUniform));
+    return material;
+  }
+
+  private createMesh(material: MeshStandardNodeMaterial, capacity: number): BucketMesh {
+    const geometry = this.geometry.clone(); // per-bucket: each archetype's window-seed attribute is its own
+    const windowSeed = new THREE.InstancedBufferAttribute(new Float32Array(capacity), 1);
+    const windowActive = new THREE.InstancedBufferAttribute(new Float32Array(capacity), 1);
+    const tier = new THREE.InstancedBufferAttribute(new Float32Array(capacity), 1);
+    geometry.setAttribute('aBuildingId', windowSeed);
+    geometry.setAttribute('aActive', windowActive);
+    geometry.setAttribute('aTier', tier);
+
+    const mesh = new THREE.InstancedMesh(geometry, material, capacity);
+    mesh.count = 0;
+    mesh.visible = false; // nothing in it yet; apply() turns it on when it fills
+    // Shadow sweep: building bodies both receive the sun's shadow
+    // (props/lamps/trees fall onto their walls) and cast their own onto
+    // the streets — one instanced draw per archetype bucket keeps it cheap.
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    const colorArray = new Float32Array(capacity * 3).fill(1);
+    mesh.instanceColor = new THREE.InstancedBufferAttribute(colorArray, 3);
+    return { mesh, windowSeed, windowActive, tier };
+  }
+
+  private grow(bucket: Bucket): void {
+    const oldCapacity = bucket.capacity;
+    const newCapacity = oldCapacity * 2;
+    const {
+      mesh: newMesh,
+      windowSeed: newWindowSeed,
+      windowActive: newWindowActive,
+      tier: newTier,
+    } = this.createMesh(bucket.material, newCapacity);
+
+    newMesh.instanceMatrix.array.set(bucket.mesh.instanceMatrix.array);
+    if (bucket.mesh.instanceColor && newMesh.instanceColor) {
+      newMesh.instanceColor.array.set(bucket.mesh.instanceColor.array);
+    }
+    newWindowSeed.array.set(bucket.windowSeed.array);
+    newWindowActive.array.set(bucket.windowActive.array);
+    newTier.array.set(bucket.tier.array);
+    newMesh.count = bucket.mesh.count;
+    newMesh.visible = bucket.mesh.visible;
+
+    this.scene.remove(bucket.mesh);
+    bucket.mesh.dispose();
+    // The bucket's own clone of the body, carrying the id attributes just copied.
+    bucket.mesh.geometry.dispose();
+    this.scene.add(newMesh);
+    bucket.mesh = newMesh;
+    bucket.windowSeed = newWindowSeed;
+    bucket.windowActive = newWindowActive;
+    bucket.tier = newTier;
+    bucket.capacity = newCapacity;
+
+    bucket.slotToId.length = newCapacity;
+    bucket.slotToId.fill(0, oldCapacity, newCapacity);
+    bucket.idColor = buildIdColorArray(bucket.slotToId);
+  }
+
+  private upsert(instance: BuildingInstance, touched: Set<Bucket>): void {
+    const currentCatalogId = this.idLocation.get(instance.id);
+    if (currentCatalogId !== undefined && currentCatalogId !== instance.catalogId) {
+      // Leveled up / down into a different catalog entry: migrate buckets.
+      this.removeId(instance.id, touched);
+    }
+
+    const bucket = this.buckets.get(instance.catalogId);
+    if (!bucket) {
+      throw new Error(`BuildingInstancer: unknown catalogId "${instance.catalogId}"`);
+    }
+
+    const boxes = this.boxesFor(bucket.entry, instance);
+    let slots = bucket.idToSlots.get(instance.id);
+    if (slots !== undefined && slots.length !== boxes.length) {
+      // The same entry, drawn as a different number of tiers (a farm plan or
+      // a plinth changing under it): start its slots over.
+      this.removeId(instance.id, touched);
+      slots = undefined;
+    }
+    if (slots === undefined) {
+      slots = [];
+      for (let tier = 0; tier < boxes.length; tier++) {
+        if (bucket.count === bucket.capacity) this.grow(bucket);
+        const slot = bucket.count;
+        bucket.count += 1;
+        bucket.slotToId[slot] = instance.id;
+        slots.push(slot);
+      }
+      bucket.idToSlots.set(instance.id, slots);
+      this.idLocation.set(instance.id, instance.catalogId);
+    }
+
+    this.writeInstance(bucket, slots, boxes, instance);
+    touched.add(bucket);
+  }
+
+  private removeId(id: number, touched: Set<Bucket>): void {
+    const catalogId = this.idLocation.get(id);
+    if (catalogId === undefined) return;
+    const bucket = this.buckets.get(catalogId);
+    if (!bucket) {
+      this.idLocation.delete(id);
+      return;
+    }
+    const slots = bucket.idToSlots.get(id);
+    if (slots === undefined) {
+      this.idLocation.delete(id);
+      return;
+    }
+
+    // Highest slot first, so the last slot is never one of this building's
+    // own still waiting to go: by the time a lower slot is freed, every slot
+    // above it belongs to someone else or is gone.
+    for (const slot of [...slots].sort((a, b) => b - a)) {
+      const lastSlot = bucket.count - 1;
+      if (slot !== lastSlot) {
+        this.copySlot(bucket, lastSlot, slot);
+        const movedId = this.slotId(bucket, lastSlot);
+        const movedSlots = bucket.idToSlots.get(movedId);
+        if (movedSlots) movedSlots[movedSlots.indexOf(lastSlot)] = slot;
+        bucket.slotToId[slot] = movedId;
+      }
+      bucket.count -= 1;
+    }
+
+    bucket.idToSlots.delete(id);
+    this.idLocation.delete(id);
+    touched.add(bucket);
+  }
+
+  /**
+   * The boxes a building is drawn as: its stacked tiers, or the one body a
+   * farm's barn and a plinth collapse to.
+   */
+  private boxesFor(entry: BuildingCatalogEntry, instance: BuildingInstance): readonly SetbackBox[] {
+    if (planFarm(instance, entry, this.dirtAt) || this.plinthIds.has(entry.id)) return [ONE_BOX];
+    const frontage = this.frontageOf(entry, instance);
+    return computeSetbacks(entry, instance.id, frontage).boxes;
+  }
+
+  private frontageOf(entry: BuildingCatalogEntry, instance: BuildingInstance): FrontageSetback {
+    return frontageSetbackFor(
+      entry,
+      instance.x,
+      instance.z,
+      this.roadAt,
+      this.street,
+      instance.rotation,
+      this.kerb,
+    );
+  }
+
+  private slotId(bucket: Bucket, slot: number): number {
+    const id = bucket.slotToId[slot];
+    if (id === undefined) throw new RangeError(`BuildingInstancer: slot ${slot} has no id`);
+    return id;
+  }
+
+  private copySlot(bucket: Bucket, from: number, to: number): void {
+    bucket.mesh.getMatrixAt(from, _matrix);
+    bucket.mesh.setMatrixAt(to, _matrix);
+    bucket.mesh.getColorAt(from, _color);
+    bucket.mesh.setColorAt(to, _color);
+    bucket.idColor[to * 3] = bucket.idColor[from * 3] ?? 0;
+    bucket.idColor[to * 3 + 1] = bucket.idColor[from * 3 + 1] ?? 0;
+    bucket.idColor[to * 3 + 2] = bucket.idColor[from * 3 + 2] ?? 0;
+    bucket.windowSeed.array[to] = bucket.windowSeed.array[from] ?? 0;
+    bucket.windowActive.array[to] = bucket.windowActive.array[from] ?? 0;
+    bucket.tier.array[to] = bucket.tier.array[from] ?? 0;
+  }
+
+  private writeInstance(
+    bucket: Bucket,
+    slots: readonly number[],
+    boxes: readonly SetbackBox[],
+    instance: BuildingInstance,
+  ): void {
+    const entry = bucket.entry;
+    const heightScale =
+      instance.state === BuildingState.Constructing ? CONSTRUCTING_HEIGHT_SCALE : 1;
+    const farm = planFarm(instance, entry, this.dirtAt);
+    if (farm) {
+      this.writeBarn(
+        bucket,
+        slots[0]!,
+        instance,
+        farm.barn,
+        entry.height * BARN_EAVE_SHARE * heightScale,
+      );
+      return;
+    }
+    // Plinth-designated ids collapse to a low slab (picking/outline/bulldoze
+    // keep working through this same instancer path) while utilitykits.ts
+    // carries the real visual identity beside it.
+    if (this.plinthIds.has(entry.id)) {
+      const body = bodyMetresFor(entry);
+      const frontage = this.frontageOf(entry, instance);
+      const slab: SetbackBox = {
+        w: body.w - frontage.spanXM,
+        d: body.d - frontage.spanZM,
+        h: PLINTH_PAD_HEIGHT,
+        yOffset: 0,
+      };
+      const seat = this.seatFor(entry, instance, slab);
+      // A draped entry keeps its slope, so its pad sinks under the lowest
+      // ground beneath it: the lawn laid on the hillside hides it, and picking
+      // still finds it through the lawn.
+      if (entry.ground === 'drape') {
+        const [ex, ez] = instance.rotation % 2 === 1 ? [slab.d, slab.w] : [slab.w, slab.d];
+        seat.groundY =
+          minHeightOverRect(
+            this.heightAt,
+            seat.centerX - ex / 2,
+            seat.centerZ - ez / 2,
+            seat.centerX + ex / 2,
+            seat.centerZ + ez / 2,
+          ) - PLINTH_PAD_HEIGHT;
+      }
+      this.writeTier(bucket, slots[0]!, 0, slab, instance, heightScale, seat);
+      return;
+    }
+    // A suburban commercial or industrial body stands where its car park
+    // (lotplan.ts) leaves it room, whole; the shift is applied where the tier
+    // is written, and the boxes carry the full plate from computeSetbacks.
+    const seat = this.seatFor(entry, instance, boxes[0]!);
+    for (let tier = 0; tier < boxes.length; tier++) {
+      this.writeTier(bucket, slots[tier]!, tier, boxes[tier]!, instance, heightScale, seat);
+    }
+  }
+
+  /**
+   * Where a body's base stands: its centre, shifted by the frontage setback,
+   * and the highest terrain under the base itself, so no slope can poke up
+   * through the body and no ground beyond the body lifts it off its pad.
+   */
+  private seatFor(
+    entry: BuildingCatalogEntry,
+    instance: BuildingInstance,
+    base: SetbackBox,
+  ): { centerX: number; centerZ: number; groundY: number; yaw: number } {
+    if (instance.frame) {
+      // A body on a curve stands where its parcel's frame puts it, turned to its street.
+      const seat = framedBodyPlacement(instance.frame, entry, this.street, this.kerbCreditOf);
+      const groundY = maxHeightUnderBody(
+        this.heightAt,
+        seat.x,
+        seat.z,
+        seat.boundsW,
+        seat.boundsD,
+        0,
+      );
+      return { centerX: seat.x, centerZ: seat.z, groundY, yaw: seat.yaw };
+    }
+    const frontage = this.frontageOf(entry, instance);
+    const lot = footprintForRotation(entry, instance.rotation);
+    const centerX = (instance.x + lot.w / 2) * TILE_METERS + frontage.centerXM;
+    const centerZ = (instance.z + lot.d / 2) * TILE_METERS + frontage.centerZM;
+    const groundY = maxHeightUnderBody(
+      this.heightAt,
+      centerX,
+      centerZ,
+      base.w,
+      base.d,
+      instance.rotation,
+    );
+    return { centerX, centerZ, groundY, yaw: instance.rotation * (Math.PI / 2) };
+  }
+
+  /** One tier of the body: a box of the stack, seated where the base tier stands. */
+  private writeTier(
+    bucket: Bucket,
+    slot: number,
+    tier: number,
+    box: SetbackBox,
+    instance: BuildingInstance,
+    heightScale: number,
+    seat: { centerX: number; centerZ: number; groundY: number; yaw: number },
+  ): void {
+    const { centerX, centerZ, groundY, yaw } = seat;
+    const h = box.h * heightScale;
+    _position.set(centerX, groundY + box.yOffset * heightScale + h / 2, centerZ);
+    _quaternion.setFromAxisAngle(_yAxis, yaw);
+    _scale.set(box.w, h, box.d);
+    _matrix.compose(_position, _quaternion, _scale);
+    bucket.mesh.setMatrixAt(slot, _matrix);
+    this.writeIdentity(bucket, slot, instance, tier);
+  }
+
+  /**
+   * A farm's body is the walls of its barn — what is picked, outlined and
+   * bulldozed — standing where the farm's plan puts it, on the highest ground
+   * under its own walls rather than under the whole lot.
+   */
+  private writeBarn(
+    bucket: Bucket,
+    slot: number,
+    instance: BuildingInstance,
+    barn: FarmRect,
+    eave: number,
+  ): void {
+    const groundY = maxHeightOverRect(this.heightAt, barn.x0, barn.z0, barn.x1, barn.z1);
+    _position.set((barn.x0 + barn.x1) / 2, groundY + eave / 2, (barn.z0 + barn.z1) / 2);
+    _quaternion.identity();
+    _scale.set(barn.x1 - barn.x0, eave, barn.z1 - barn.z0);
+    _matrix.compose(_position, _quaternion, _scale);
+    bucket.mesh.setMatrixAt(slot, _matrix);
+    this.writeIdentity(bucket, slot, instance, 0);
+  }
+
+  /** Lifecycle tint, picking colour, window seeds and tier for one slot. */
+  private writeIdentity(
+    bucket: Bucket,
+    slot: number,
+    instance: BuildingInstance,
+    tier: number,
+  ): void {
+    const [tr, tg, tb] = tintFor(instance.state);
+    _color.setRGB(tr, tg, tb);
+    bucket.mesh.setColorAt(slot, _color);
+
+    const [r, g, b] = encodeId(instance.id);
+    bucket.idColor[slot * 3] = r / 255;
+    bucket.idColor[slot * 3 + 1] = g / 255;
+    bucket.idColor[slot * 3 + 2] = b / 255;
+
+    bucket.windowSeed.array[slot] = instance.id;
+    bucket.windowActive.array[slot] = isBuildingLitEligible(instance.state) ? 1 : 0;
+    bucket.tier.array[slot] = tier;
+  }
+}

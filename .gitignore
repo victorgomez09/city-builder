@@ -1,2 +1,25 @@
 node_modules/
 dist/
+*.local
+.claude/settings.local.json
+.DS_Store
+
+# Player-supplied music: the folder and its README stay tracked, the audio
+# never is. The game ships no music of its own.
+public/songs/*.mp3
+public/songs/*.wav
+
+# Screenshot / capture-run artifacts from the tools/ visual harnesses.
+# The .mjs capture scripts stay tracked; their PNG/log/txt output does not.
+tools/shots-*/*.png
+tools/shots-*/*.jpg
+tools/shots-*/*.jpeg
+tools/shots-*/*.log
+tools/shots-*/*.txt
+
+# Playwright MCP session artifacts
+.playwright-mcp/
+
+# Reference standards kept locally, not in the repo: the MUTCD alone is 31 MB
+# and a git blob is forever. Drop the PDFs in docs/road-guides/ to consult them.
+docs/road-guides/*.pdf

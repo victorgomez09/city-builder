@@ -1,0 +1,685 @@
+/**
+ * The node/edge graph routing runs on, built from the road network's cells
+ * (src/world/roadnet.ts) rather than from the tile layers: a run follows the
+ * network from one node to the next, and two roads the network does not join
+ * are never one run. Pure logic — no three.js, no DOM.
+ */
+
+import {
+  armsAt,
+  capacityForTier,
+  findPath as runAstar,
+  nearestNode as findNearestNode,
+} from './pathfind';
+import {
+  corridorHalfOf,
+  flowDirection,
+  flowForStep,
+  isStreetTier,
+  RoadFlow,
+  RoadTier,
+  tramCrossingAxes,
+  tramCrossingRoad,
+  type TramCrossingRoad,
+} from '../shared/types';
+import {
+  canGainTurnPocket,
+  corridorHalfProfile,
+  isPresetProfileId,
+  isTramTrack,
+  presetProfileForTier,
+  worldOrderedProfile,
+} from '../shared/roadprofile';
+import { controlFromCode, warrantedControl } from '../shared/junction';
+import { effectiveControlCode, type RoundaboutBlock } from '../shared/roundabout';
+import { ARMS_PER_TILE } from './grid';
+import { cellRoute, cellTile, cellWeight, neighbours, roadCellsOf } from './roadnet';
+import { compactRoundaboutsIn, gridRingReader, shapeRoundabouts } from './roundabouts';
+import type { RoadCells } from './roadnet';
+import type { NetworkTiers, RoadKey } from './roads';
+import type {
+  GraphEdge,
+  GraphNode,
+  GridState,
+  PathResult,
+  RoadClassId,
+  RoadNetworkApi,
+  RoadProfile,
+  TilePoint,
+} from '../shared/types';
+
+const indexOf = (size: number, x: number, z: number): number => z * size + x;
+
+/** Resolves a stored profile id to the cross-section it names, or null. */
+export type ProfileResolver = (id: number) => RoadProfile | null;
+
+const tierOf = (cells: RoadCells, id: number): RoadTier => cells.tier[id] as RoadTier;
+
+/**
+ * What one transport network is made of: the tier it sees each cell as (None
+ * for a cell that is not part of it), and the cells each of its cells links
+ * to. A graph built from one network never links into another. `profileFor`
+ * reads a cell's cross-section, for a network that is told by what a road
+ * carries rather than by its tier.
+ */
+export interface NetworkShape {
+  tier(cells: RoadCells, id: number, profileFor: ProfileResolver): RoadTier;
+  /** The linked cells that belong to this network. Grid steps come first, north, east, south, west. */
+  links(cells: RoadCells, id: number, profileFor: ProfileResolver): number[];
+  /** Whether the network only passes over this cell, which is another road's; absent, it passes over none. */
+  crosses?(cells: RoadCells, id: number, profileFor: ProfileResolver): boolean;
+}
+
+/** A network of whichever tiers `inNetwork` accepts, each cell seen as its own tier. */
+export function tiersShape(inNetwork: NetworkTiers): NetworkShape {
+  const tier = (cells: RoadCells, id: number): RoadTier => {
+    const own = tierOf(cells, id);
+    return own !== RoadTier.None && inNetwork(own) ? own : RoadTier.None;
+  };
+  return {
+    tier,
+    links: (cells, id) =>
+      neighbours(cells, id).filter((next) => tier(cells, next) !== RoadTier.None),
+  };
+}
+
+/** Whether a cell is tram track: a street whose cross-section carries a tram lane. */
+function isTrackCell(cells: RoadCells, id: number, profileFor: ProfileResolver): boolean {
+  return isTramTrack(tierOf(cells, id), profileFor(cells.profile[id] ?? 0));
+}
+
+/**
+ * The two cells a tram crossing links along its crossing axes, or null when
+ * `id` is not a crossing. Only a road on the ground is one: a road off the grid
+ * or up on a deck has no four grid sides to be crossed from.
+ */
+function crossingLinks(cells: RoadCells, id: number, profileFor: ProfileResolver): number[] | null {
+  const n = cells.size * cells.size;
+  if (id >= n) return null;
+  const road = (at: number): TramCrossingRoad =>
+    tramCrossingRoad(tierOf(cells, at), isTrackCell(cells, at, profileFor));
+  const own = road(id);
+  if (own !== 'street') return null;
+  // The grid step each way, N, E, S, W, from a cell on the ground.
+  const step = (from: number, s: number): number =>
+    from < 0 || from >= n ? -1 : cells.next[from * 4 + s]!;
+  const slot = (dx: number, dz: number): number => (dz < 0 ? 0 : dx > 0 ? 1 : dz > 0 ? 2 : 3);
+  const joined = (dx: number, dz: number, steps: 1 | 2): TramCrossingRoad => {
+    const s = slot(dx, dz);
+    let at = step(id, s);
+    if (steps === 2) at = step(at, s);
+    return at < 0 ? 'none' : road(at);
+  };
+  const { alongX, alongZ } = tramCrossingAxes(own, joined);
+  if (!alongX && !alongZ) return null;
+  const out: number[] = [];
+  if (alongZ) out.push(step(id, 0), step(id, 2));
+  if (alongX) out.push(step(id, 1), step(id, 3));
+  return out;
+}
+
+/**
+ * The tram network: tram track — every street whose profile carries a tram
+ * lane — and every street tile a tramway crosses. All of it is seen as the
+ * tram tier, so the network's one predicate admits every edge of it and a run
+ * goes straight over a crossing as one tram edge. A crossing links only to the
+ * track on its own axis, so a tram goes straight on and never turns onto the
+ * street it crosses, which has no track to turn onto.
+ */
+export const tramShape: NetworkShape = {
+  tier: (cells, id, profileFor) =>
+    isTrackCell(cells, id, profileFor) || crossingLinks(cells, id, profileFor)
+      ? RoadTier.Tram
+      : RoadTier.None,
+  links: (cells, id, profileFor) => {
+    const own = crossingLinks(cells, id, profileFor);
+    if (own) return own;
+    if (!isTrackCell(cells, id, profileFor)) return [];
+    return neighbours(cells, id).filter(
+      (next) =>
+        isTrackCell(cells, next, profileFor) ||
+        !!crossingLinks(cells, next, profileFor)?.includes(id),
+    );
+  },
+  crosses: (cells, id, profileFor) => crossingLinks(cells, id, profileFor) !== null,
+};
+
+/**
+ * A road is a node when it's an intersection/endpoint/isolated road (neighbour
+ * count != 2), or — even with exactly 2 neighbours — when its own tier is
+ * strictly higher than at least one neighbour's tier. That second rule places
+ * exactly one node at each straight-through tier boundary (on the higher-tier
+ * side), so edges can carry a single tier each.
+ *
+ * A boundary against a JUNCTION needs no node of its own — the junction is the
+ * boundary. Adding a second one a tile away leaves a one-tile run between them
+ * that is nothing but the seam, and a run with no body has no road to be: a
+ * slip road reaching a street one tile short of the junction would read as the
+ * street, and the junction would be warranted as though no slip road arrived
+ * at it. A dead end or a bend is not a junction and the boundary still stands
+ * on the greater road's side of it.
+ */
+function isNode(
+  cells: RoadCells,
+  tier: RoadTier,
+  links: readonly number[],
+  network: NetworkShape,
+  profileFor: ProfileResolver,
+): boolean {
+  if (links.length !== 2) return true;
+  for (const next of links) {
+    if (network.tier(cells, next, profileFor) >= tier) continue;
+    if (network.links(cells, next, profileFor).length >= 3) continue;
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Which way a run's roads say they were drawn, relative to the walk from node
+ * a to node b: true when the stored flow points along that walk, false when it
+ * points against it, and null when no road of the run ever recorded one — a
+ * road laid before the direction was stored, which leaves its reader to fall
+ * back to the geometry it always used.
+ *
+ * The first road that has an answer gives it, reading the run's own roads
+ * before its ends. An end is a node, and a node where two roads cross holds
+ * the flow of whichever was drawn through it last — the crossing road's, not
+ * this one's. A run is one street between two nodes, so its own roads were
+ * laid by one drag and agree; a run stitched together from two drags is
+ * decided by the end the walk started from.
+ */
+function storedRunDirection(
+  cells: RoadCells,
+  runTiles: readonly TilePoint[],
+  runKeys: readonly RoadKey[],
+): boolean | null {
+  const last = runTiles.length - 1;
+  const interior = Array.from({ length: Math.max(0, last - 1) }, (_, k) => k + 1);
+  const keys = 2 * cells.size * cells.size;
+  for (const i of [...interior, 0]) {
+    const id = runKeys[i]!;
+    // A road off the grid records only whether it runs one way, from its first
+    // node to its second; the walk runs with it when it steps toward the second.
+    if (id >= keys) {
+      if (cells.freeSeg[id - keys]! < 0 || cells.flow[id] !== 1) continue;
+      return cells.freeTowardB[id - keys] === runKeys[i + 1];
+    }
+    const here = runTiles[i]!;
+    const next = runTiles[i + 1]!;
+    // The direction only: the byte also carries which half of a corridor the
+    // road is, and comparing that against a bare RoadFlow never matches.
+    const stored = flowDirection(cells.flow[id] ?? RoadFlow.None);
+    if (stored === RoadFlow.None) continue;
+    const along = flowForStep(next.x - here.x, next.z - here.z);
+    if (along === RoadFlow.None) continue; // defensive: a non-orthogonal step
+    if (stored === along) return true;
+    if (stored === flowForStep(here.x - next.x, here.z - next.z)) return false;
+    // Across the step: a crossing road's flow, which says nothing about this one.
+  }
+  return null;
+}
+
+/**
+ * What a run's own cross-section says about it: the class it belongs to, how
+ * many travel lanes it has, and how those lanes divide between the two
+ * directions of the walk from node a to node b.
+ *
+ * The split is null when the run is the same both ways — which is every road
+ * whose profile says nothing else, and which costs what it always cost. The
+ * profile's own `back` and `fwd` are relative to the direction the road was
+ * drawn in, so the stored direction is what turns them into a-to-b and b-to-a.
+ * A run that never recorded one cannot be told apart, so it is left symmetric
+ * rather than guessed at.
+ */
+function runFacts(
+  cells: RoadCells,
+  runKeys: readonly RoadKey[],
+  forwardAtoB: boolean | null,
+  profileFor: ProfileResolver,
+): {
+  classId: RoadClassId;
+  lanes: number;
+  split: { atoB: number; btoA: number } | null;
+  pocket: { atoB: boolean; btoA: boolean };
+} | null {
+  const mid = runKeys[Math.floor(runKeys.length / 2)];
+  if (mid === undefined) return null;
+  const whole = profileFor(cells.profile[mid] ?? 0);
+  if (!whole) return null;
+  // Half of a corridor carries only its own half of the section, and so only
+  // the lanes on its side of the middle: one direction of a two-way road.
+  // Read as the whole road it would be driven both ways.
+  const stored = cells.flow[mid] ?? 0;
+  const half = corridorHalfOf(stored);
+  const profile =
+    half === 'none' ? whole : corridorHalfProfile(worldOrderedProfile(whole, stored), half);
+  const travel = profile.pieces.filter((p) => p.kind === 'travel');
+  const fwd = travel.filter((p) => p.flow === 'fwd').length;
+  const back = travel.filter((p) => p.flow === 'back').length;
+  const symmetric = fwd === back || forwardAtoB === null;
+  // A driver's own half of the road is the one their direction's lanes are
+  // laid on: the `fwd` side going the way the road was drawn, the `back` side
+  // coming the other way. That is the half a turn pocket would be cut into.
+  const towardB: -1 | 1 = forwardAtoB === false ? -1 : 1;
+  return {
+    classId: profile.class,
+    lanes: travel.length,
+    split: symmetric ? null : forwardAtoB ? { atoB: fwd, btoA: back } : { atoB: back, btoA: fwd },
+    pocket: {
+      atoB: canGainTurnPocket(profile, towardB),
+      btoA: canGainTurnPocket(profile, -towardB as -1 | 1),
+    },
+  };
+}
+
+/**
+ * Records, on each run, the narrower road it drops into at either end.
+ *
+ * A node with exactly two edges is a straight-through boundary between two
+ * kinds of road — the graph puts one there so an edge can carry a single tier
+ * — which is exactly where a lane drop happens. The wide side learns what it
+ * drops into, so the traffic heading that way queues for the road it is going
+ * to rather than the one it is on; the narrow side learns nothing, since a
+ * road widening ahead of you never held anybody up.
+ */
+function markLaneDrops(nodes: readonly GraphNode[], edges: readonly GraphEdge[]): void {
+  for (const node of nodes) {
+    if (node.edges.length !== 2) continue;
+    const first = edges[node.edges[0]!];
+    const second = edges[node.edges[1]!];
+    if (!first || !second) continue;
+    const pair: [GraphEdge, GraphEdge][] = [
+      [first, second],
+      [second, first],
+    ];
+    for (const [edge, other] of pair) {
+      const mine = capacityForTier(edge.tier);
+      const theirs = capacityForTier(other.tier);
+      if (theirs >= mine) continue;
+      if (node.id === edge.b) edge.narrowsAtB = theirs;
+      else edge.narrowsAtA = theirs;
+    }
+  }
+}
+
+interface BuiltGraph {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}
+
+export function buildGraph(
+  cells: RoadCells,
+  network: NetworkShape,
+  profileFor: ProfileResolver,
+): BuiltGraph {
+  const size = cells.size;
+  const tileCount = size * size;
+  // Keyed by cell rather than by tile, so the road passing over a crossing
+  // tile and the road on it are two different things to the graph, and so is
+  // a road off the grid crossing a tile.
+  const nodeIdOf = new Map<number, number>();
+  const nodeKeys: number[] = [];
+  // A graph is built from ONE network's roads: the drivable streets for the
+  // vehicle network, the track for the train one. Everything else is invisible
+  // to it, which is what keeps a car off the rails and a train off the road.
+  // Roads on the ground come first, then the roads passing over them, then the
+  // roads off the grid.
+  for (let id = 0; id < cells.count; id++) {
+    const tier = network.tier(cells, id, profileFor);
+    if (tier === RoadTier.None) continue;
+    if (isNode(cells, tier, network.links(cells, id, profileFor), network, profileFor)) {
+      nodeIdOf.set(id, nodeKeys.length);
+      nodeKeys.push(id);
+    }
+  }
+
+  const tileOf = (id: number): TilePoint => {
+    const idx = cellTile(cells, id);
+    return { x: idx % size, z: Math.floor(idx / size) };
+  };
+  const nodes: GraphNode[] = nodeKeys.map((key, id) => ({ id, ...tileOf(key), edges: [] }));
+
+  const edges: GraphEdge[] = [];
+  const consumedSteps = new Set<number>();
+  const stepKey = (from: number, to: number): number => from * cells.count + to;
+
+  for (const startKey of nodeKeys) {
+    const startId = nodeIdOf.get(startKey)!;
+
+    for (const first of network.links(cells, startKey, profileFor)) {
+      if (consumedSteps.has(stepKey(startKey, first))) continue;
+      consumedSteps.add(stepKey(startKey, first));
+
+      const runKeys: number[] = [startKey];
+      let prev = startKey;
+      let cur = first;
+      const runTier = network.tier(cells, cur, profileFor);
+
+      while (!nodeIdOf.has(cur)) {
+        runKeys.push(cur);
+        const onward = network.links(cells, cur, profileFor).find((next) => next !== prev);
+        if (onward === undefined) break; // defensive: malformed run on inconsistent test data
+        consumedSteps.add(stepKey(cur, onward));
+        prev = cur;
+        cur = onward;
+      }
+      runKeys.push(cur);
+      consumedSteps.add(stepKey(cur, prev));
+
+      const endId = nodeIdOf.get(cur);
+      if (endId === undefined) break; // malformed run terminated without reaching a node
+
+      const runTiles = runKeys.map(tileOf);
+      const edgeId = edges.length;
+      // A grid tile is one tile of road; a road off the grid is as long as
+      // its centre line, so a run's length is the distance a driver covers.
+      const length = runKeys.reduce((sum, id) => sum + cellWeight(cells, id), 0);
+      const route: { x: number; z: number }[] = [];
+      runKeys.forEach((key, i) => {
+        for (const p of cellRoute(cells, key, runKeys[i - 1], runKeys[i + 1])) {
+          const last = route[route.length - 1];
+          if (!last || last.x !== p.x || last.z !== p.z) route.push(p);
+        }
+      });
+      const edge: GraphEdge = {
+        id: edgeId,
+        a: startId,
+        b: endId,
+        tier: runTier,
+        tiles: runTiles,
+        route,
+        length,
+        volume: 0,
+      };
+      const overTiles = runKeys.flatMap((key, i) =>
+        key >= tileCount && key < 2 * tileCount ? [i] : [],
+      );
+      if (overTiles.length > 0) edge.overTiles = overTiles;
+      const stored = storedRunDirection(cells, runTiles, runKeys);
+      if (stored !== null) edge.forwardAtoB = stored;
+      // The run's cross-section is read off its own roads: a crossing the network
+      // sees as its own road still carries the street it belongs to.
+      const ownKeys = runKeys.filter((key) => !network.crosses?.(cells, key, profileFor));
+      const facts = runFacts(cells, ownKeys.length > 0 ? ownKeys : runKeys, stored, profileFor);
+      if (facts) {
+        edge.classId = facts.classId;
+        edge.lanes = facts.lanes;
+        if (facts.split) {
+          edge.lanesAtoB = facts.split.atoB;
+          edge.lanesBtoA = facts.split.btoA;
+        }
+        if (facts.pocket.atoB) edge.pocketAtoB = true;
+        if (facts.pocket.btoA) edge.pocketBtoA = true;
+      }
+      edges.push(edge);
+      nodes[startId]!.edges.push(edgeId);
+      nodes[endId]!.edges.push(edgeId);
+    }
+  }
+
+  markLaneDrops(nodes, edges);
+  return { nodes, edges };
+}
+
+// ---------------------------------------------------------------------------
+// RoadNetworkApi implementation
+// ---------------------------------------------------------------------------
+
+export class RoadNetwork implements RoadNetworkApi {
+  private nodes: GraphNode[] = [];
+  private edges: GraphEdge[] = [];
+  private roundabouts: RoundaboutBlock[] = [];
+  private grid: GridState | null = null;
+  private dirty = false;
+  /**
+   * Optional per-edge pathfind cost multiplier (e.g. a district's
+   * noHeavyTraffic policy), injected by the worker. Null -> no adjustment, so
+   * default routing is unchanged.
+   */
+  private edgeCostHook: ((edge: GraphEdge) => number) | null = null;
+  private profileFor: ProfileResolver | null = null;
+
+  /** A stored profile id as a cross-section: the injected table, else the preset its tier names. */
+  private resolveProfile(id: number): RoadProfile | null {
+    const injected = this.profileFor?.(id);
+    if (injected) return injected;
+    return isPresetProfileId(id) ? presetProfileForTier(id as RoadTier) : null;
+  }
+
+  /**
+   * Which tiers this network is built from. Defaults to the drivable streets,
+   * so an unparameterized instance is the vehicle network it has always been;
+   * `isRailTier` gives the train network off the same implementation. The two
+   * predicates are disjoint, so the graphs never share an edge.
+   */
+  private readonly inNetwork: NetworkTiers;
+  /**
+   * The cells the graph is built from and how they link. Defaults to exactly
+   * the tiers `inNetwork` accepts; the tram network passes `tramShape`, which
+   * also counts the street tiles a tramway crosses.
+   */
+  private readonly shape: NetworkShape;
+
+  /**
+   * Tile index -> the id of the edge whose run covers it. Built lazily, only
+   * when a snap actually needs it, and dropped with the graph. Keeps the
+   * mid-run fallback in nearestNode off the hot path: routing that finds a node
+   * by proximity — nearly all of it — never builds this at all.
+   */
+  private tileEdge: Map<number, number> | null = null;
+
+  constructor(inNetwork: NetworkTiers = isStreetTier, shape: NetworkShape = tiersShape(inNetwork)) {
+    this.inNetwork = inNetwork;
+    this.shape = shape;
+  }
+
+  /** Injects the per-edge cost multiplier; pass null to clear it. */
+  setEdgeCostHook(hook: ((edge: GraphEdge) => number) | null): void {
+    this.edgeCostHook = hook;
+  }
+
+  /**
+   * How a stored profile id becomes a cross-section. A preset resolves from
+   * the catalogue; a player-composed one lives in the save's own table, which
+   * only the worker holds, so it injects this. Without it every road is read
+   * as the preset its tier names, which is what every road was.
+   */
+  setProfileResolver(resolve: ProfileResolver | null): void {
+    this.profileFor = resolve;
+    this.dirty = true;
+  }
+
+  rebuild(grid: GridState): void {
+    this.grid = grid;
+    this.build();
+  }
+
+  /** The version of the grid's road network the graph was built from, if it has one. */
+  private builtFrom: number | null = null;
+
+  /** The graph, rebuilt from the grid's road network. */
+  private build(): void {
+    const grid = this.grid;
+    if (!grid) return;
+    this.builtFrom = grid.roads?.version ?? null;
+    const built = buildGraph(roadCellsOf(grid), this.shape, (id) => this.resolveProfile(id));
+    this.nodes = built.nodes;
+    this.edges = built.edges;
+    this.roundabouts = compactRoundaboutsIn(grid);
+    shapeRoundabouts(this.nodes, this.edges, this.roundabouts);
+    this.tileEdge = null;
+    this.dirty = false;
+    this.refreshControls();
+  }
+
+  /**
+   * Works out who gives way at every junction, from the classes that meet
+   * there and what those arms have been carrying. Called whenever either can
+   * have changed: when the graph is rebuilt, and once a game day when the
+   * volumes decay — which is what makes a control that only a busy junction
+   * warrants appear as the city fills, and go away again when it empties.
+   *
+   * A junction the player has set keeps what they set. The warrant never
+   * argues with a choice, so it is not even worked out for that node.
+   */
+  private refreshControls(): void {
+    const byId = new Map<number, GraphEdge>();
+    for (const edge of this.edges) byId.set(edge.id, edge);
+    const lookup = (id: number): GraphEdge | undefined => byId.get(id);
+    const grid = this.grid;
+    const rings = grid ? gridRingReader(grid) : null;
+    for (const node of this.nodes) {
+      const override = rings ? controlFromCode(effectiveControlCode(node.x, node.z, rings)) : null;
+      // The warrant is worked out either way, so the inspector can say what
+      // handing the junction back to it would mean.
+      node.warranted = warrantedControl(armsAt(node, lookup).map((arm) => arm.approach));
+      node.control = override ?? node.warranted;
+      node.turns = grid ? (grid.junctionTurns[indexOf(grid.size, node.x, node.z)] ?? 0) : 0;
+      // The four arms' per-lane sets, so the router divides a movement's delay
+      // by the lanes that actually serve it rather than by the lanes the
+      // approach would have offered had nobody said otherwise.
+      node.laneTurns = grid
+        ? Array.from(
+            { length: ARMS_PER_TILE },
+            (_, arm) =>
+              grid.junctionLaneTurns[indexOf(grid.size, node.x, node.z) * ARMS_PER_TILE + arm] ?? 0,
+          )
+        : undefined;
+    }
+  }
+
+  /**
+   * Correctness over cleverness: any region edit marks the whole
+   * cached graph dirty; the next query rebuilds it fully from the grid this
+   * network was last (re)built from.
+   */
+  invalidateRegion(_minX: number, _minZ: number, _maxX: number, _maxZ: number): void {
+    this.dirty = true;
+  }
+
+  /**
+   * Rebuilds when an edit has marked the graph dirty, or when the road network
+   * has moved on since the graph was built — which an edit can do after the
+   * graph was already rebuilt for it, since the network takes up each command
+   * once it has run.
+   */
+  private ensureFresh(): void {
+    const version = this.grid?.roads?.version ?? null;
+    if (this.dirty || version !== this.builtFrom) this.build();
+  }
+
+  /** The edge whose run covers this tile, or null if the tile is off-network. */
+  private edgeCovering(x: number, z: number): GraphEdge | null {
+    const grid = this.grid;
+    if (!grid) return null;
+    if (!this.tileEdge) {
+      const index = new Map<number, number>();
+      for (const edge of this.edges) {
+        for (const tile of edge.tiles) index.set(indexOf(grid.size, tile.x, tile.z), edge.id);
+      }
+      this.tileEdge = index;
+    }
+    const id = this.tileEdge.get(indexOf(grid.size, x, z));
+    return id === undefined ? null : (this.edges[id] ?? null);
+  }
+
+  /**
+   * The node a point routes through: the nearest one by proximity, as always.
+   *
+   * Failing that, a point standing ON a run, or on the tile BESIDE one, snaps
+   * to the nearer END of that run. A long junction-free corridor has graph
+   * nodes only at its two ends, so proximity alone calls a stop in the middle
+   * of one off-network however plainly it is standing on the rails — which is
+   * exactly the shape of a dedicated transit corridor, and why a tram or rail
+   * line down one carried nobody. A bus stop never stands on the street at
+   * all but on the kerb tile beside it, so a stop partway down a long block
+   * needs the same fallback through its neighbour.
+   */
+  nearestNode(x: number, z: number): number | null {
+    this.ensureFresh();
+    const near = findNearestNode(this.nodes, x, z);
+    if (near !== null) return near;
+
+    let best: number | null = null;
+    let bestDist = Infinity;
+    const consider = (edge: GraphEdge | null): void => {
+      if (!edge) return;
+      for (const node of [this.nodes[edge.a], this.nodes[edge.b]]) {
+        if (!node) continue;
+        const d = Math.abs(node.x - x) + Math.abs(node.z - z);
+        if (d < bestDist) {
+          bestDist = d;
+          best = node.id;
+        }
+      }
+    };
+    consider(this.edgeCovering(x, z));
+    if (best !== null) return best;
+    for (const [dx, dz] of [
+      [1, 0],
+      [-1, 0],
+      [0, 1],
+      [0, -1],
+    ] as const) {
+      const nx = x + dx;
+      const nz = z + dz;
+      const size = this.grid?.size ?? 0;
+      if (nx < 0 || nz < 0 || nx >= size || nz >= size) continue;
+      consider(this.edgeCovering(nx, nz));
+    }
+    return best;
+  }
+
+  findPath(
+    from: TilePoint,
+    to: TilePoint,
+    edgeCostMultiplier?: (edge: GraphEdge) => number,
+  ): PathResult | null {
+    this.ensureFresh();
+    const hook = this.edgeCostHook;
+    // Compose the district cost hook with the caller's per-trip multiplier so
+    // both apply; either may be absent.
+    const composed =
+      edgeCostMultiplier === undefined
+        ? (hook ?? undefined)
+        : (edge: GraphEdge): number => (hook ? hook(edge) : 1) * edgeCostMultiplier(edge);
+    // Snapping goes through this network's own rule, not the plain proximity
+    // search, so a route between two points standing mid-run still finds them.
+    return runAstar(this.nodes, this.edges, from, to, composed, this.inNetwork, (x, z) =>
+      this.nearestNode(x, z),
+    );
+  }
+
+  addVolume(edgeIds: number[], amount: number): void {
+    this.ensureFresh();
+    for (const id of edgeIds) {
+      const edge = this.edges[id];
+      if (edge) edge.volume += amount;
+    }
+  }
+
+  decayVolumes(factor: number): void {
+    this.ensureFresh();
+    for (const edge of this.edges) {
+      edge.volume *= factor;
+    }
+    this.refreshControls();
+  }
+
+  getEdges(): readonly GraphEdge[] {
+    this.ensureFresh();
+    return this.edges;
+  }
+
+  getNodes(): readonly GraphNode[] {
+    this.ensureFresh();
+    return this.nodes;
+  }
+
+  /** Every compact roundabout the graph was shaped round, by row and then column. */
+  getRoundabouts(): readonly RoundaboutBlock[] {
+    this.ensureFresh();
+    return this.roundabouts;
+  }
+}

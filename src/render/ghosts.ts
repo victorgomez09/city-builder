@@ -1,0 +1,1236 @@
+/**
+ * Tool ghost/preview renderer: translucent quads over the
+ * tiles a tool is about to commit, plus a crisp footprint border frame and
+ * (for ploppables) a volume box. Fully rebuilt on every setPreview() call — a
+ * preview always replaces the whole previewed tile set (there is nothing to
+ * incrementally patch between calls, unlike BuildingInstancer's add/remove
+ * bookkeeping), so growth only ever needs a bigger empty buffer, never data
+ * preservation across a resize.
+ *
+ * base/fill/border/inner are merged, TERRAIN-CONFORMING geometry — every
+ * vertex's Y comes from heightAt sampled at that vertex's OWN (x,z), each
+ * tile/edge further subdivided so mid-tile/mid-edge curvature is followed
+ * too — exactly zonegrid.ts's pushConformingCell/pushConformingQuad pattern
+ * (reimplemented locally here since ghosts.ts owns its own files), so a quad
+ * never buries itself in a rising slope. The plop volume box keeps its rigid
+ * BoxGeometry (a box's vertical sides are *supposed* to stay vertical, not
+ * hug the ground) but samples every footprint corner — not just the center —
+ * for its base height, so it always clears the highest point under it. The
+ * stripe layer (a small road-only dash, already far smaller than a full tile)
+ * stays instanced.
+ *
+ * Six layers (4 merged Mesh + 1 instanced Mesh for the stripe + 1 plain Mesh
+ * for the volume box), all kept in the scene at all times (empty geometry /
+ * count=0 / visible=false when nothing to show — mirrors VehicleRenderer's
+ * always-present, fixed-mesh convention), added in this fixed order:
+ *  - base: one conforming quad per tile. Accent blue for road/plop/bulldoze, a
+ *    darker green "border" shade for zone (see fill below), orange-red
+ *    whenever `valid` is false (overrides every other kind's color).
+ *  - fill: zone only, valid only — a shrunk, brighter-green conforming quad on
+ *    top of the base layer so the base peeks out as a darker cell border
+ *    ("bright green cell fill with darker cell borders").
+ *  - stripe: road only, valid only — a thin white dash on every other tile
+ *    along the path (deterministic index-parity dashing, oriented along
+ *    whichever local axis the path actually runs on). Still instanced.
+ *  - border: a crisp ~0.18m-wide conforming frame around the
+ *    previewed tile set's OUTER perimeter only — edges shared with another
+ *    previewed tile are skipped (see computeFootprintEdges), so a solid block
+ *    reads as ONE bordered shape, a ribbon as one outline, and a
+ *    scattered/ringed set (e.g. a terraform brush ring) as automatic per-tile
+ *    outlines. White 90% when valid, danger red when invalid — on EVERY
+ *    kind, unlike the kind-tinted base layer.
+ *  - inner: the same edge geometry, but drawn on every edge SHARED
+ *    between two previewed tiles instead (faint 25%), so multi-tile
+ *    footprints keep a readable tile count under the solid outer border.
+ *    Same white/red validity switch as border (kind-agnostic, "invalid"
+ *    overrides everything else, mirroring baseColorFor's precedent),
+ *    differing only in opacity.
+ *  - volume (additive): ONE translucent box — never instanced, there
+ *    is only ever one live preview — sized to a ploppable's true footprint ×
+ *    height, shown only when setPreview's `opts.volume` is supplied (plop
+ *    tools only; road/zone/bulldoze/terraform previews never pass it, so
+ *    they stay flat frames). Accent blue ~22%, red-tinted
+ *    when invalid.
+ */
+import * as THREE from 'three';
+import type { TilePoint, ZoneType } from '../shared/types';
+import { TILE_METERS } from '../shared/constants';
+import { zoneTintColor } from './zonegrid';
+
+export type GhostKind = 'road' | 'zone' | 'plop' | 'bulldoze';
+
+const INITIAL_CAPACITY = 64;
+
+const GHOST_Y_OFFSET = 0.2;
+const ZONE_FILL_Y_OFFSET = 0.21;
+const STRIPE_Y_OFFSET = 0.22;
+const BORDER_Y_OFFSET = 0.23;
+const INNER_GRID_Y_OFFSET = 0.24;
+/** The plop-volume box's bottom face sits flush with the base ghost quad's plane. */
+const VOLUME_Y_OFFSET = GHOST_Y_OFFSET;
+
+const ZONE_FILL_SHRINK = 0.8; // reveals the darker base layer as a border ring
+const ZONE_BORDER_DARKEN = 0.55; // base-layer shade under the zone fill
+
+const STRIPE_PERIOD = 2; // every other path tile carries a dash (deterministic)
+const STRIPE_LENGTH_FRACTION = 0.6;
+
+// --- Flow arrows -------------------------------------------------------------
+// Shown only while dragging a road that actually has a direction (one-way,
+// highway), so the player can see which way traffic will run BEFORE committing
+// — a one-way laid backwards is otherwise only obvious once cars are on it.
+// They live in the preview layer, so they vanish with the rest of the ghost the
+// moment placement ends.
+const ARROW_Y_OFFSET = 0.26; // just above the stripe dashes
+const ARROW_PERIOD = 2; // an arrow every other path tile
+const ARROW_LENGTH_FRACTION = 0.5;
+const ARROW_WIDTH_FRACTION = 0.34;
+const ARROW_OPACITY = 0.55;
+const ARROW_COLOR = 0xffffff;
+const STRIPE_WIDTH_FRACTION = 0.08;
+
+const BASE_OPACITY = 0.55; // "valid = blue 55%"
+const ZONE_FILL_OPACITY = 0.65;
+const STRIPE_OPACITY = 0.9;
+/** "A bright 2-px-feel border quad strip ... ~0.18m wide". */
+const BORDER_WIDTH_METERS = 0.18;
+/** "White at 90% when valid". */
+const BORDER_OPACITY = 0.9;
+/** "Faint (25%) per-tile division lines". */
+const INNER_GRID_OPACITY = 0.25;
+/** Accent blue ~22%, kept distinct from the 25% inner grid lines so the
+ * volume box reads as its own opacity. */
+const VOLUME_OPACITY = 0.22;
+
+/** One quad per tile: its corners land on the terrain mesh's own vertices and
+ * pushConformingQuad splits on the terrain's diagonal, so the ghost matches the
+ * ground surface + yOffset. Finer subdivision would sample bilinear heights
+ * that dip under the terrain's flat triangles and let land poke through. */
+export const GHOST_CELL_SUBDIV = 1;
+/** Length-axis sub-segments per border/inner edge strip (mirrors
+ * zonegrid.ts's pushEdgeStrip 2-segment split) — the strip's own midpoint
+ * also tracks the terrain, not just its two ends. */
+export const GHOST_EDGE_LENGTH_SUBDIV = 2;
+
+/** Vertices one tile's conforming base/fill quad contributes. */
+export const VERTS_PER_GHOST_CELL = GHOST_CELL_SUBDIV * GHOST_CELL_SUBDIV * 6;
+/** Vertices one border/inner edge segment contributes. */
+export const VERTS_PER_GHOST_EDGE = GHOST_EDGE_LENGTH_SUBDIV * 6;
+
+/** Style tokens, converted to 0..1 RGB (no colorSpace conversion —
+ * material.color is set via setRGB so these pass through unmodified, matching
+ * how buildings.ts's instance tinting works). Exported for direct testing. */
+export function hexToRgb01(hex: number): [number, number, number] {
+  return [((hex >> 16) & 0xff) / 255, ((hex >> 8) & 0xff) / 255, (hex & 0xff) / 255];
+}
+
+const WHITE_RGB: readonly [number, number, number] = [1, 1, 1];
+const ACCENT_RGB = hexToRgb01(0x38b6e3); // accent
+const ZONE_FILL_RGB = hexToRgb01(0x5dd06b); // positive
+const INVALID_RGB = hexToRgb01(0xe5533f); // danger
+const STRIPE_RGB = WHITE_RGB;
+
+function darken(rgb: readonly [number, number, number], factor: number): [number, number, number] {
+  return [rgb[0] * factor, rgb[1] * factor, rgb[2] * factor];
+}
+
+const ZONE_BORDER_RGB = darken(ZONE_FILL_RGB, ZONE_BORDER_DARKEN);
+
+/**
+ * Base-layer color for `kind` at the given validity. Zone previews take the
+ * painted zone's own RCI tint (R green / C blue / I orange — the same
+ * `zoneTintColor` the placed tiles use) so the ghost reads as the zone you're
+ * about to paint, not a generic green; falls back to the generic zone green
+ * when no specific zone is supplied (e.g. de-zone). Pure and exported for tests.
+ */
+export function baseColorFor(
+  kind: GhostKind,
+  valid: boolean,
+  zone?: ZoneType,
+): readonly [number, number, number] {
+  if (!valid) return INVALID_RGB;
+  if (kind === 'zone') {
+    const tint = zone != null ? zoneTintColor(zone) : null;
+    return tint ? darken(tint, ZONE_BORDER_DARKEN) : ZONE_BORDER_RGB;
+  }
+  return ACCENT_RGB;
+}
+
+/** Fill-layer color for a zone preview: the zone's own RCI tint, or the generic zone green when unspecified. Pure and exported for tests. */
+export function fillColorFor(zone?: ZoneType): readonly [number, number, number] {
+  const tint = zone != null ? zoneTintColor(zone) : null;
+  return tint ?? ZONE_FILL_RGB;
+}
+
+/**
+ * Border/inner-grid frame color: white when valid, the same
+ * danger red as the base layer when invalid. Unlike baseColorFor, this is
+ * kind-agnostic — every kind of preview shares one frame color. Pure and
+ * exported for tests.
+ */
+export function frameColorFor(valid: boolean): readonly [number, number, number] {
+  return valid ? WHITE_RGB : INVALID_RGB;
+}
+
+/** Plop-volume box color: accent blue when valid, danger red when invalid.
+ * Pure and exported for tests. */
+export function volumeColorFor(valid: boolean): readonly [number, number, number] {
+  return valid ? ACCENT_RGB : INVALID_RGB;
+}
+
+/**
+ * Whether the dash at path index `i` should be elongated along X (true) or Z
+ * (false), inferred from its neighbors in the path: an L-path corner tile
+ * defaults to X. Pure and exported for tests.
+ */
+export function stripeAxisIsX(tiles: readonly TilePoint[], i: number): boolean {
+  const cur = tiles[i];
+  if (!cur) return true;
+  // Only a tile the road actually continues into says which way this one runs.
+  // A corridor is TWO runs in one list, so the tile after the last of the
+  // first run is the first of the second — a whole row away, and no evidence
+  // of anything. Reading it as a neighbour turns every carriageway sideways.
+  const adjacent = (t: TilePoint | undefined): t is TilePoint =>
+    t !== undefined && Math.abs(t.x - cur.x) + Math.abs(t.z - cur.z) === 1;
+  const prev = tiles[i - 1];
+  const next = tiles[i + 1];
+  if (adjacent(prev) && prev.z !== cur.z) return false;
+  if (adjacent(next) && next.z !== cur.z) return false;
+  return true;
+}
+
+type HeightSampler = (x: number, z: number) => number;
+
+/**
+ * How far outside its run a deck preview still reaches, metres: past the frame
+ * straddling the run's edge, and past the widest section previewed before it
+ * is refused, which overhangs its tile by a little over 3 m.
+ */
+const DECK_EDGE_REACH_M = 4;
+
+/**
+ * The height a road preview stands at, where tiles of it are laid off the
+ * ground: `lifts[i]` metres above the ground at the centre of `tiles[i]`.
+ * Along the run the deck slopes from each tile's centre to the height halfway
+ * to the next, so ramps climb smoothly and two tiles meet at one height on
+ * their shared edge. A tile on the ground next to one lifted slopes with it;
+ * everywhere else the preview follows `ground`. A tile where the run turns
+ * stands level. A point just outside the run — the frame straddling its
+ * edge, a band wider than its tile — belongs to the run tile beside it, or it
+ * would be pulled down to the ground and hang a wall off the deck. Pure and
+ * exported for tests.
+ */
+export function deckHeightSampler(
+  tiles: readonly TilePoint[],
+  lifts: readonly number[],
+  ground: HeightSampler,
+): HeightSampler {
+  const key = (x: number, z: number): number => x * 65536 + z;
+  const at = new Map<number, number>();
+  tiles.forEach((t, i) => at.set(key(t.x, t.z), i));
+  const deckY = tiles.map(
+    (t, i) => ground((t.x + 0.5) * TILE_METERS, (t.z + 0.5) * TILE_METERS) + (lifts[i] ?? 0),
+  );
+  const adjacent = (i: number, j: number): boolean => {
+    const a = tiles[i];
+    const b = tiles[j];
+    return a !== undefined && b !== undefined && Math.abs(a.x - b.x) + Math.abs(a.z - b.z) === 1;
+  };
+  const raised = (i: number): boolean => (lifts[i] ?? 0) > 0;
+  const onDeck = tiles.map(
+    (_, i) =>
+      raised(i) || (adjacent(i, i - 1) && raised(i - 1)) || (adjacent(i, i + 1) && raised(i + 1)),
+  );
+  const tileOf = (x: number, z: number): number | undefined =>
+    at.get(key(Math.floor(x / TILE_METERS), Math.floor(z / TILE_METERS)));
+  const runTileNear = (x: number, z: number): number | undefined => {
+    const own = tileOf(x, z);
+    if (own !== undefined) return own;
+    for (const dx of [0, -DECK_EDGE_REACH_M, DECK_EDGE_REACH_M]) {
+      for (const dz of [0, -DECK_EDGE_REACH_M, DECK_EDGE_REACH_M]) {
+        const near = tileOf(x + dx, z + dz);
+        if (near !== undefined) return near;
+      }
+    }
+    return undefined;
+  };
+  return (x, z) => {
+    const i = runTileNear(x, z);
+    if (i === undefined || !onDeck[i]) return ground(x, z);
+    if (isPathCorner(tiles, i)) return deckY[i]!;
+    const t = tiles[i]!;
+    const alongX = stripeAxisIsX(tiles, i);
+    // -0.5 at the tile's back edge along the run, +0.5 at its front edge.
+    const u = alongX ? x / TILE_METERS - (t.x + 0.5) : z / TILE_METERS - (t.z + 0.5);
+    const toward = u >= 0 ? 1 : -1;
+    const j = [i - 1, i + 1].find(
+      (n) =>
+        adjacent(i, n) && (alongX ? tiles[n]!.x - t.x === toward : tiles[n]!.z - t.z === toward),
+    );
+    const edge = j === undefined ? deckY[i]! : (deckY[i]! + deckY[j]!) / 2;
+    return deckY[i]! + (edge - deckY[i]!) * Math.min(1, Math.abs(u) * 2);
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Terrain-conforming geometry helpers (mirrors zonegrid.ts's
+// pushConformingQuad/pushConformingCell — reimplemented locally since
+// ghosts.ts owns only its own files).
+// ---------------------------------------------------------------------------
+
+/**
+ * Two triangles covering the quad (x0,z0)-(x1,z1), every corner's y sampled
+ * independently through `heightAt` + yOffset so the quad follows the terrain
+ * contour instead of a single flat plane. CCW from +Y.
+ */
+function pushConformingQuad(
+  positions: number[],
+  heightAt: HeightSampler,
+  x0: number,
+  z0: number,
+  x1: number,
+  z1: number,
+  yOffset: number,
+): void {
+  const y00 = heightAt(x0, z0) + yOffset;
+  const y10 = heightAt(x1, z0) + yOffset;
+  const y11 = heightAt(x1, z1) + yOffset;
+  const y01 = heightAt(x0, z1) + yOffset;
+  // Split on the (x0,z1)-(x1,z0) diagonal to match the terrain PlaneGeometry's
+  // triangulation, so the ghost reproduces the ground surface + yOffset
+  // instead of the bilinear surface cutting under it.
+  positions.push(x0, y00, z0, x0, y01, z1, x1, y10, z0);
+  positions.push(x0, y01, z1, x1, y11, z1, x1, y10, z0);
+}
+
+/**
+ * Merged, TERRAIN-CONFORMING position array for a set of ghost tiles (base or
+ * zone-fill): each tile is a `size`x`size` footprint centered on the tile
+ * center, split on the terrain's own triangle diagonal so it sits a constant
+ * offset above the rendered ground. Pure, exported for direct testing of the
+ * "never clips below its own terrain height" guarantee.
+ */
+export function buildConformingTilePositions(
+  tiles: readonly TilePoint[],
+  heightAt: HeightSampler,
+  size: number,
+  yOffset: number,
+): Float32Array {
+  const positions: number[] = [];
+  const half = size / 2;
+  const step = size / GHOST_CELL_SUBDIV;
+  for (const t of tiles) {
+    const centerX = (t.x + 0.5) * TILE_METERS;
+    const centerZ = (t.z + 0.5) * TILE_METERS;
+    const x0 = centerX - half;
+    const z0 = centerZ - half;
+    for (let sz = 0; sz < GHOST_CELL_SUBDIV; sz++) {
+      for (let sx = 0; sx < GHOST_CELL_SUBDIV; sx++) {
+        const cx0 = x0 + sx * step;
+        const cz0 = z0 + sz * step;
+        pushConformingQuad(positions, heightAt, cx0, cz0, cx0 + step, cz0 + step, yOffset);
+      }
+    }
+  }
+  return new Float32Array(positions);
+}
+
+/** One terrain-conforming rectangle, subdivided so mid-rect curvature is followed too. */
+function pushConformingRect(
+  positions: number[],
+  heightAt: HeightSampler,
+  x0: number,
+  z0: number,
+  x1: number,
+  z1: number,
+  yOffset: number,
+): void {
+  if (x1 - x0 <= 1e-6 || z1 - z0 <= 1e-6) return;
+  const stepX = (x1 - x0) / GHOST_CELL_SUBDIV;
+  const stepZ = (z1 - z0) / GHOST_CELL_SUBDIV;
+  for (let sz = 0; sz < GHOST_CELL_SUBDIV; sz++) {
+    for (let sx = 0; sx < GHOST_CELL_SUBDIV; sx++) {
+      const cx0 = x0 + sx * stepX;
+      const cz0 = z0 + sz * stepZ;
+      pushConformingQuad(positions, heightAt, cx0, cz0, cx0 + stepX, cz0 + stepZ, yOffset);
+    }
+  }
+}
+
+/**
+ * Whether the tile at `i` is where an L-path turns: the tiles either side of
+ * it lie on different rows AND different columns, so the road changes axis
+ * here and the band has to cover both.
+ */
+export function isPathCorner(tiles: readonly TilePoint[], i: number): boolean {
+  const cur = tiles[i];
+  const prev = tiles[i - 1];
+  const next = tiles[i + 1];
+  if (!cur || !prev || !next) return false;
+  // Both sides have to be tiles the road runs into, or the gap between a
+  // corridor's two runs reads as a turn and gets an L-shaped band.
+  const adjacent = (t: TilePoint): boolean => Math.abs(t.x - cur.x) + Math.abs(t.z - cur.z) === 1;
+  if (!adjacent(prev) || !adjacent(next)) return false;
+  return prev.x !== next.x && prev.z !== next.z;
+}
+
+/**
+ * Where a road preview's band is centred on the tile at `i`, world metres: the
+ * tile's centre, moved `shifts[i]` metres across the way the run goes, toward
+ * the higher coordinate. A corridor with nothing dividing it has each half
+ * pushed against the edge the two share. Pure and exported for tests.
+ */
+export function bandCentre(
+  tiles: readonly TilePoint[],
+  i: number,
+  shifts?: readonly number[],
+): { x: number; z: number } {
+  const t = tiles[i]!;
+  const x = (t.x + 0.5) * TILE_METERS;
+  const z = (t.z + 0.5) * TILE_METERS;
+  const s = shifts?.[i] ?? 0;
+  if (s === 0 || isPathCorner(tiles, i)) return { x, z };
+  return stripeAxisIsX(tiles, i) ? { x, z: z + s } : { x: x + s, z };
+}
+
+/**
+ * Merged, TERRAIN-CONFORMING positions for a road preview drawn at its REAL
+ * width: a band `widthMeters` across, running the full tile length along
+ * whichever axis the path takes, rather than a tile-sized square. What the
+ * player is choosing is a cross-section, and drawn tile-sized every road reads
+ * the same width as every other — so nothing on screen says an avenue is twice
+ * the street it is about to replace until it is already laid.
+ *
+ * The band is NOT clipped to the tile. No road the game will lay overruns one
+ * (a section too wide becomes a corridor, and each of its carriageways fits a
+ * tile of its own), so clipping would change nothing for a valid preview — but
+ * a composition too wide to lay is previewed before it is refused, and seeing
+ * it overhang is the clearest statement of why.
+ *
+ * A turn tile is covered by both axes, with the second band's overlap with the
+ * first trimmed away so the translucent quads never double up and darken the
+ * corner.
+ */
+export function buildConformingRoadBandPositions(
+  tiles: readonly TilePoint[],
+  heightAt: HeightSampler,
+  widthMeters: number,
+  yOffset: number,
+  shifts?: readonly number[],
+): Float32Array {
+  const positions: number[] = [];
+  const half = TILE_METERS / 2;
+  const w2 = Math.max(widthMeters, 0) / 2;
+  for (let i = 0; i < tiles.length; i++) {
+    const corner = isPathCorner(tiles, i);
+    const alongX = corner || stripeAxisIsX(tiles, i);
+    const { x: cx, z: cz } = bandCentre(tiles, i, shifts);
+    if (alongX) {
+      pushConformingRect(positions, heightAt, cx - half, cz - w2, cx + half, cz + w2, yOffset);
+    } else {
+      pushConformingRect(positions, heightAt, cx - w2, cz - half, cx + w2, cz + half, yOffset);
+    }
+    // The other leg of a turn, minus what the first band already covers.
+    if (corner && w2 < half) {
+      pushConformingRect(positions, heightAt, cx - w2, cz - half, cx + w2, cz - w2, yOffset);
+      pushConformingRect(positions, heightAt, cx - w2, cz + w2, cx + w2, cz + half, yOffset);
+    }
+  }
+  return new Float32Array(positions);
+}
+
+/**
+ * Merged, TERRAIN-CONFORMING position array for the border/inner-grid
+ * edge strips: each segment is split into GHOST_EDGE_LENGTH_SUBDIV
+ * length-wise sub-quads (its own midpoint tracks the terrain too, matching
+ * zonegrid.ts's pushEdgeStrip). Pure, exported for direct testing.
+ */
+export function buildConformingEdgePositions(
+  edges: readonly GhostEdgeSegment[],
+  heightAt: HeightSampler,
+  yOffset: number,
+): Float32Array {
+  const positions: number[] = [];
+  for (const seg of edges) {
+    const { sizeX, sizeZ } = edgeQuadSize(seg);
+    const x0 = seg.cx - sizeX / 2;
+    const z0 = seg.cz - sizeZ / 2;
+    if (seg.alongX) {
+      const step = sizeX / GHOST_EDGE_LENGTH_SUBDIV;
+      for (let i = 0; i < GHOST_EDGE_LENGTH_SUBDIV; i++) {
+        pushConformingQuad(
+          positions,
+          heightAt,
+          x0 + i * step,
+          z0,
+          x0 + (i + 1) * step,
+          z0 + sizeZ,
+          yOffset,
+        );
+      }
+    } else {
+      const step = sizeZ / GHOST_EDGE_LENGTH_SUBDIV;
+      for (let i = 0; i < GHOST_EDGE_LENGTH_SUBDIV; i++) {
+        pushConformingQuad(
+          positions,
+          heightAt,
+          x0,
+          z0 + i * step,
+          x0 + sizeX,
+          z0 + (i + 1) * step,
+          yOffset,
+        );
+      }
+    }
+  }
+  return new Float32Array(positions);
+}
+
+// ---------------------------------------------------------------------------
+// Footprint edge math (border + inner grid)
+// ---------------------------------------------------------------------------
+
+/**
+ * One tile-edge-length segment of the frame, in world space.
+ * `alongX`: true = the segment's long axis runs along world X (a
+ * north/south-facing tile edge, i.e. the boundary between tiles stacked
+ * along Z); false = long axis along world Z (an east/west-facing edge).
+ */
+export interface GhostEdgeSegment {
+  cx: number;
+  cz: number;
+  alongX: boolean;
+}
+
+export interface FootprintEdges {
+  /** Every tile edge whose neighboring tile is NOT also in the previewed set. */
+  outer: GhostEdgeSegment[];
+  /** Every tile edge shared between two previewed tiles, once per shared edge. */
+  inner: GhostEdgeSegment[];
+}
+
+function tileKey(x: number, z: number): string {
+  return `${x},${z}`;
+}
+
+/**
+ * Per-tile-edge segments for the border frame: `outer` covers the
+ * previewed tile set's true perimeter — one segment per remaining tile edge
+ * (not merged into whole-side runs; adjoining segments simply butt up
+ * edge-to-edge, one per remaining edge segment) — so a solid NxM block, a
+ * 1-wide ribbon, or a scattered/holey set
+ * (e.g. a terraform brush ring) all get their true outline automatically,
+ * with no shape-specific logic. `inner` covers every edge shared between two
+ * previewed tiles, emitted exactly once per shared edge: only each tile's
+ * East/South neighbor is checked for the inner set, since that already
+ * covers the reverse West/North pair from the other side.
+ *
+ * Pure — no THREE, no y-offset — so it's plain, fast geometry math, testable
+ * standalone and shared by both the border and inner-grid layers (they
+ * differ only in material). The RESULT (which edges land in outer vs inner)
+ * depends only on which tiles are present, never on the input array's order.
+ */
+export function computeFootprintEdges(tiles: readonly TilePoint[]): FootprintEdges {
+  const set = new Set<string>();
+  for (const t of tiles) set.add(tileKey(t.x, t.z));
+
+  const outer: GhostEdgeSegment[] = [];
+  const inner: GhostEdgeSegment[] = [];
+
+  for (const t of tiles) {
+    const { x, z } = t;
+    const minX = x * TILE_METERS;
+    const maxX = minX + TILE_METERS;
+    const minZ = z * TILE_METERS;
+    const maxZ = minZ + TILE_METERS;
+    const cx = minX + TILE_METERS / 2;
+    const cz = minZ + TILE_METERS / 2;
+
+    const hasNorth = set.has(tileKey(x, z - 1));
+    const hasSouth = set.has(tileKey(x, z + 1));
+    const hasEast = set.has(tileKey(x + 1, z));
+    const hasWest = set.has(tileKey(x - 1, z));
+
+    if (!hasNorth) outer.push({ cx, cz: minZ, alongX: true });
+    if (!hasSouth) outer.push({ cx, cz: maxZ, alongX: true });
+    if (!hasWest) outer.push({ cx: minX, cz, alongX: false });
+    if (!hasEast) outer.push({ cx: maxX, cz, alongX: false });
+
+    // Dedup shared inner edges: only ever emitted from a tile's East/South
+    // side, so each physical shared edge appears exactly once.
+    if (hasEast) inner.push({ cx: maxX, cz, alongX: false });
+    if (hasSouth) inner.push({ cx, cz: maxZ, alongX: true });
+  }
+
+  return { outer, inner };
+}
+
+/** Border/inner-grid quad size (meters) for a segment's orientation. */
+function edgeQuadSize(seg: GhostEdgeSegment): { sizeX: number; sizeZ: number } {
+  return seg.alongX
+    ? { sizeX: TILE_METERS, sizeZ: BORDER_WIDTH_METERS }
+    : { sizeX: BORDER_WIDTH_METERS, sizeZ: TILE_METERS };
+}
+
+// ---------------------------------------------------------------------------
+// Plop volume ghost
+// ---------------------------------------------------------------------------
+
+/** The side of the square marking each point a curve has been clicked at, metres. */
+const CLICK_MARK_M = 3;
+
+/**
+ * Triangles covering the band between offsets `from` and `to` (metres, to the
+ * right of the line's direction) along a polyline, each vertex set on the
+ * ground plus `lift`, wound to face up.
+ */
+export function buildBandPositions(
+  line: readonly { x: number; z: number }[],
+  from: number,
+  to: number,
+  heightAt: HeightSampler,
+  lift: number,
+): Float32Array {
+  if (line.length < 2) return new Float32Array(0);
+  const normals = line.map((_, i) => {
+    const p = line[Math.max(0, i - 1)]!;
+    const q = line[Math.min(line.length - 1, i + 1)]!;
+    const len = Math.hypot(q.x - p.x, q.z - p.z) || 1;
+    return { x: -(q.z - p.z) / len, z: (q.x - p.x) / len };
+  });
+  const out: number[] = [];
+  const v = (i: number, o: number): number[] => {
+    const x = line[i]!.x + normals[i]!.x * o;
+    const z = line[i]!.z + normals[i]!.z * o;
+    return [x, heightAt(x, z) + lift, z];
+  };
+  for (let i = 0; i < line.length - 1; i++) {
+    const a = v(i, from);
+    const b = v(i, to);
+    const c = v(i + 1, to);
+    const d = v(i + 1, from);
+    // Offsets grow to the right of travel, so a, b, c turns the way that
+    // faces up under three.js's right-handed axes.
+    out.push(...a, ...b, ...c, ...a, ...c, ...d);
+  }
+  return Float32Array.from(out);
+}
+
+function concat(...parts: Float32Array[]): Float32Array {
+  const out = new Float32Array(parts.reduce((n, p) => n + p.length, 0));
+  let o = 0;
+  for (const p of parts) {
+    out.set(p, o);
+    o += p.length;
+  }
+  return out;
+}
+
+/** `setPreview`'s additive volume option: a ploppable's true
+ * footprint (tiles) × height (meters), anchored at its origin (min-x/min-z) tile. */
+export interface GhostVolume {
+  w: number;
+  d: number;
+  heightMeters: number;
+  originTile: TilePoint;
+}
+
+export interface SetPreviewOptions {
+  volume?: GhostVolume;
+  /** Zone being painted — colors the base + fill layers to match the placed tiles (zone kind only). */
+  zone?: ZoneType;
+  /**
+   * Draw translucent arrows along the path, pointing the way the drag ran.
+   * For road tiers where direction is real — one-way streets and highways.
+   */
+  flowArrows?: boolean;
+  /**
+   * The road's real cross-section width in metres (road kind only). Given, the
+   * base layer draws a band that wide instead of filling the tile, so the
+   * player sees the road they are about to lay rather than the squares it will
+   * occupy.
+   */
+  roadWidthMeters?: number;
+  /**
+   * How high above its ground each tile is laid, metres (road kind only), for
+   * a road that stands off the ground somewhere along it. Given, every layer
+   * is drawn at the deck (see deckHeightSampler) instead of on the terrain.
+   */
+  deckLifts?: readonly number[];
+  /**
+   * How far across its run each tile's band is drawn from the tile's centre,
+   * metres toward the higher coordinate (road kind only). The band, its
+   * dashes and its arrows all move with it.
+   */
+  roadBandShifts?: readonly number[];
+}
+
+/**
+ * Yaw that aims a +X-pointing arrow down the path at `index`. A rotation of θ
+ * about Y sends local +X to (cos θ, 0, −sin θ), so the heading to the next tile
+ * inverts to θ = atan2(−dz, dx). The last tile of a run has no next tile and
+ * reuses the heading into it, which keeps the final arrow from snapping to a
+ * default. A corridor is two runs in one list, so the tile after its first run's
+ * last is a row away and is no next tile.
+ */
+export function arrowYaw(tiles: readonly TilePoint[], index: number): number {
+  const cur = tiles[index]!;
+  const adjacent = (t: TilePoint | undefined): t is TilePoint =>
+    t !== undefined && Math.abs(t.x - cur.x) + Math.abs(t.z - cur.z) === 1;
+  const next = tiles[index + 1];
+  const prev = tiles[index - 1];
+  const [from, to] = adjacent(next) ? [cur, next] : adjacent(prev) ? [prev, cur] : [cur, cur];
+  const dx = to.x - from.x;
+  const dz = to.z - from.z;
+  if (dx === 0 && dz === 0) return 0;
+  return Math.atan2(-dz, dx);
+}
+
+export interface VolumeBoxTransform {
+  centerX: number;
+  centerZ: number;
+  scaleX: number;
+  scaleY: number;
+  scaleZ: number;
+}
+
+/**
+ * Pure: world-space footprint-center X/Z and box scale for the plop
+ * volume ghost. Negative w/d/heightMeters clamp to zero (mirrors outline.ts's
+ * outlineBoxSize), so the result is always a valid, non-inverted box. The
+ * box's Y-position isn't computed here since it needs an (impure) terrain
+ * height sample at the footprint's corners — left to the caller.
+ */
+export function volumeBoxTransform(volume: GhostVolume): VolumeBoxTransform {
+  const w = Math.max(0, volume.w);
+  const d = Math.max(0, volume.d);
+  const heightMeters = Math.max(0, volume.heightMeters);
+  return {
+    centerX: (volume.originTile.x + w / 2) * TILE_METERS,
+    centerZ: (volume.originTile.z + d / 2) * TILE_METERS,
+    scaleX: w * TILE_METERS,
+    scaleY: heightMeters,
+    scaleZ: d * TILE_METERS,
+  };
+}
+
+const _matrix = new THREE.Matrix4();
+const _position = new THREE.Vector3();
+const _scale = new THREE.Vector3();
+const IDENTITY_QUAT = new THREE.Quaternion();
+const _quat = new THREE.Quaternion();
+const _yAxis = new THREE.Vector3(0, 1, 0);
+
+/**
+ * A flat chevron lying in the XZ plane, pointing along +X, sized in tile
+ * fractions so the instance scale is just TILE_METERS. Two triangles: the head
+ * and a short tail, which reads as an arrow at a glance where a bare triangle
+ * reads as a wedge.
+ */
+function buildArrowGeometry(): THREE.BufferGeometry {
+  const half = ARROW_LENGTH_FRACTION / 2;
+  const wing = ARROW_WIDTH_FRACTION / 2;
+  const tailWing = wing * 0.4;
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute(
+    'position',
+    new THREE.Float32BufferAttribute(
+      [
+        // Head: apex forward, two barbs back.
+        half,
+        0,
+        0,
+        -half * 0.1,
+        0,
+        -wing,
+        -half * 0.1,
+        0,
+        wing,
+        // Tail: a narrow strip running back from the barbs.
+        -half * 0.1,
+        0,
+        -tailWing,
+        -half,
+        0,
+        -tailWing,
+        -half,
+        0,
+        tailWing,
+        -half * 0.1,
+        0,
+        -tailWing,
+        -half,
+        0,
+        tailWing,
+        -half * 0.1,
+        0,
+        tailWing,
+      ],
+      3,
+    ),
+  );
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+/** A BufferGeometry with a zero-length position attribute already attached,
+ * so callers can inspect `.getAttribute('position').count` even before the
+ * first setPreview() call. */
+function emptyGeometry(): THREE.BufferGeometry {
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(0), 3));
+  return geometry;
+}
+
+export class GhostRenderer {
+  private readonly scene: THREE.Scene;
+  /** The terrain. */
+  private readonly ground: HeightSampler;
+  /** What the current preview is drawn on: the terrain, or a road's deck. */
+  private heightAt: HeightSampler;
+  /** How far across its run each tile of the current road preview is drawn. */
+  private bandShifts: readonly number[] | undefined;
+  private readonly quad: THREE.PlaneGeometry;
+  private readonly volumeGeometry: THREE.BoxGeometry;
+
+  private readonly baseMaterial: THREE.MeshBasicMaterial;
+  private readonly fillMaterial: THREE.MeshBasicMaterial;
+  private readonly stripeMaterial: THREE.MeshBasicMaterial;
+  private readonly borderMaterial: THREE.MeshBasicMaterial;
+  private readonly innerMaterial: THREE.MeshBasicMaterial;
+  private readonly volumeMaterial: THREE.MeshBasicMaterial;
+
+  /** Merged, terrain-conforming layers: rebuilt as a fresh BufferGeometry
+   * every setPreview() call, so there is no instance "capacity" to grow —
+   * unlike the instanced layers below, a Mesh's geometry is simply replaced
+   * with one sized exactly to the current preview. */
+  private readonly baseMesh: THREE.Mesh;
+  private readonly fillMesh: THREE.Mesh;
+  private readonly borderMesh: THREE.Mesh;
+  private readonly innerMesh: THREE.Mesh;
+
+  /** The stripe dash is small relative to a tile and decorative, so it stays
+   * instanced (flat, single-height-sample) rather than merged/conforming. */
+  private stripeMesh: THREE.InstancedMesh;
+  private stripeCapacity = INITIAL_CAPACITY;
+
+  /** Direction arrows, instanced like the stripe dashes and shown the same way. */
+  private readonly arrowGeometry: THREE.BufferGeometry;
+  private readonly arrowMaterial: THREE.MeshBasicMaterial;
+  private arrowMesh: THREE.InstancedMesh;
+  private arrowCapacity = INITIAL_CAPACITY;
+
+  private readonly volumeMesh: THREE.Mesh;
+
+  constructor(scene: THREE.Scene, heightAt: HeightSampler) {
+    this.scene = scene;
+    this.ground = heightAt;
+    this.heightAt = heightAt;
+
+    this.quad = new THREE.PlaneGeometry(1, 1);
+    this.quad.rotateX(-Math.PI / 2);
+
+    // Local Y in [0,1]: scaling by heightMeters keeps the base flush with
+    // local y=0, i.e. "sitting on the terrain" once positioned at groundY.
+    this.volumeGeometry = new THREE.BoxGeometry(1, 1, 1);
+    this.volumeGeometry.translate(0, 0.5, 0);
+
+    this.baseMaterial = new THREE.MeshBasicMaterial({
+      transparent: true,
+      opacity: BASE_OPACITY,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    this.fillMaterial = new THREE.MeshBasicMaterial({
+      transparent: true,
+      opacity: ZONE_FILL_OPACITY,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    this.fillMaterial.color.setRGB(...ZONE_FILL_RGB);
+    this.stripeMaterial = new THREE.MeshBasicMaterial({
+      transparent: true,
+      opacity: STRIPE_OPACITY,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    this.stripeMaterial.color.setRGB(...STRIPE_RGB);
+    this.borderMaterial = new THREE.MeshBasicMaterial({
+      transparent: true,
+      opacity: BORDER_OPACITY,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    this.innerMaterial = new THREE.MeshBasicMaterial({
+      transparent: true,
+      opacity: INNER_GRID_OPACITY,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    this.volumeMaterial = new THREE.MeshBasicMaterial({
+      transparent: true,
+      opacity: VOLUME_OPACITY,
+      depthWrite: false,
+    });
+
+    this.baseMesh = new THREE.Mesh(emptyGeometry(), this.baseMaterial);
+    this.fillMesh = new THREE.Mesh(emptyGeometry(), this.fillMaterial);
+    this.stripeMesh = this.makeStripeMesh(INITIAL_CAPACITY);
+    this.arrowGeometry = buildArrowGeometry();
+    this.arrowMaterial = new THREE.MeshBasicMaterial({
+      color: ARROW_COLOR,
+      transparent: true,
+      opacity: ARROW_OPACITY,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    this.arrowMesh = this.makeArrowMesh(INITIAL_CAPACITY);
+    this.borderMesh = new THREE.Mesh(emptyGeometry(), this.borderMaterial);
+    this.innerMesh = new THREE.Mesh(emptyGeometry(), this.innerMaterial);
+    this.volumeMesh = new THREE.Mesh(this.volumeGeometry, this.volumeMaterial);
+    this.volumeMesh.visible = false;
+
+    // Fixed scene order (base, fill, stripe, then border/inner/volume) —
+    // tests rely on it; keep it if you add another layer. The arrow layer is
+    // appended last for exactly that reason.
+    // A ghost keeps its own opacity underground: it is the thing being placed.
+    for (const mesh of [
+      this.baseMesh,
+      this.fillMesh,
+      this.borderMesh,
+      this.innerMesh,
+      this.volumeMesh,
+    ]) {
+      mesh.userData['underground'] = 'keep';
+    }
+    scene.add(
+      this.baseMesh,
+      this.fillMesh,
+      this.stripeMesh,
+      this.borderMesh,
+      this.innerMesh,
+      this.volumeMesh,
+      this.arrowMesh,
+    );
+  }
+
+  /**
+   * Recomputes every layer from scratch for the given preview: base/fill
+   * conforming quads, the instanced stripe, plus the border/inner-grid
+   * conforming frame (always, derived from the same `tiles`), plus the plop
+   * volume box when `opts.volume` is supplied (road/zone/bulldoze/terraform
+   * previews never pass it, so they stay flat frames).
+   */
+  setPreview(tiles: TilePoint[], valid: boolean, kind: GhostKind, opts?: SetPreviewOptions): void {
+    if (tiles.length === 0) {
+      this.clear();
+      return;
+    }
+
+    this.heightAt =
+      kind === 'road' && opts?.deckLifts
+        ? deckHeightSampler(tiles, opts.deckLifts, this.ground)
+        : this.ground;
+    this.bandShifts = kind === 'road' ? opts?.roadBandShifts : undefined;
+    this.writeBase(
+      tiles,
+      valid,
+      kind,
+      opts?.zone,
+      kind === 'road' ? opts?.roadWidthMeters : undefined,
+    );
+    if (valid && kind === 'zone') {
+      this.fillMaterial.color.setRGB(...fillColorFor(opts?.zone));
+      this.writeFill(tiles);
+    } else {
+      this.setGeometry(this.fillMesh, new Float32Array(0));
+    }
+    this.stripeCapacity =
+      valid && kind === 'road'
+        ? this.writeStripe(tiles, this.stripeCapacity)
+        : this.hide(this.stripeMesh, this.stripeCapacity);
+    this.arrowCapacity =
+      valid && kind === 'road' && opts?.flowArrows
+        ? this.writeArrows(tiles, this.arrowCapacity)
+        : this.hide(this.arrowMesh, this.arrowCapacity);
+
+    const edges = computeFootprintEdges(tiles);
+    this.writeBorder(edges.outer, valid);
+    this.writeInnerGrid(edges.inner, valid);
+    this.writeVolume(valid, opts?.volume);
+  }
+
+  /**
+   * The ghost of a road off the grid: a band `widthMeters` wide along its
+   * centre line (world metres), edged like the tile ghost, with a small square
+   * at each point already clicked. Tinted by `valid` exactly as a road drag.
+   */
+  setCurve(
+    centre: readonly { x: number; z: number }[],
+    widthMeters: number,
+    valid: boolean,
+    clicks: readonly { x: number; z: number }[],
+  ): void {
+    this.clear();
+    this.heightAt = this.ground;
+    const half = widthMeters / 2;
+    this.baseMaterial.color.setRGB(...baseColorFor('road', valid));
+    this.setGeometry(
+      this.baseMesh,
+      buildBandPositions(centre, -half, half, this.heightAt, GHOST_Y_OFFSET),
+    );
+    this.borderMaterial.color.setRGB(...frameColorFor(valid));
+    const w = BORDER_WIDTH_METERS;
+    this.setGeometry(
+      this.borderMesh,
+      concat(
+        buildBandPositions(centre, -half - w / 2, -half + w / 2, this.heightAt, BORDER_Y_OFFSET),
+        buildBandPositions(centre, half - w / 2, half + w / 2, this.heightAt, BORDER_Y_OFFSET),
+      ),
+    );
+    this.innerMaterial.color.setRGB(...frameColorFor(valid));
+    this.setGeometry(
+      this.innerMesh,
+      concat(
+        ...clicks.map((p) =>
+          buildBandPositions(
+            [
+              { x: p.x - CLICK_MARK_M / 2, z: p.z },
+              { x: p.x + CLICK_MARK_M / 2, z: p.z },
+            ],
+            -CLICK_MARK_M / 2,
+            CLICK_MARK_M / 2,
+            this.heightAt,
+            INNER_GRID_Y_OFFSET,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /** Hides every layer (used when a tool has no active preview). */
+  clear(): void {
+    this.setGeometry(this.baseMesh, new Float32Array(0));
+    this.setGeometry(this.fillMesh, new Float32Array(0));
+    this.stripeMesh.count = 0;
+    this.arrowMesh.count = 0;
+    this.setGeometry(this.borderMesh, new Float32Array(0));
+    this.setGeometry(this.innerMesh, new Float32Array(0));
+    this.volumeMesh.visible = false;
+  }
+
+  /**
+   * Live layer meshes (base/fill/border/inner as merged conforming Mesh,
+   * stripe as the InstancedMesh dash layer), for renderOrder tuning or
+   * inspection. The stripe mesh is a fresh InstancedMesh re-added at the end
+   * of the scene's children whenever it grows, so callers needing a specific
+   * instance must always re-fetch through here rather than caching one
+   * across calls that might grow it; base/fill/border/inner are never
+   * replaced as objects (only their geometry is swapped), so those are safe
+   * to cache.
+   */
+  layers(): {
+    base: THREE.Mesh;
+    fill: THREE.Mesh;
+    stripe: THREE.InstancedMesh;
+    border: THREE.Mesh;
+    inner: THREE.Mesh;
+    arrows: THREE.InstancedMesh;
+  } {
+    return {
+      base: this.baseMesh,
+      fill: this.fillMesh,
+      stripe: this.stripeMesh,
+      border: this.borderMesh,
+      inner: this.innerMesh,
+      arrows: this.arrowMesh,
+    };
+  }
+
+  /** The single plop-volume box mesh; `visible` is false whenever the
+   * current preview has no `opts.volume`. Unlike the instanced stripe layer,
+   * this Mesh is never replaced/regrown — safe to cache across calls. */
+  volumeBox(): THREE.Mesh {
+    return this.volumeMesh;
+  }
+
+  /** Replaces a Mesh's geometry with fresh, exactly-sized position data,
+   * disposing the old geometry (mirrors zonegrid.ts's setGeometry: a
+   * brand-new BufferGeometry object also means no stale cached
+   * boundingSphere carries over from a previous, differently-sized preview). */
+  private setGeometry(mesh: THREE.Mesh, positions: Float32Array): void {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    mesh.geometry.dispose();
+    mesh.geometry = geometry;
+  }
+
+  private writeBase(
+    tiles: TilePoint[],
+    valid: boolean,
+    kind: GhostKind,
+    zone?: ZoneType,
+    roadWidthMeters?: number,
+  ): void {
+    this.baseMaterial.color.setRGB(...baseColorFor(kind, valid, zone));
+    const positions =
+      roadWidthMeters !== undefined && roadWidthMeters > 0
+        ? buildConformingRoadBandPositions(
+            tiles,
+            this.heightAt,
+            roadWidthMeters,
+            GHOST_Y_OFFSET,
+            this.bandShifts,
+          )
+        : buildConformingTilePositions(tiles, this.heightAt, TILE_METERS, GHOST_Y_OFFSET);
+    this.setGeometry(this.baseMesh, positions);
+  }
+
+  private writeFill(tiles: TilePoint[]): void {
+    const size = TILE_METERS * ZONE_FILL_SHRINK;
+    const positions = buildConformingTilePositions(tiles, this.heightAt, size, ZONE_FILL_Y_OFFSET);
+    this.setGeometry(this.fillMesh, positions);
+  }
+
+  /** Outer border: one conforming strip per remaining (non-shared) tile edge. */
+  private writeBorder(edges: readonly GhostEdgeSegment[], valid: boolean): void {
+    this.borderMaterial.color.setRGB(...frameColorFor(valid));
+    const positions = buildConformingEdgePositions(edges, this.heightAt, BORDER_Y_OFFSET);
+    this.setGeometry(this.borderMesh, positions);
+  }
+
+  /** Inner grid: one faint conforming strip per tile edge shared between two previewed tiles. */
+  private writeInnerGrid(edges: readonly GhostEdgeSegment[], valid: boolean): void {
+    this.innerMaterial.color.setRGB(...frameColorFor(valid));
+    const positions = buildConformingEdgePositions(edges, this.heightAt, INNER_GRID_Y_OFFSET);
+    this.setGeometry(this.innerMesh, positions);
+  }
+
+  /** Plop volume ghost: shown only when `volume` is supplied. */
+  private writeVolume(valid: boolean, volume: GhostVolume | undefined): void {
+    if (!volume) {
+      this.volumeMesh.visible = false;
+      return;
+    }
+    const t = volumeBoxTransform(volume);
+    const w = Math.max(0, volume.w) * TILE_METERS;
+    const d = Math.max(0, volume.d) * TILE_METERS;
+    const x0 = volume.originTile.x * TILE_METERS;
+    const z0 = volume.originTile.z * TILE_METERS;
+    // Sample every footprint corner — not just the center — so the box's
+    // base clears the terrain even on a slope rising toward one edge/corner.
+    const groundY = Math.max(
+      this.heightAt(x0, z0),
+      this.heightAt(x0 + w, z0),
+      this.heightAt(x0, z0 + d),
+      this.heightAt(x0 + w, z0 + d),
+    );
+    this.volumeMaterial.color.setRGB(...volumeColorFor(valid));
+    this.volumeMesh.position.set(t.centerX, groundY + VOLUME_Y_OFFSET, t.centerZ);
+    this.volumeMesh.scale.set(t.scaleX, t.scaleY, t.scaleZ);
+    this.volumeMesh.visible = true;
+  }
+
+  // -------------------------------------------------------------------------
+  // Stripe layer (instanced approach — see class doc).
+  // -------------------------------------------------------------------------
+
+  private makeStripeMesh(capacity: number): THREE.InstancedMesh {
+    const mesh = new THREE.InstancedMesh(this.quad, this.stripeMaterial, capacity);
+    mesh.count = 0;
+    mesh.userData['underground'] = 'keep';
+    return mesh;
+  }
+
+  private makeArrowMesh(capacity: number): THREE.InstancedMesh {
+    const mesh = new THREE.InstancedMesh(this.arrowGeometry, this.arrowMaterial, capacity);
+    mesh.count = 0;
+    mesh.userData['underground'] = 'keep';
+    return mesh;
+  }
+
+  private writeArrows(tiles: TilePoint[], capacity: number): number {
+    const indices: number[] = [];
+    for (let i = 0; i < tiles.length; i += ARROW_PERIOD) indices.push(i);
+
+    let mesh = this.arrowMesh;
+    let newCapacity = capacity;
+    if (indices.length > capacity) {
+      newCapacity = Math.max(1, capacity);
+      while (newCapacity < indices.length) newCapacity *= 2;
+      this.scene.remove(mesh);
+      mesh = this.makeArrowMesh(newCapacity);
+      this.scene.add(mesh);
+      this.arrowMesh = mesh;
+    }
+
+    for (let slot = 0; slot < indices.length; slot++) {
+      const pathIndex = indices[slot]!;
+      const { x: cx, z: cz } = bandCentre(tiles, pathIndex, this.bandShifts);
+      _position.set(cx, this.heightAt(cx, cz) + ARROW_Y_OFFSET, cz);
+      _quat.setFromAxisAngle(_yAxis, arrowYaw(tiles, pathIndex));
+      _scale.set(TILE_METERS, 1, TILE_METERS);
+      _matrix.compose(_position, _quat, _scale);
+      mesh.setMatrixAt(slot, _matrix);
+    }
+    mesh.count = indices.length;
+    mesh.instanceMatrix.needsUpdate = true;
+    mesh.boundingSphere = null; // three.js only recomputes it while null
+    return newCapacity;
+  }
+
+  private hide(mesh: THREE.InstancedMesh, capacity: number): number {
+    mesh.count = 0;
+    return capacity;
+  }
+
+  private writeStripeQuad(
+    mesh: THREE.InstancedMesh,
+    slot: number,
+    centre: { x: number; z: number },
+    sizeX: number,
+    sizeZ: number,
+    yOffset: number,
+  ): void {
+    const { x: cx, z: cz } = centre;
+    _position.set(cx, this.heightAt(cx, cz) + yOffset, cz);
+    _scale.set(sizeX, 1, sizeZ);
+    _matrix.compose(_position, IDENTITY_QUAT, _scale);
+    mesh.setMatrixAt(slot, _matrix);
+  }
+
+  private writeStripe(tiles: TilePoint[], capacity: number): number {
+    const dashIndices: number[] = [];
+    for (let i = 0; i < tiles.length; i += STRIPE_PERIOD) dashIndices.push(i);
+
+    let mesh = this.stripeMesh;
+    let newCapacity = capacity;
+    if (dashIndices.length > capacity) {
+      newCapacity = Math.max(1, capacity);
+      while (newCapacity < dashIndices.length) newCapacity *= 2;
+      this.scene.remove(mesh);
+      mesh = this.makeStripeMesh(newCapacity);
+      this.scene.add(mesh);
+      this.stripeMesh = mesh;
+    }
+
+    const long = TILE_METERS * STRIPE_LENGTH_FRACTION;
+    const short = TILE_METERS * STRIPE_WIDTH_FRACTION;
+    for (let slot = 0; slot < dashIndices.length; slot++) {
+      const pathIndex = dashIndices[slot]!;
+      const xIsLong = stripeAxisIsX(tiles, pathIndex);
+      this.writeStripeQuad(
+        mesh,
+        slot,
+        bandCentre(tiles, pathIndex, this.bandShifts),
+        xIsLong ? long : short,
+        xIsLong ? short : long,
+        STRIPE_Y_OFFSET,
+      );
+    }
+    mesh.count = dashIndices.length;
+    mesh.instanceMatrix.needsUpdate = true;
+    mesh.boundingSphere = null; // invalidate the cached frustum-cull sphere (three.js only recomputes it while null)
+    return newCapacity;
+  }
+}

@@ -1,29 +1,68 @@
+/// <reference types="vitest/config" />
 import { defineConfig } from 'vite';
-import { resolve } from 'path';
+import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
+import { songsManifestPlugin } from './tools/vite-songs-manifest';
+import pkg from './package.json' with { type: 'json' };
 
-export default defineConfig({
-  resolve: {
-    alias: {
-      '@core': resolve(__dirname, './src/core'),
-      '@render': resolve(__dirname, './src/render'),
-      '@worker': resolve(__dirname, './src/worker'),
-      '@ui': resolve(__dirname, './src/ui'),
-      '@platform': resolve(__dirname, './src/platform'),
-    },
-  },
+// The deploy target decides where the site lives: GitHub Pages serves it under
+// /SlimCityGame/ and sets BASE_PATH in its workflow; Netlify and any other
+// root-hosted deploy leave it unset and get '/'. Dev + Playwright stay at '/'.
+export default defineConfig(() => ({
+  base: process.env.BASE_PATH ?? '/',
+  // The version the menu shows, taken from package.json at build time so it is
+  // whatever release-please last stamped there — the one place the version
+  // lives. Baked in as a constant rather than imported, so the manifest itself
+  // never reaches the bundle.
+  define: { __APP_VERSION__: JSON.stringify(pkg.version) },
+  plugins: [react(), tailwindcss(), songsManifestPlugin()],
   server: {
-    port: 3000,
-    headers: {
-      // Cabeceras necesarias si se usa SharedArrayBuffer entre Main Thread y Workers
-      'Cross-Origin-Opener-Policy': 'same-origin',
-      'Cross-Origin-Embedder-Policy': 'require-corp',
+    watch: {
+      // Nothing under these ever reaches the bundle, but the dev server watches
+      // the whole project, so writing a markdown file or a capture script
+      // reloads the page. That costs nothing while you are editing prose — and
+      // everything to a screenshot harness, which loses `window.__slimcity`
+      // mid-run and then photographs a city that reset itself to empty. The
+      // shot still lands and still exits 0, which is the dangerous part.
+      ignored: ['**/docs/**', '**/tools/shots-*/**', '**/tools/*-shots.mjs', '**/*.md'],
     },
-  },
-  worker: {
-    format: 'es',
   },
   build: {
-    target: 'es2022',
-    assetsInlineLimit: 4096,
+    target: 'esnext',
+    rollupOptions: {
+      output: {
+        // Split the two heavyweight vendor families out of the main chunk
+        // (was a single ~1.2MB index chunk): three.js (incl. its webgpu
+        // entry) in one, the React/zustand UI stack in the other. scheduler
+        // rides with react-dom (its only consumer) so the react chunk is
+        // self-contained.
+        manualChunks(id: string): string | undefined {
+          const path = id.replace(/\\/g, '/');
+          if (!path.includes('/node_modules/')) return undefined;
+          if (/\/node_modules\/(three|@types\/three)\//.test(path)) return 'vendor-three';
+          if (/\/node_modules\/(react|react-dom|scheduler|zustand)\//.test(path))
+            return 'vendor-ui';
+          return undefined;
+        },
+      },
+    },
   },
-});
+  worker: { format: 'es' },
+  test: {
+    environment: 'node',
+    include: ['src/**/*.test.{ts,tsx}', 'tests/**/*.test.ts'],
+    // A handful of tests diffuse or hash full 256² grids. Each runs in well
+    // under a second of real CPU, but under full-suite parallel load on the
+    // vmThreads pool they can brush past vitest's 5s default and fail on
+    // scheduler jitter rather than on anything about the code.
+    testTimeout: 20_000,
+    // The default 'threads'/'forks' pools crash at collection time with this
+    // vitest 4.1.10 + vite 8.1.5 combination (`runner` singleton undefined when
+    // describe() executes). vmThreads initializes the runner context correctly.
+    pool: 'vmThreads',
+    // Under vmThreads, externalized CJS deps get their own 'vitest' instance,
+    // so jest-dom's expect.extend lands on the wrong expect. Inline it so it
+    // shares the test file's vitest module graph.
+    server: { deps: { inline: ['@testing-library/jest-dom'] } },
+  },
+}));

@@ -1,25 +1,65 @@
-# Documentación Técnica del Motor: City Builder 3D
+# SlimCity documentation
 
-> Bienvenido a la documentación viva del proyecto **City Builder 3D**. Este espacio recopila las especificaciones de arquitectura, fórmulas matemáticas, estructuras de datos y funcionamiento de cada uno de los subsistemas del motor para que cualquier desarrollador humano o agente de IA pueda comprender, mantener y extender el juego.
+Seven disciplines, each with its own folder. Find your question below and the
+folder will have the rest.
 
----
+| I want to know…                        | Go to                                     |
+| -------------------------------------- | ----------------------------------------- |
+| How do I play?                         | [USERGUIDE.md](userguide/README.md)              |
+| What is built, and what is next?       | [ROADMAP.md](ROADMAP.md)                  |
+| What are we deliberately not building? | [DESIGN.md](DESIGN.md)                    |
+| What must never be broken?             | [GROUND-TRUTHS.md](GROUND-TRUTHS.md), index names one file an area |
+| How is it built, and why that way?     | [engineering/](engineering/README.md)     |
+| What does the game ask of the player?  | [game-design/](game-design/README.md)     |
+| How does the simulated world behave?   | [world-sim/](world-sim/README.md)         |
+| How is the world rendered?             | [visual-render/](visual-render/README.md) |
+| What should an asset look like?        | [art/](art/README.md)                     |
+| How does the interface behave?         | [ux/](ux/README.md)                       |
+| What does a built feature decide?      | [specs/](specs/README.md)                 |
+| How do I work on it?                   | [../CONTRIBUTING.md](../CONTRIBUTING.md)  |
+| How are the docs kept short enough to read? | [engineering/documentation-strategy.md](engineering/documentation-strategy.md) |
 
-## 📚 Índice de Módulos
+## The seven folders
 
-| Documento | Descripción | Fase |
-|---|---|---|
-| [**01. Arquitectura General & Dual Loop**](01-architecture-dual-loop.md) | Separación estricta Main Thread vs Web Worker, flujo de mensajes tipados y Zero-Allocation. | Fase 0 |
-| [**02. Motor Gráfico, Cámara & Shaders**](02-graphics-camera-shaders.md) | Three.js PBR continuo, controlador cinemático RTS y ciclo Día/Noche con HDRI Poly Haven. | Fase 1 |
-| [**03. Terreno Dinámico, Paisaje Extendido & Macro-Parcelas**](03-terrain-and-terraforming.md) | Orografía geomorfológica natural unificada, paisaje exterior continuo hasta 14 km (OuterLandscapeMesh), playas vs acantilados, vegetación mundial y macro-parcelas con hitos. | Fase 1 & 1.5 |
-| [**04. Solver Hidrodinámico (SWE 2.5D)**](04-hydrodynamics-swe-water.md) | Simulación física de fluidos mediante Ecuaciones de Aguas Someras, manantiales y olas. | Fase 1.5 |
-| [**05. Red Vial, Grafo & Pathfinding A\***](05-road-network-and-pathfinding.md) | Topología vial, mecánicas CityRT (libre ángulo, snapping, HUD flotante, niveles E/Q), vehículos y render PBR. | Fase 2 |
-| [**06. Pipeline de Assets PBR, Modelos 3D & Vegetación**](06-asset-pipeline-and-pbr.md) | Gestor AssetManager, texturas PBR, atrezzo GLTF, skyline Downtown y arbolado masivo instanciado. | Fase 2 & 3 |
-| [**07. Zonificación RCI & Crecimiento de Edificios**](07-zoning-and-building-growth.md) | Cuadrícula de casillas 4x4m a lo largo de calles, pintura de zonas RCI y crecimiento procedimental de edificios. | Fase 3 |
+**[engineering/](engineering/README.md)** — architecture, systems, interface
+contracts, the data model, decision records and coding standards.
 
----
+**[game-design/](game-design/README.md)** — the core loop, economy, progression
+and every tuning constant.
 
-## 🎯 Filosofía de Diseño
+**[world-sim/](world-sim/README.md)** — the rules of the simulated world, the
+largest area: grid, roads, traffic, transit, utilities, services, fields, ticks.
 
-1. **Determinismo:** Cualquier partida iniciada con la misma semilla (`seed`) reproduce exactamente el mismo mundo gracias a nuestro generador Mulberry32 ([`PRNG`](../src/core/utils/prng.ts)).
-2. **60+ FPS Rule:** El hilo principal jamás calcula simulaciones costosas ni física de fluidos; todo se delega al Worker (`sim.worker.ts`).
-3. **Zero-Allocation Loop:** Ninguna función ejecutada en `requestAnimationFrame` o en el `tick` de simulación instanciará objetos temporales (`new Vector3`, arrays efímeros). Se emplean estructuras contiguas de memoria (`Float32Array`) y Object Pools.
+**[visual-render/](visual-render/README.md)** — the rendering pipeline,
+lighting, terrain, water and vegetation.
+
+**[art/](art/README.md)** — the art bible and asset standards, scale bible first.
+
+**[ux/](ux/README.md)** — every surface, the interaction rules, bindings,
+accessibility.
+
+**[ROADMAP.md](ROADMAP.md) and [DESIGN.md](DESIGN.md)** stay at the top level
+because they cut across all six: one holds delivery status and dates, the other
+every deliberate non-goal.
+
+## The rules that keep this working
+
+**One fact, one place.** A documentation set rots not because something is
+written down wrongly but because it is written down twice, one copy is updated,
+and the two now contradict each other with no way to tell which is current.
+When you are about to restate something, link to it instead.
+
+**Never date a specification.** A spec describes the product as it is now. The
+moment it carries "(shipped <date>)" or "v2" it has become a changelog in
+the wrong file, and the next reader cannot tell which of two nearby paragraphs
+is true. Delivery belongs to [ROADMAP.md](ROADMAP.md), and nowhere else.
+
+**A shipped thing leaves [DESIGN.md](DESIGN.md).** Its behaviour goes to the
+relevant spec and its delivery to the roadmap. A built feature lingering in a
+deferred list is how a scope guard turns into misinformation.
+
+**An accepted decision record is never rewritten** — it is superseded. See
+[engineering/adr/README.md](engineering/adr/README.md).
+
+`npm run lint:docs` fails on any relative link in these files that does not
+resolve, so the set cannot quietly rot the way it once did.

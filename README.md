@@ -1,0 +1,227 @@
+# SlimCity
+
+<div align="center">
+
+[![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Three.js](https://img.shields.io/badge/Three.js-000000?style=for-the-badge&logo=three.js&logoColor=white)](https://threejs.org/)
+[![React](https://img.shields.io/badge/React-61DAFB?style=for-the-badge&logo=react&logoColor=black)](https://react.dev/)
+[![Vite](https://img.shields.io/badge/Vite-646CFF?style=for-the-badge&logo=vite&logoColor=white)](https://vite.dev/)
+[![Vitest](https://img.shields.io/badge/Vitest-6E9F18?style=for-the-badge&logo=vitest&logoColor=white)](https://vitest.dev/)
+[![License: AGPL v3+](https://img.shields.io/badge/License-AGPL%20v3%2B-blue.svg?style=for-the-badge)](./LICENSE)
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-FFDD00?style=for-the-badge&logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/russellbenzing)
+
+[![Play — Live Demo](https://img.shields.io/badge/Play-Live%20Demo-2ea44f?style=for-the-badge&logo=github&logoColor=white)](https://slimcity.netlify.app/)
+[![Release](https://img.shields.io/github/v/release/rbenzing/SlimCityGame?style=for-the-badge&label=Release)](https://github.com/rbenzing/SlimCityGame/releases)
+[![CI](https://img.shields.io/github/actions/workflow/status/rbenzing/SlimCityGame/ci.yml?branch=main&style=for-the-badge&label=CI)](https://github.com/rbenzing/SlimCityGame/actions/workflows/ci.yml)
+
+**A small-form-factor city builder in the browser — an engine showcase built on Three.js**
+
+🌐 **Browser-Native** • ⚡ **WebGPU + WebGL2 Fallback** • 🧠 **Deterministic Worker Sim** • 🧩 **Fully Instanced**
+
+[Play](https://slimcity.netlify.app/) • [Features](#-features) • [Quick Start](#-quick-start) • [Controls](#-controls) • [Releases](#-releases--deployment) • [Documentation](#-documentation) • [License](#-license)
+
+</div>
+
+---
+
+SlimCity is a familiar city-builder play grammar and UI layout at reduced scale:
+milestone-gated zoning (low → medium-row → medium → mixed-use → high density,
+plus business & industry), demand-driven growth, a road hierarchy with
+statistical traffic in lanes, road-carried power & water, diffusing data fields,
+a full economy, full terraforming with animated water, a day/night cycle with emissive
+windows + bloom — all running smoothly in a browser tab. The simulation runs
+deterministically in a Web Worker at a fixed timestep; rendering is fully
+instanced Three.js.
+
+---
+
+## ✨ Features
+
+- **🏙️ Paint-to-grow zoning** — you set zones and demand fills them in; buildings
+  construct, upgrade, and abandon on their own. Denser zone types unlock as you
+  hit milestones.
+- **🛣️ Road hierarchy** — gravel, two-lane, avenue, one-way, four-lane, and
+  highway, with junction crosswalks, rounded corners, contained dead-end caps,
+  and smooth grade-preserving ramps up slopes.
+- **⚡💧 Networks through roads** — power and water propagate along the road graph;
+  place a source next to a road and the connected network is served.
+- **🚗 Statistical traffic** — lane-accurate cosmetic vehicles driven by a
+  statistical assignment model, not per-car physics.
+- **🚌 Services & transit** — fire, police, health, education, parks; cosmetic
+  service dispatch; bus lines with ridership; districts & policies.
+- **🗑️ Sanitation** — every zone generates trash; paint **landfill** areas where
+  it piles up to a max height, or plop a milestone-gated **incinerator** that
+  burns it down (emitting pollution) with its own garbage-truck fleet; cosmetic
+  trucks service the city and a **trash lens** shows collection gaps.
+- **⛰️ Terraforming & water** — raise / lower / level / smooth brushes with real
+  depth-rendered, animated water that floods below sea level.
+- **🌗 Living day/night** — continuous sun cycle with emissive windows, pooled
+  street-lamp lighting, shadows, and a bloom pass.
+- **📊 Legible through data** — RCI demand bars, milestone XP, infoview lenses
+  (land value, pollution, traffic, coverage), and stats charts.
+
+---
+
+## 🛠️ Tech Stack
+
+| Layer         | Tech                                                                           |
+| ------------- | ------------------------------------------------------------------------------ |
+| Language      | TypeScript (strict)                                                            |
+| Rendering     | Three.js — `WebGPURenderer` with automatic WebGL2 fallback                     |
+| UI shell      | React + Zustand + Tailwind CSS (HTML overlay only; no R3F in the render path)  |
+| Build         | Vite                                                                           |
+| Simulation    | Deterministic fixed-timestep loop in a Web Worker over typed-array tile layers |
+| Terrain noise | `simplex-noise`                                                                |
+| Testing       | Vitest (unit + determinism) · Playwright (headless visual smoke)               |
+| Quality       | ESLint + Prettier (kept at zero errors)                                        |
+
+---
+
+## 🚀 Quick Start
+
+**Prerequisites:** Node.js 20.19+ (or 22+) and npm.
+
+```bash
+npm install
+npm run dev        # Vite dev server (http://localhost:5173)
+npm test           # Vitest suite
+npm run typecheck  # strict tsc
+npm run build      # production build
+npm run lint       # ESLint (zero errors)
+npm run format     # Prettier
+```
+
+---
+
+## ✅ Quality Gates
+
+Built test-first throughout. The suite runs in CI on every push; the current
+count is recorded, with its date, in [docs/ROADMAP.md](docs/ROADMAP.md). Every
+change exits through the same gates:
+
+- ✅ `typecheck` — strict TypeScript, no errors
+- ✅ `test` — unit + determinism (same seed + command log ⇒ same state hash)
+- ✅ `build` — production bundle succeeds
+- ✅ `lint` — ESLint at zero errors, Prettier-clean
+- ✅ **no-stub audit** — every rendered control is wired to real behavior
+
+---
+
+## 🚢 Releases & Deployment
+
+Versioning is automated with [release-please](https://github.com/googleapis/release-please)
+driven by [Conventional Commits](https://www.conventionalcommits.org/) — the
+commit history is the single source of truth for the [SemVer](https://semver.org/)
+version. Nobody edits the version by hand.
+
+- **`fix:`** → patch · **`feat:`** → minor · **`feat!:` / `BREAKING CHANGE:`** → major
+- Every push to `main` runs the **CI** workflow (typecheck · lint · test · build).
+- release-please keeps a rolling **release PR** with the next version + a
+  generated `CHANGELOG.md`. Merging it tags `vX.Y.Z`, cuts a **GitHub Release**,
+  and the workflow deploys the built SPA to **GitHub Pages**. The game is
+  played at [slimcity.netlify.app](https://slimcity.netlify.app/).
+- The build's URL prefix comes from the `BASE_PATH` environment variable and
+  defaults to `/`. The Pages workflow sets `BASE_PATH=/SlimCityGame/`; a
+  root-hosted deploy such as **Netlify** leaves it unset. `netlify.toml` carries
+  the Netlify build command, publish directory (`dist`), and Node version, so
+  connecting the repo needs no dashboard settings.
+
+See **[CONTRIBUTING.md](./CONTRIBUTING.md)** for the commit conventions and the
+full release flow.
+
+---
+
+## 🎮 Controls
+
+| Input                      | Action                                                        |
+| -------------------------- | ------------------------------------------------------------- |
+| Left drag                  | Active tool (draw road / paint zone / bulldoze)               |
+| Left click                 | Select a building (info panel)                                |
+| Middle / right drag, wheel | Camera rotate / zoom-to-cursor; `WASD` + edge-scroll pan      |
+| `Space`                    | Pause / resume                                                |
+| `1`–`7`                    | Tool categories (roads / zoning / power / … / landscaping)    |
+| `R`                        | Rotate ploppable                                              |
+| `Esc`                      | Cancel tool / deselect                                        |
+| `Ctrl+Z` / `Ctrl+Y`        | Undo / redo (refund-accurate, worker-computed inverses)       |
+| `Ctrl+S` / `Ctrl+Shift+L`  | Save / load latest (IndexedDB; autosaves every 2 game-months) |
+
+New here? See the [Player Guide](docs/userguide/README.md).
+
+---
+
+## 🏗️ Project Layout
+
+```
+src/
+  shared/        contract layer every module codes against (types, constants)
+  core/          deterministic sim kernel (fixed-timestep loop, commands, RNG)
+  world/         map generation, grid, roads, pathfinding, terraform, districts
+  sim/           simulation systems (growth, economy, traffic, transit, fields)
+  render/        instanced Three.js renderers (terrain, buildings, roads, …)
+  tools/         tool state machines + undo stack
+  ui/            React / Zustand / Tailwind overlay
+  main.ts        render-thread boot: wires the worker, renderers, UI, persistence
+docs/            SPEC · ROADMAP · DESIGN · USERGUIDE · adr/ · ui/ · art/
+tools/           reusable Playwright visual harnesses (not part of the build)
+```
+
+**Hard rule:** `sim/` never imports `render/` or `ui/`; the UI talks to the sim
+only through the worker command/snapshot protocol. The simulation is
+deterministic — no `Math.random`, no `Date.now`; seeded RNG streams, hash-tested.
+
+---
+
+## 📚 Documentation
+
+Start at **[docs/README.md](docs/README.md)** — it maps each kind of question to
+the one place that answers it. The set is organised by discipline, and each
+fact lives in exactly one place:
+
+- **[docs/engineering/](docs/engineering/README.md)** — architecture, decision
+  records, interface contracts, the data model, budgets, and coding standards.
+- **[docs/game-design/](docs/game-design/README.md)** — the game design
+  document, the core loop, economy, progression, and every tuning constant.
+- **[docs/world-sim/](docs/world-sim/README.md)** — how the simulated world
+  behaves: the grid, roads, traffic, transit, utilities, services, the fields.
+- **[docs/visual-render/](docs/visual-render/README.md)** — the rendering
+  pipeline, lighting, terrain, water, vegetation.
+- **[docs/art/](docs/art/README.md)** — the art bible and the standards an
+  asset is built to.
+- **[docs/ux/](docs/ux/README.md)** — how the interface behaves: every surface,
+  the interaction rules, the bindings.
+- **[docs/ROADMAP.md](docs/ROADMAP.md)** — what is built and what is next. The
+  only document that carries dates and delivery status.
+- **[docs/DESIGN.md](docs/DESIGN.md)** — what we are deliberately not building,
+  with reasoning.
+- **[docs/USERGUIDE.md](docs/userguide/README.md)** — how to play: the gameplay loop,
+  tools, reading the city, and controls.
+- **[CONTRIBUTING.md](./CONTRIBUTING.md)** — quality gates, commit conventions,
+  and how automated versioning + deployment work.
+- **[CHANGELOG.md](./CHANGELOG.md)** — generated per release by release-please.
+
+---
+
+## 📄 License
+
+Released under the [GNU Affero General Public License v3.0 or later (AGPLv3+)](./LICENSE).
+
+---
+
+## 👤 About the Author
+
+Built by **Russell Benzing**. SlimCity is a personal project exploring how far a
+browser engine can be pushed toward a living, data-rich city simulation.
+
+---
+
+## 💬 Support
+
+If SlimCity is useful or fun to you, you can support the work:
+
+<div align="center">
+
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-FFDD00?style=for-the-badge&logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/russellbenzing)
+
+**Built with Three.js, TypeScript, and a lot of screenshots.**
+
+</div>

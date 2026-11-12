@@ -1,1149 +1,3241 @@
+/**
+ * SlimCity render-thread boot: creates the renderer,
+ * builds the world from the procedural map, spawns the sim worker, and wires
+ * snapshots/acks/fields into the renderers, the zustand UI store, the tool
+ * manager + undo stack, and IndexedDB persistence.
+ */
 import * as THREE from 'three';
-import { CameraController } from '@render/camera/camera_controller';
-import { DynamicTerrainMesh } from '@render/terrain/dynamic_terrain_mesh';
-import { DynamicWaterMesh } from '@render/terrain/dynamic_water_mesh';
-import { RoadNetworkMesh } from '@render/terrain/road_network_mesh';
-import { RoadPreviewMesh } from '@render/terrain/road_preview_mesh';
-import { WorldGridHelper } from '@render/terrain/world_grid_helper';
-import { DayNightCycle } from '@render/shaders/day_night_cycle';
-import { GridCursor } from '@render/terrain/grid_cursor';
-import { BrushCursor } from '@render/terrain/brush_cursor';
-import { BuildingManager } from '@render/buildings/building_manager';
-import { FoliageManager, FoliagePoint } from '@render/foliage/foliage_manager';
-import { FoliageGenerator } from '@core/world/foliage_generator';
-import { CityTileManager } from '@core/world/city_tile_manager';
-import { CityBoundaryMesh } from '@render/terrain/city_boundary_mesh';
-import { OuterLandscapeMesh } from '@render/terrain/outer_landscape_mesh';
-import { NaturalLandscapeGenerator } from '@core/terrain/natural_landscape_generator';
-import { LandscapeConfig, DEFAULT_LANDSCAPE_CONFIG } from '@core/terrain/landscape_config';
-import { LandscapeGeneratorUI } from '@ui/landscape_generator_ui';
-import { MainToolbarUI } from '@ui/main_toolbar_ui';
-import { TerraformUI } from '@ui/terraform_ui';
-import { RoadToolbarUI } from '@ui/road_toolbar_ui';
-import { RoadConstructionHUD } from '@ui/road_construction_hud';
-import { ZoningToolbarUI } from '@ui/zoning_toolbar_ui';
-import { AreasUI } from '@ui/areas_ui';
-import { ActiveTool } from '@core/tools';
-import { RoadType, ROAD_CONFIGS } from '@core/graph/road_types';
-import { RoadDrawMode } from '@core/graph/road_draw_mode';
-import { SplineUtils } from '@core/graph/spline_utils';
-import { Vec2 } from '@core/utils/math';
-import { TerrainModifier, TerraformTool, BrushSettings } from '@core/terrain/terrain_modifier';
-import { TerrainGenerator, TerrainGridData } from '@core/terrain_data';
-import { RoadGraph, RoadNode, RoadEdge } from '@core/graph/road_graph';
-import { ZoningManager, ZoneType } from '@core/zoning/zoning_manager';
-import { ZoningMesh } from '@render/zoning/zoning_mesh';
-import { TrafficManager } from '@core/traffic/traffic_manager';
-import type { WorkerToMainMessage, MainToWorkerMessage, SimulationStats } from '@core/messages';
+import {
+  CLOCK_START_OFFSET_TICKS,
+  MAP_SIZE,
+  ROAD_ELEVATION_STEP_M,
+  SPEED_MULTIPLIERS,
+  TILE_METERS,
+  VISUAL_DAY_TICKS,
+  inBounds,
+  tickToDate,
+  tileIndex,
+  tileToWorld,
+  worldToTile,
+} from './shared/constants';
+import type {
+  BuildingCatalogEntry,
+  BuildingInstance,
+  BusStopState,
+  CityStats,
+  Command,
+  CommandAck,
+  DeathCareReport,
+  FramedParcel,
+  GrowthWaiting,
+  ParcelFrame,
+  RoadProfile,
+  Incident,
+  ZonedUnserved,
+  LensId,
+  MainToWorker,
+  RoadSpec,
+  SimSnapshot,
+  TilePoint,
+  ToolId,
+  TransitLine,
+  WorkerToMain,
+} from './shared/types';
+import {
+  FieldId,
+  INACTIVE_VEHICLE_X,
+  MAX_VEHICLES,
+  PowerLineKind,
+  RoadFlow,
+  RoadTier,
+  VEHICLE_STRIDE,
+  ZoneType,
+  flowDirection,
+  isFrontageTier,
+  isRailTier,
+  isStreetTier,
+  isTramTier,
+} from './shared/types';
+import { footprintForRotation } from './shared/footprint';
+import { PLATTED_ZONES } from './shared/lots';
+import {
+  carriagewayHalfWidthOf,
+  carriagewayWidth,
+  isPaved,
+  kerbWidthOf,
+  presetProfileForTier,
+  profilesEqual,
+} from './shared/roadprofile';
+import { laneMovementsFor, pocketLaneMovements } from './shared/approach';
+import catalogData from './data/catalog.json';
+import roadsData from './data/roads.json';
+import { CommandQueue } from './core/commands';
+import { generateProceduralMap } from './world/maps';
+import {
+  gridRunRefusalAfter,
+  nearestRoadEnd,
+  nearestRoadPoint,
+  planWithSplits,
+  roadEndDirection,
+  segmentHalfWidthM,
+  snapRoadEnd,
+} from './world/freeroads';
+import { solveElevationProfile } from './world/bridges';
+import { isRoadBuildable } from './world/grid';
+import { alongStreetRefusal, feedsLines, sourceEndRefusal } from './world/powerline';
+import { roundaboutGroundOf } from './world/roundabouts';
+import { platOf, platSourceOf, type Parcel } from './world/plat';
+import { buildRoadCells, type RoadCells } from './world/roadnet';
+import { ROUNDABOUT_CODE } from './shared/roundabout';
+import { createRenderer, createWorldScene, timeOfDayColors } from './render/scene';
+import { createBloomPipeline, type BloomPipeline } from './render/bloom';
+import { CloudLayer } from './render/clouds';
+import { TerrainRenderer } from './render/terrain';
+import { WaterRenderer } from './render/water';
+import { TreeRenderer } from './render/trees';
+import { OverlayRenderer } from './render/overlays';
+import { BuildingInstancer } from './render/buildings';
+import { MassingRenderer } from './render/massing';
+import { RoofPropRenderer } from './render/props';
+import { HouseRoofRenderer } from './render/houses';
+import { frontDoorOf } from './render/houselot';
+import { kerbCreditAlongFrame } from './world/kerbcredit';
+import {
+  curbCutTileFor,
+  kerbAllowance,
+  ParkedCarRenderer,
+  usesRoadsideParking,
+  type KerbSide,
+} from './render/parked';
+import { findRoadFacingEdge, streetLookupOf } from './render/frontage';
+import { DrivewayTiles } from './render/drivewaytiles';
+import { faceStreets } from './render/frontfacing';
+import { civicAccessFor } from './shared/civicaccess';
+import { civicCutTiles, civicSiteFor, type KitSensors } from './render/civiccrossing';
+import {
+  driveRoadTiles,
+  planHouseGround,
+  planHouseLot,
+  type HouseLotPlan,
+} from './render/houselot';
+import { LotRenderer } from './render/lots';
+import { GarageRenderer } from './render/garages';
+import { BuildingKitRenderer } from './render/buildingkit';
+import { LandmarkRenderer } from './render/landmarks';
+import { chunksOver, RoadMeshRenderer } from './render/roadsmesh';
+import { FreeRoadRenderer, freeRoadLampStands, freeRoadPoleLay } from './render/freeroadmesh';
+import type { BandSpan } from './render/roadsmesh';
+import { BridgeRenderer } from './render/bridges';
+import { GuidewayRenderer } from './render/guideway';
+import { TramStationRenderer } from './render/tramstations';
+import {
+  DEFAULT_SNAPSHOT_INTERVAL_MS,
+  headingAlongX,
+  measuredSnapshotIntervalMs,
+  snapshotAlpha,
+  VehicleRenderer,
+} from './render/vehicles';
+import {
+  TransitRenderer,
+  computeShelterLayout,
+  computeStopHeading,
+  shelterSide,
+  toWorldPoints,
+  type TransitSnapshot,
+} from './render/transit';
+import { PedestrianRenderer, type StopIdleInput } from './render/pedestrians';
+import { ServiceVehicleRenderer } from './render/servicevehicles';
+import { DistrictsRenderer } from './render/districts';
+import { LandfillRenderer } from './render/landfill';
+import { PhotoModeController } from './render/photomode';
+import { StatsHistory } from './ui/statshistory';
+import { ADVISOR_REFRESH_SNAPSHOTS, cityIssues } from './ui/advisor';
+import { GhostRenderer, type GhostKind, type SetPreviewOptions } from './render/ghosts';
+import { UtilityKitRenderer, tramLaneOffsetOf } from './render/utilitykits';
+import { BusStopRenderer, stopRoadAt } from './render/busstops';
+import { FarmRenderer } from './render/farms';
+import { ZoneGridRenderer } from './render/zonegrid';
+import { LampRenderer, STOP_CLEAR_HALF_M } from './render/lamps';
+import { FREE_ROAD_SLOT, PowerLineRenderer, STRUNG_LINE_SLOT } from './render/powerlines';
+import {
+  cableBoxSpots,
+  chunksAroundTile,
+  layStreetChunk,
+  cablePlaceOf,
+  layStrungLine,
+  streetPoleSpots,
+  type PowerWorld,
+} from './render/powerpoles';
+import {
+  KEEP_CLEAR_NONE,
+  keepClearOf,
+  Standing,
+  TREE_FROM_CONTROL_M,
+  TREE_FROM_LAMP_M,
+  TREE_FROM_STOP_M,
+  type Roadside,
+  type Spot,
+} from './render/roadsidespace';
+import { PipeOverlayRenderer, type PipeConnection, type PipeLead } from './render/pipes';
+import { CableOverlayRenderer } from './render/cables';
+import { UndergroundView } from './render/underground';
+import {
+  buildTileSet,
+  computeSignPlacements,
+  computeTramPolePlacements,
+  controlSignSpots,
+  hasCrossingRoad,
+  lateralAxis,
+  RoadFurnitureRenderer,
+  tileKey,
+  type RoadTileIndex,
+} from './render/roadfurniture';
+import { SoundWallRenderer } from './render/soundwalls';
+import { SelectionOutline } from './render/outline';
+import { MapPin } from './render/pin';
+import { CameraRig } from './render/camera';
+import { IdPicker } from './render/picking';
+import {
+  ToolManager,
+  ROAD_TOOL_TO_TIER,
+  ZONE_TOOL_TO_TYPE,
+  isStopTool,
+  type ToolEnv,
+} from './tools/tools';
+import { UndoStack } from './tools/undo';
+import { useCityStore } from './ui/store';
+import type { SelectedJunction } from './ui/store';
+import { mountUi } from './ui/App';
+import { AutoSaver, getSaveById, loadLatest, saveNow, storeSave } from './app/persist';
+import { CursorChipStack } from './app/cursorchip';
+import { ClientGridMirror } from './app/clientgrid';
+import { readAppSession, type AppSession, type GameSettings } from './app/session';
+import { audioRuntime } from './app/audioruntime';
+import { ambientMix } from './app/audio';
 
-export class Engine {
-  private container: HTMLElement;
-  private scene: THREE.Scene;
-  private camera: THREE.PerspectiveCamera;
-  private renderer: THREE.WebGLRenderer;
-  private cameraController: CameraController;
-  private dayNightCycle: DayNightCycle;
-  private terrain: DynamicTerrainMesh | null = null;
-  private water: DynamicWaterMesh | null = null;
-  private roadMesh: RoadNetworkMesh;
-  private roadPreview: RoadPreviewMesh;
-  public buildingManager: BuildingManager;
-  public foliageManager: FoliageManager;
-  private baseFoliagePoints: FoliagePoint[] = [];
-  public cityTileManager: CityTileManager;
-  public cityBoundaryMesh: CityBoundaryMesh;
-  public outerLandscape: OuterLandscapeMesh;
-  public currentLandscapeConfig: LandscapeConfig = { ...DEFAULT_LANDSCAPE_CONFIG };
-  private worldGridHelper: WorldGridHelper;
-  private gridCursor: GridCursor;
-  private brushCursor: BrushCursor;
-  private vehiclesGroup: THREE.Group = new THREE.Group();
-  public readonly mainToolbarUI: MainToolbarUI;
-  public readonly terraformUI: TerraformUI;
-  public readonly roadToolbarUI: RoadToolbarUI;
-  public readonly roadConstructionHUD: RoadConstructionHUD;
-  public readonly zoningToolbarUI: ZoningToolbarUI;
-  public readonly areasUI: AreasUI;
-  public readonly landscapeUI: LandscapeGeneratorUI;
-  public readonly zoningManager: ZoningManager = new ZoningManager();
-  public readonly zoningMesh: ZoningMesh;
-  public readonly trafficManager: TrafficManager;
-  private worker: Worker;
+/** Cheap set equality, so an unchanged driveway set costs no lamp rebuild. */
+function sameTileKeySet(a: ReadonlySet<number>, b: ReadonlySet<number>): boolean {
+  if (a.size !== b.size) return false;
+  for (const key of a) if (!b.has(key)) return false;
+  return true;
+}
 
-  private isRunning: boolean = false;
-  private lastTime: number = 0;
-  private isMouseDown: boolean = false;
-  private mouseButton: number = -1;
+/** Where the bus stops stand, by tile and kerb; a sign becoming a shelter stands where it did. */
+function stopSiteKeys(stops: readonly BusStopState[]): ReadonlySet<number> {
+  return new Set(stops.map((s) => (s.x * 100_000 + s.z) * 2 + s.side));
+}
 
-  public activeTool: ActiveTool = ActiveTool.INSPECT;
-  public selectedRoadType: RoadType = RoadType.LOCAL_2L;
-  public selectedDrawMode: RoadDrawMode = RoadDrawMode.STRAIGHT;
-  public selectedElevationOffset: number = 0;
-  public roadGraph: RoadGraph = new RoadGraph();
+const MAP_NAME = 'Riverton';
+const OVERLAY_REFRESH_MS = 500; // 2 Hz while an infoview lens is active
+/**
+ * Refusal reasons that are codes rather than sentences. Any other reason the
+ * worker sends is already written for the player and is shown as it is.
+ */
+const UNWORDED_REASONS: ReadonlySet<string> = new Set(['invalid', 'grade', 'height']);
 
-  private roadStartCell: { x: number; z: number } | null = null;
-  private currentSnapNode: RoadNode | null = null;
-  private currentSnapEdge: { edge: RoadEdge; projX: number; projZ: number; t: number } | null = null;
-  private currentTargetGrid: { x: number; z: number } = { x: 0, z: 0 };
-  private currentRoadCost: number = 0;
-  private currentRoadLength: number = 0;
-  private currentRoadAngle: number = 0;
-  private isCurrentRoadValid: boolean = true;
-  private roadInvalidReason: string = '';
-  private buildingGrowthTimer: number = 0;
+/** What the player is told when the world refuses an edit. */
+function refusalText(reason: string | undefined): string {
+  if (reason === 'funds') return 'Not enough funds.';
+  if (reason === 'locked') return 'Not unlocked at this milestone yet.';
+  return reason && !UNWORDED_REASONS.has(reason) ? reason : 'That cannot be built there.';
+}
 
-  private terrainData: TerrainGridData;
-  private currentBrushSettings: BrushSettings = {
-    tool: TerraformTool.NONE,
-    radius: 8.0,
-    strength: 3.5,
-    targetHeight: 3.5,
+const catalog = (catalogData as { buildings: BuildingCatalogEntry[] }).buildings;
+const roadSpecs = (roadsData as { specs: RoadSpec[] }).specs;
+
+/** Keyboard 1..6 jump to a representative tool of each toolbar category. */
+const CATEGORY_HOTKEYS: Record<string, ToolId> = {
+  Digit1: 'road.two',
+  Digit2: 'zone.resLow',
+  Digit3: 'plop.wind-turbine',
+  Digit4: 'plop.police-station',
+  Digit5: 'plop.small-park',
+  Digit6: 'bulldoze',
+  Digit7: 'terraform.raise', // Landscaping, appended past the original six
+};
+
+async function startGame(session: Extract<AppSession, { screen: 'playing' }>): Promise<void> {
+  const viewport = document.getElementById('viewport');
+  const uiRoot = document.getElementById('ui-root');
+  if (!viewport || !uiRoot) {
+    throw new Error('SlimCity: #viewport / #ui-root missing from index.html');
+  }
+
+  // Seed + optional load payload: a Load Game intent carries no fresh seed of
+  // its own (session.seed is 0 — see session.ts's startLoadGame), so the
+  // stored save's header seed is what actually rebuilds the same terrain.
+  let seed = session.seed;
+  let loadData: ArrayBuffer | null = null;
+  if (session.mode === 'load' && session.saveId != null) {
+    const entry = await getSaveById(session.saveId);
+    if (entry) {
+      seed = entry.header.seed;
+      loadData = entry.data;
+    }
+  }
+
+  // --- renderer, scene, world ------------------------------------------------
+  const handle = await createRenderer(viewport);
+  const world = createWorldScene();
+
+  const map = generateProceduralMap(seed, MAP_NAME);
+
+  const terrain = new TerrainRenderer(world.scene);
+  terrain.build(map);
+  const heightAt = (x: number, z: number): number => terrain.heightAt(x, z);
+
+  // Render-thread mirror of the worker's grid, fed from snapshot deltas —
+  // backs the zoning grid, lamp placement, and the plop overlap check. The two
+  // tile lookups over it are read by every frontage-aware renderer below
+  // (parking bays, building setbacks, landfill entrances); onSnapshot updates
+  // the mirror before it feeds buildings.
+  const clientGrid = new ClientGridMirror(map, seed);
+  const roadAt = (x: number, z: number): boolean =>
+    inBounds(x, z) && clientGrid.roadTier[z * clientGrid.size + x] !== RoadTier.None;
+  const streetAt = (x: number, z: number): boolean =>
+    inBounds(x, z) && isStreetTier((clientGrid.roadTier[z * clientGrid.size + x] ?? 0) as RoadTier);
+  // The only road a farm's gate opens onto, which decides where its farmstead stands.
+  const dirtAt = (x: number, z: number): boolean =>
+    inBounds(x, z) && clientGrid.roadTier[z * clientGrid.size + x] === RoadTier.Gravel;
+  // How wide each street's verge and sidewalk are, read from the section the
+  // road is drawn with — a turn bay included — so a home's front yard is
+  // measured from the sidewalk as it stands, and its lawn and drive run out to
+  // the kerb the road mesh lays.
+  const street = streetLookupOf(
+    (x, z) =>
+      inBounds(x, z)
+        ? ((clientGrid.roadTier[z * clientGrid.size + x] ?? 0) as RoadTier)
+        : RoadTier.None,
+    (x, z) => clientGrid.drawnProfileAt(x, z),
+  );
+
+  /**
+   * Height of the road SURFACE, as opposed to the ground: the deck where one
+   * governs the point, the terrain everywhere else. Everything that rides the
+   * road — the road mesh, the bridge structure under it, traffic, pedestrians,
+   * lamps, furniture — takes this instead of heightAt, so they cannot disagree
+   * about where the road is.
+   */
+  const roadSurfaceAt = (wx: number, wz: number): number =>
+    clientGrid.deckSurfaceAt(wx, wz) ?? heightAt(wx, wz);
+
+  // Animated water surface and cumulus layer; both tick in the frame loop below.
+  const water = new WaterRenderer(world.scene, heightAt);
+  const clouds = new CloudLayer(world.scene);
+
+  const trees = new TreeRenderer(world.scene, heightAt);
+  trees.build(map, seed);
+
+  // Utility detail kits: wind turbines, water towers,
+  // coal plants, and small parks render as real modelled kits; the ids the
+  // kit renderer claims are handed to BuildingInstancer as plinthIds so the
+  // instancer draws only a low plinth slab under them (picking/outline/
+  // bulldoze still flow through the instancer path).
+  // A shore building turns to face the water beside it; a station lays its
+  // platform, and a rail yard its lead, along the track beside it. The lots'
+  // civic crossings read the same two, so a way in lands on the side the kit
+  // turned its front to.
+  const kitSensors: KitSensors = {
+    waterAt: (x, z) => inBounds(x, z) && clientGrid.water[z * clientGrid.size + x] === 1,
+    railAt: (x, z) =>
+      inBounds(x, z) && isRailTier(clientGrid.roadTier[z * clientGrid.size + x] ?? 0),
   };
+  const utilityKits = new UtilityKitRenderer(
+    world.scene,
+    heightAt,
+    catalog,
+    kitSensors.waterAt,
+    kitSensors.railAt,
+    // A tram depot runs its lead to the tram track beside it.
+    (x, z) => inBounds(x, z) && isTramTier(clientGrid.roadTier[z * clientGrid.size + x] ?? 0),
+    // The lane track it joins lies where that street's own profile lays it.
+    (x, z) => tramLaneOffsetOf(clientGrid.profileAt(x, z)),
+  );
+  // A crossing tile holds two roads; the road passing over it has a surface of
+  // its own, which the ordinary sampler — answering for the road beneath —
+  // cannot give.
+  const overSurfaceAt = (wx: number, wz: number, cx: number, cz: number): number =>
+    clientGrid.overSurfaceAt(wx, wz, cx, cz);
+  const roadsMesh = new RoadMeshRenderer(
+    world.scene,
+    roadSurfaceAt,
+    (id) => clientGrid.profileById(id),
+    overSurfaceAt,
+  );
+  // The stalls the streets paint, as the road mesh lays them: a suburban car
+  // park counts those along its frontage toward its code, so every renderer
+  // that stands a body on its lot lays the lot out with the same credit.
+  const kerb = roadsMesh.kerbSurroundings();
+  // A lot on a curve reads its kerb credit off the free road under its kerb
+  // line: a parking lane along the frontage credits a stall per stall length.
+  const kerbCreditOf = (frame: ParcelFrame, wM: number): number =>
+    clientGrid.roads
+      ? kerbCreditAlongFrame(clientGrid.roads, frame, wM, (id) => clientGrid.profileById(id))
+      : 0;
+  const instancer = new BuildingInstancer(
+    world.scene,
+    catalog,
+    heightAt,
+    utilityKits.kitIds(),
+    roadAt,
+    street,
+    dirtAt,
+    kerb,
+    kerbCreditOf,
+  );
+  // Roads off the grid lie on the ground, so they sit on the terrain.
+  const freeRoads = new FreeRoadRenderer(world.scene, heightAt, (id) => clientGrid.profileById(id));
+  const bridges = new BridgeRenderer(world.scene, roadSurfaceAt, overSurfaceAt);
+  const vehicles = new VehicleRenderer(
+    world.scene,
+    (wx, wz, heading) =>
+      clientGrid.vehicleSurfaceAt(wx, wz, headingAlongX(heading)) ?? heightAt(wx, wz),
+  );
+  // Bus transit (stop posts + route ribbon + cosmetic buses), service vehicles
+  // (fire/police/ambulance from the shared buffer + incident pins), and the
+  // district tint/boundary overlay. All fed from the snapshot channels.
+  const transitRenderer = new TransitRenderer(world.scene, heightAt);
+  // Bus stops: road furniture on a street's side, drawn whatever lens is up.
+  const busStops = new BusStopRenderer(world.scene, heightAt);
+  // A tram reservation's guideway, standing on the road surface; its trams ride it.
+  const guideway = new GuidewayRenderer(world.scene, roadSurfaceAt);
+  transitRenderer.setGuideway(guideway.seatAt);
+  // A tram stop on the guideway at full height is a raised station over it.
+  const tramStations = new TramStationRenderer(world.scene, roadSurfaceAt);
+  // A call's pin hovers over the roof of the building it marks, at its lot
+  // centre: the same anchor the selection pin stands on. A call's own tile
+  // may be the lot's back yard.
+  const serviceVehicles = new ServiceVehicleRenderer(world.scene, heightAt, undefined, (x, z) => {
+    if (!inBounds(x, z)) return null;
+    const building = knownBuildings.get(clientGrid.buildingId[z * clientGrid.size + x] ?? 0);
+    const entry = building ? catalogById.get(building.catalogId) : undefined;
+    if (!building || !entry) return null;
+    const lot = footprintForRotation(entry, building.rotation);
+    const centerX = (building.x + lot.w / 2) * TILE_METERS;
+    const centerZ = (building.z + lot.d / 2) * TILE_METERS;
+    return { x: centerX, y: heightAt(centerX, centerZ) + entry.height, z: centerZ };
+  });
+  const districtsRenderer = new DistrictsRenderer(world.scene, heightAt);
+  const overlays = new OverlayRenderer(world.scene);
+  overlays.setSoil(clientGrid.soil);
+  const idPicker = new IdPicker();
 
-  private currentHitPoint: THREE.Vector3 = new THREE.Vector3();
-  private hasHitPoint: boolean = false;
+  // World feedback & selection FX.
+  const ghosts = new GhostRenderer(world.scene, heightAt);
+  const zoneGrid = new ZoneGridRenderer(world.scene, heightAt, (id) => clientGrid.profileById(id));
+  const lamps = new LampRenderer(world.scene, roadSurfaceAt);
+  const powerLines = new PowerLineRenderer(world.scene, roadSurfaceAt);
+  const pipes = new PipeOverlayRenderer(world.scene, heightAt);
+  const cableOverlay = new CableOverlayRenderer(world.scene, heightAt);
+  // The surface goes to glass while the player works on the water, so the
+  // pipes under it show.
+  const underground = new UndergroundView(world.scene);
+  const roadFurniture = new RoadFurnitureRenderer(world.scene, roadSurfaceAt);
+  const soundWalls = new SoundWallRenderer(world.scene, roadSurfaceAt);
+  const selectionOutline = new SelectionOutline(world.scene);
+  const mapPin = new MapPin(world.scene);
+  const cursorChip = new CursorChipStack(viewport);
 
-  private raycaster: THREE.Raycaster = new THREE.Raycaster();
-  private mouseVec: THREE.Vector2 = new THREE.Vector2();
-  private groundPlane: THREE.Plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
-
-  public currentStats: SimulationStats = {
-    population: 0,
-    money: 50000, // Presupuesto inicial estándar de partida nueva (Cities: Skylines / SimCity)
-    rDemand: 50,
-    cDemand: 30,
-    iDemand: 20,
-    currentTick: 0,
-    totalWaterVolume: 0,
+  zoneGrid.rebuild(clientGrid); // primes its map size so zone patches apply
+  /**
+   * The plat on the zone lens: every parcel of the zone in hand, cut by the
+   * same function the spawner reads, so the lines show exactly what will
+   * grow. The land value it cuts by is asked of the worker while a zone tool
+   * is in hand, on the lens cadence, and the cut is redone whenever the
+   * zone, the roads, the buildings or the land value move. A ploppable in
+   * hand shows the plat of every platted zone at once, so a station or a
+   * depot is never set down over lots the player has painted unseen.
+   */
+  let latestLandValue: Uint8Array | undefined;
+  let platCells: { version: number; cells: RoadCells } | null = null;
+  const plattedZonesFor = (tool: ToolId): readonly ZoneType[] => {
+    if (tool.startsWith('plop.')) return PLATTED_ZONES;
+    const zone = ZONE_TOOL_TO_TYPE[tool];
+    return zone !== undefined && PLATTED_ZONES.includes(zone) ? [zone] : [];
   };
-
-  constructor(container: HTMLElement) {
-    this.container = container;
-
-    // 1. Escena Three.js con niebla atmosférica continua de horizonte infinito
-    this.scene = new THREE.Scene();
-    this.scene.fog = new THREE.Fog(0xb5dcfa, 1800, 52000);
-
-    // 2. Cámara y Controller RTS de alta fidelidad con frustum extendido
-    const aspect = window.innerWidth / window.innerHeight;
-    this.camera = new THREE.PerspectiveCamera(40, aspect, 0.5, 65000);
-    this.cameraController = new CameraController(this.camera, this.container, {
-      minPolarAngle: 0.28,
-      maxPolarAngle: 1.42,
-      smoothing: 12.0,
-      panSpeed: 1.15,
-      minDistance: 15.0,
-      maxDistance: 6500.0,
-      minHeightAboveGround: 2.0,
-    });
-
-    // 3. Renderer con WebGL y ToneMapping ACES Filmic calibrado
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-    this.renderer.setSize(window.innerWidth, window.innerHeight);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFShadowMap;
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.08;
-    this.container.appendChild(this.renderer.domElement);
-
-    // 4. Ciclo Solar e Iluminación (Hora dorada de la tarde)
-    this.dayNightCycle = new DayNightCycle(this.scene, this.renderer);
-    this.dayNightCycle.setTime(14.25 / 24);
-
-    // 5. Cursors 3D & Cuadrícula (256x256 con celdas de 50.0m = 163.8 km²)
-    this.gridCursor = new GridCursor(4.0);
-    this.gridCursor.mesh.visible = false;
-    this.scene.add(this.gridCursor.mesh);
-
-    this.brushCursor = new BrushCursor(40.0);
-    this.scene.add(this.brushCursor.group);
-
-    this.worldGridHelper = new WorldGridHelper(256, 256, 50.0);
-    this.worldGridHelper.setVisible(false);
-    this.scene.add(this.worldGridHelper.group);
-
-    this.scene.add(this.vehiclesGroup);
-
-    // 6. Terreno dinámico con multi-textura PBR continuo (256x256 con celdas de 50.0m = 12.8km x 12.8km = 163.8 km²)
-    this.terrainData = TerrainGenerator.generate(256, 256, 50.0, this.currentLandscapeConfig);
-    this.terrain = new DynamicTerrainMesh(this.terrainData);
-    this.scene.add(this.terrain.group);
-
-    // 7. Malla física de agua SWE turquesa
-    this.water = new DynamicWaterMesh(256, 256, 50.0);
-    const initialWater = new Float32Array(256 * 256);
-    this.water.updateWaterLevels(initialWater, this.terrainData.heights, this.currentLandscapeConfig.waterLevel);
-    this.scene.add(this.water.mesh);
-
-    // 8. Carreteras PBR
-    this.roadMesh = new RoadNetworkMesh(256, 256, 50.0);
-    this.scene.add(this.roadMesh.group);
-
-    this.roadPreview = new RoadPreviewMesh(256, 256, 50.0);
-    this.scene.add(this.roadPreview.group);
-
-    // Casillas de Zonificación RCI (CityRT)
-    this.zoningMesh = new ZoningMesh();
-    this.scene.add(this.zoningMesh.group);
-
-    // Gestor de Tráfico y Circulación de Vehículos PBR
-    this.trafficManager = new TrafficManager(this.scene, this.roadGraph, 50.0, 6400.0, 6400.0);
-
-    // HUD Flotante de Construcción de Carreteras
-    this.roadConstructionHUD = new RoadConstructionHUD(this.container);
-
-    // 9. Gestor de Edificios y Rascacielos
-    this.buildingManager = new BuildingManager(this.scene);
-
-    // 10. Gestor de Vegetación y Arbolado instanciado
-    this.foliageManager = new FoliageManager(this.scene);
-
-    // 11. Sistema de Macro-Parcelas de Ciudad y Límites Construibles (Cities: Skylines / CityRT)
-    // 16 Macro-parcelas de 3.2km x 3.2km (10.24 km² / 1,024 ha cada una) que cubren el territorio regional de 163.8 km² (~160 km²).
-    // Se comienza con la macro-parcela inicial en el valle fértil central (tx: 1, tz: 1)
-    this.cityTileManager = new CityTileManager(256, 256, 50.0, 64, 1, 1);
-    this.cityTileManager.analyzeTerrainResources(this.terrainData.heights, this.terrainData.biomes);
-    this.cityBoundaryMesh = new CityBoundaryMesh();
-    this.scene.add(this.cityBoundaryMesh.group);
-
-    // 12. Malla de Paisaje Continuo Extendido (Outer Landscape Mesh hasta 36 km)
-    // Ocupa la pantalla entera sin cortes ni vacíos, con el mismo sombreador PBR y textura que el terreno activo
-    const landscapeGen = new NaturalLandscapeGenerator(this.currentLandscapeConfig);
-    this.outerLandscape = new OuterLandscapeMesh({
-      generator: landscapeGen,
-      halfSize: (256 * 50.0) / 2, // 6400.0m
-      outerRadius: 36000.0,
-      radialRings: 18,
-      angularSectors: 128,
-    });
-    this.scene.add(this.outerLandscape.group);
-
-    // Restringir el movimiento de cámara a la macro-parcela inicial con margen suave elástico
-    const initialBounds = this.cityTileManager.getUnlockedWorldBoundingBox();
-    this.cameraController.setBounds({ ...initialBounds, margin: 40.0 });
-
-    // 13. Generar Mundo Natural con Autovía Regional de Entrada (CityRT / Cities: Skylines)
-    this.initStarterCity();
-
-    // 14. Interfaces UI
-    this.areasUI = new AreasUI(document.body, (tx, tz) => this.purchaseTile(tx, tz));
-    this.zoningToolbarUI = new ZoningToolbarUI(document.body);
-
-    this.landscapeUI = new LandscapeGeneratorUI(document.body, (config) => {
-      this.regenerateWorld(config);
-    });
-
-    this.terraformUI = new TerraformUI(document.body, (settings) => {
-      this.currentBrushSettings = { ...settings };
-      this.brushCursor.setRadius(settings.radius);
-
-      if (settings.tool === TerraformTool.RAISE) this.brushCursor.setColor(0x4caf50);
-      else if (settings.tool === TerraformTool.LOWER) this.brushCursor.setColor(0xf44336);
-      else if (settings.tool === TerraformTool.FLATTEN) this.brushCursor.setColor(0xff9800);
-      else if (settings.tool === TerraformTool.SMOOTH) this.brushCursor.setColor(0x00e5ff);
-    });
-
-    this.roadToolbarUI = new RoadToolbarUI(
-      document.body,
-      (type) => {
-        this.selectedRoadType = type;
-      },
-      (mode) => {
-        this.selectedDrawMode = mode;
-      },
-      (elev) => {
-        this.selectedElevationOffset = elev;
-      }
-    );
-
-    this.mainToolbarUI = new MainToolbarUI(
-      document.body,
-      (tool) => {
-        this.activeTool = tool;
-        this.cameraController.enableQERotation = tool !== ActiveTool.ROAD;
-
-        const showGrid = tool === ActiveTool.ROAD || tool === ActiveTool.TERRAFORM || tool === ActiveTool.ZONE;
-        this.worldGridHelper.setVisible(showGrid);
-
-        const tPanel = document.getElementById('terraform-panel');
-        if (tPanel) {
-          tPanel.style.display = tool === ActiveTool.TERRAFORM ? 'flex' : 'none';
-        }
-
-        this.roadToolbarUI.setVisible(tool === ActiveTool.ROAD);
-        this.zoningToolbarUI.setVisible(tool === ActiveTool.ZONE);
-
-        // Gestión de la vista de compra de áreas/parcelas
-        const isAreas = tool === ActiveTool.AREAS;
-        this.cityBoundaryMesh.setAreasViewVisible(isAreas);
-        this.areasUI.setVisible(isAreas);
-
-        // Malla de casillas de zonificación visible en herramientas de Carretera y Zonificación
-        this.zoningMesh.setVisible(tool === ActiveTool.ZONE || tool === ActiveTool.ROAD);
-
-        if (tool !== ActiveTool.TERRAFORM) {
-          this.brushCursor.setVisible(false);
-        }
-
-        if (tool !== ActiveTool.ROAD) {
-          this.roadPreview.hide();
-          this.roadPreview.hideSnapRing();
-          this.roadConstructionHUD.hide();
-          this.roadStartCell = null;
-          this.currentSnapNode = null;
-          this.currentSnapEdge = null;
-        }
-
-        if (tool === ActiveTool.INSPECT || isAreas) {
-          this.gridCursor.mesh.visible = false;
-        }
-      },
-      () => {
-        this.landscapeUI.toggle();
-      }
-    );
-
-    const tp = document.getElementById('terraform-panel');
-    if (tp) tp.style.display = 'none';
-    this.roadToolbarUI.setVisible(false);
-
-    // 15. Web Worker
-    this.worker = new Worker(new URL('./worker/sim.worker.ts', import.meta.url), {
-      type: 'module',
-    });
-    this.setupWorkerListeners();
-    this.setupSpeedControls();
-
-    // 16. Eventos de entrada
-    window.addEventListener('resize', this.onWindowResize.bind(this));
-    this.container.addEventListener('mousemove', this.onMouseMove.bind(this));
-    this.container.addEventListener('mousedown', this.onMouseDown.bind(this));
-    window.addEventListener('mouseup', this.onMouseUp.bind(this));
-  }
-
-  private setupWorkerListeners(): void {
-    this.worker.onmessage = (event: MessageEvent<WorkerToMainMessage>) => {
-      const msg = event.data;
-      if (msg.type === 'SIMULATION_UPDATE') {
-        this.currentStats = msg.payload.stats;
-        if (msg.payload.waterDepthBuffer && this.water && this.terrain) {
-          this.water.updateWaterLevels(msg.payload.waterDepthBuffer, this.terrainData.heights);
-        }
-        this.updateHUD();
-      }
-    };
-  }
-
-  public sendToWorker(msg: MainToWorkerMessage): void {
-    this.worker.postMessage(msg);
-  }
-
-  public initWorld(seed: number = 1337, width: number = 256, height: number = 256): void {
-    this.sendToWorker({
-      type: 'INIT_WORLD',
-      payload: {
-        seed,
-        mapWidth: width,
-        mapHeight: height,
-        heights: this.terrainData.heights,
-      },
-    });
-  }
-
-  private getCellElevation = (gx: number, gz: number): number => {
-    const w = this.terrainData.width;
-    const h = this.terrainData.height;
-    if (gx < 0 || gx > w || gz < 0 || gz > h) return 0;
-    const x0 = Math.max(0, Math.min(w - 1, Math.floor(gx)));
-    const z0 = Math.max(0, Math.min(h - 1, Math.floor(gz)));
-    const x1 = Math.min(w, x0 + 1);
-    const z1 = Math.min(h, z0 + 1);
-    const tx = Math.max(0, Math.min(1, gx - x0));
-    const tz = Math.max(0, Math.min(1, gz - z0));
-    const stride = w + 1;
-    const h00 = this.terrainData.heights[z0 * stride + x0] ?? 0;
-    const h10 = this.terrainData.heights[z0 * stride + x1] ?? 0;
-    const h01 = this.terrainData.heights[z1 * stride + x0] ?? 0;
-    const h11 = this.terrainData.heights[z1 * stride + x1] ?? 0;
-    const top = h00 * (1 - tx) + h10 * tx;
-    const btm = h01 * (1 - tx) + h11 * tx;
-    return top * (1 - tz) + btm * tz;
-  };
-
-  public purchaseTile(tx: number, tz: number): void {
-    const res = this.cityTileManager.unlockTile(
-      tx,
-      tz,
-      this.currentStats.money,
-      this.currentStats.population
-    );
-    if (res.success) {
-      this.currentStats.money = Math.max(0, this.currentStats.money - res.costDeducted);
-      this.cityBoundaryMesh.rebuild(this.cityTileManager, this.getCellElevation);
-
-      // Expandir dinámicamente los límites de paneo de la cámara al nuevo territorio adquirido
-      const updatedBounds = this.cityTileManager.getUnlockedWorldBoundingBox();
-      this.cameraController.setBounds({ ...updatedBounds, margin: 40.0 });
-
-      const tile = this.cityTileManager.getTile(tx, tz);
-      const check = this.cityTileManager.canUnlockTile(
-        tx,
-        tz,
-        this.currentStats.money,
-        this.currentStats.population
-      );
-      this.areasUI.setSelectedTile(tile, false, this.currentStats.money, check);
-      this.updateHUD();
-    } else {
-      console.warn('[CityTileManager] Compra rechazada:', res.reason);
-    }
-  }
-
-  private onMouseDown(event: MouseEvent): void {
-    this.isMouseDown = true;
-    this.mouseButton = event.button;
-
-    if (event.button === 0 && this.hasHitPoint) {
-      const gx = this.gridCursor.currentGridX;
-      const gz = this.gridCursor.currentGridZ;
-
-      if (this.activeTool === ActiveTool.ZONE) {
-        if (this.cityTileManager.isCellBuildable(gx, gz)) {
-          this.zoningManager.paintZone(
-            this.currentHitPoint.x,
-            this.currentHitPoint.z,
-            this.zoningToolbarUI.brushRadius,
-            this.zoningToolbarUI.selectedZone
-          );
-          this.zoningMesh.rebuild(this.zoningManager, false);
-        }
-      } else if (this.activeTool === ActiveTool.AREAS) {
-        const tx = Math.floor(gx / this.cityTileManager.tileCellSize);
-        const tz = Math.floor(gz / this.cityTileManager.tileCellSize);
-        const tile = this.cityTileManager.getTile(tx, tz);
-        const isAdj = this.cityTileManager.isTileAdjacentToUnlocked(tx, tz);
-        const check = this.cityTileManager.canUnlockTile(
-          tx,
-          tz,
-          this.currentStats.money,
-          this.currentStats.population
-        );
-        this.areasUI.setSelectedTile(tile, isAdj, this.currentStats.money, check);
-      } else if (this.activeTool === ActiveTool.ROAD) {
-        // Restricción estricta: solo se puede iniciar carretera en territorio desbloqueado
-        if (!this.cityTileManager.isCellBuildable(gx, gz)) {
-          return;
-        }
-
-        if (this.selectedDrawMode === RoadDrawMode.ROUNDABOUT) {
-          const roundaboutRadius = 3.5;
-          const roundaboutNodes = SplineUtils.generateRoundaboutNodes(gx, gz, roundaboutRadius, 12);
-          let allBuildable = true;
-          for (const n of roundaboutNodes) {
-            if (!this.cityTileManager.isCellBuildable(Math.round(n.x), Math.round(n.z))) {
-              allBuildable = false;
-              break;
-            }
-          }
-          if (allBuildable) {
-            for (let i = 0; i < roundaboutNodes.length; i++) {
-              const nextIdx = (i + 1) % roundaboutNodes.length;
-              const cur = roundaboutNodes[i]!;
-              const nxt = roundaboutNodes[nextIdx]!;
-              const elevA = this.getCellElevation(Math.round(cur.x), Math.round(cur.z)) + this.selectedElevationOffset;
-              const elevB = this.getCellElevation(Math.round(nxt.x), Math.round(nxt.z)) + this.selectedElevationOffset;
-              this.roadGraph.addRoadSegment(cur.x, cur.z, nxt.x, nxt.z, elevA, elevB, RoadType.ONE_WAY_2L);
-            }
-            this.currentStats.money = Math.max(0, this.currentStats.money - 300);
-            this.roadMesh.rebuild(this.roadGraph);
-            this.zoningManager.generateZoningCells(this.roadGraph, this.getCellElevation);
-            this.zoningMesh.rebuild(this.zoningManager, false);
-            this.updateFoliageInstances();
-            this.updateHUD();
-          }
-        } else {
-          // Iniciar trazado con snapping magnético si procede
-          let startGx = gx;
-          let startGz = gz;
-          if (this.currentSnapNode) {
-            startGx = this.currentSnapNode.x;
-            startGz = this.currentSnapNode.z;
-          } else if (this.currentSnapEdge) {
-            startGx = Math.round(this.currentSnapEdge.projX * 10) / 10;
-            startGz = Math.round(this.currentSnapEdge.projZ * 10) / 10;
-          }
-
-          this.roadStartCell = { x: startGx, z: startGz };
-          this.currentTargetGrid = { x: startGx, z: startGz };
-          this.roadPreview.updatePreview(
-            startGx,
-            startGz,
-            startGx,
-            startGz,
-            this.selectedDrawMode,
-            this.selectedRoadType,
-            this.getCellElevation,
-            true,
-            this.selectedElevationOffset
-          );
-        }
-      } else if (this.activeTool === ActiveTool.DEMOLISH) {
-        if (!this.cityTileManager.isCellBuildable(gx, gz)) {
-          return;
-        }
-        const targetNode = this.roadGraph.getNodeAt(gx, gz) ?? this.roadGraph.findClosestNode(gx, gz, 2.0);
-        if (targetNode) {
-          this.roadGraph.removeNode(targetNode.id);
-          this.roadMesh.rebuild(this.roadGraph);
-          this.zoningManager.generateZoningCells(this.roadGraph, this.getCellElevation);
-          this.zoningMesh.rebuild(this.zoningManager, false);
-          this.updateFoliageInstances();
-        }
-      }
-    }
-  }
-
-  private onMouseUp(): void {
-    if (this.mouseButton === 0 && this.activeTool === ActiveTool.ROAD && this.roadStartCell) {
-      const startX = this.roadStartCell.x;
-      const startZ = this.roadStartCell.z;
-      const endX = this.currentTargetGrid.x;
-      const endZ = this.currentTargetGrid.z;
-
-      const dist = Math.hypot(endX - startX, endZ - startZ);
-      const cs = this.terrainData.cellSize;
-
-      if (this.isCurrentRoadValid && dist * cs > 2.0) {
-        // 1. Si el punto final conecta en medio de una carretera existente, dividirla con un nuevo nodo
-        if (this.currentSnapEdge) {
-          const splitElev = this.getCellElevation(endX, endZ) + this.selectedElevationOffset;
-          this.roadGraph.splitEdge(this.currentSnapEdge.edge.id, endX, endZ, splitElev);
-        }
-
-        const elevA = this.getCellElevation(startX, startZ) + this.selectedElevationOffset;
-        const elevB = this.getCellElevation(endX, endZ) + this.selectedElevationOffset;
-
-        if (this.selectedDrawMode === RoadDrawMode.CURVE) {
-          const sampled = SplineUtils.sampleBezierCells(
-            new Vec2(startX, startZ),
-            new Vec2(startX, endZ),
-            new Vec2(endX, endZ),
-            12
-          );
-
-          for (let i = 0; i < sampled.length - 1; i++) {
-            const cur = sampled[i]!;
-            const nxt = sampled[i + 1]!;
-            const e1 = this.getCellElevation(Math.round(cur.x), Math.round(cur.z)) + this.selectedElevationOffset;
-            const e2 = this.getCellElevation(Math.round(nxt.x), Math.round(nxt.z)) + this.selectedElevationOffset;
-            this.roadGraph.addRoadSegment(cur.x, cur.z, nxt.x, nxt.z, e1, e2, this.selectedRoadType);
-          }
-        } else {
-          // Trazado recto a CUALQUIER ÁNGULO directo (CityRT clone)
-          this.roadGraph.addRoadSegment(startX, startZ, endX, endZ, elevA, elevB, this.selectedRoadType);
-        }
-
-        // Deducir costes de obra
-        this.currentStats.money = Math.max(0, this.currentStats.money - this.currentRoadCost);
-
-        // Reconstrucción reactiva de mallas viales y casillas de zonificación
-        this.roadMesh.rebuild(this.roadGraph);
-        this.zoningManager.generateZoningCells(this.roadGraph, this.getCellElevation);
-        this.zoningMesh.rebuild(this.zoningManager, false);
-        this.updateFoliageInstances();
-        this.updateHUD();
-      }
-
-      this.roadPreview.hide();
-      this.roadPreview.hideSnapRing();
-      this.roadConstructionHUD.hide();
-      this.roadStartCell = null;
-      this.currentSnapNode = null;
-      this.currentSnapEdge = null;
-    }
-
-    this.isMouseDown = false;
-    this.mouseButton = -1;
-  }
-
-  private onMouseMove(event: MouseEvent): void {
-    this.mouseVec.x = (event.clientX / window.innerWidth) * 2 - 1;
-    this.mouseVec.y = -(event.clientY / window.innerHeight) * 2 + 1;
-
-    this.raycaster.setFromCamera(this.mouseVec, this.camera);
-
-    const hit = this.raycaster.ray.intersectPlane(this.groundPlane, this.currentHitPoint);
-    if (hit) {
-      this.hasHitPoint = true;
-      const w = this.terrainData.width;
-      const h = this.terrainData.height;
-      const cs = this.terrainData.cellSize;
-      const halfW = (w * cs) / 2;
-      const halfH = (h * cs) / 2;
-
-      // Snap métrico fino a múltiplos de 2 metros en coordenadas del mundo
-      const worldSnap = 2.0;
-      const snappedWorldX = Math.round(this.currentHitPoint.x / worldSnap) * worldSnap;
-      const snappedWorldZ = Math.round(this.currentHitPoint.z / worldSnap) * worldSnap;
-
-      const gx = Math.max(0, Math.min(w - 1, (snappedWorldX + halfW) / cs - 0.5));
-      const gz = Math.max(0, Math.min(h - 1, (snappedWorldZ + halfH) / cs - 0.5));
-
-      this.gridCursor.currentGridX = gx;
-      this.gridCursor.currentGridZ = gz;
-
-      const cx = (gx + 0.5) * cs - halfW;
-      const cz = (gz + 0.5) * cs - halfH;
-      const elev = this.getCellElevation(gx, gz);
-      this.gridCursor.mesh.position.set(cx, elev + 0.05, cz);
-
-      // Comprobar si la celda está dentro del territorio desbloqueado
-      const isCellInBounds = this.cityTileManager.isCellBuildable(Math.round(gx), Math.round(gz));
-
-      if (this.activeTool === ActiveTool.ROAD || this.activeTool === ActiveTool.TERRAFORM || this.activeTool === ActiveTool.ZONE) {
-        this.worldGridHelper.highlightCell(Math.round(gx), Math.round(gz), elev);
-      }
-
-      const isTerraforming = this.activeTool === ActiveTool.TERRAFORM && this.currentBrushSettings.tool !== TerraformTool.NONE;
-      const isRoadOrDemolish = this.activeTool === ActiveTool.ROAD || this.activeTool === ActiveTool.DEMOLISH || this.activeTool === ActiveTool.ZONE;
-
-      this.gridCursor.mesh.visible = isRoadOrDemolish;
-      this.brushCursor.setVisible(isTerraforming);
-      this.brushCursor.setPosition(this.currentHitPoint.x, elev, this.currentHitPoint.z);
-
-      if (this.activeTool === ActiveTool.ZONE && this.isMouseDown && this.mouseButton === 0) {
-        // Pintura interactiva de zonas RCI mientras se arrastra
-        if (isCellInBounds) {
-          this.zoningManager.paintZone(
-            this.currentHitPoint.x,
-            this.currentHitPoint.z,
-            this.zoningToolbarUI.brushRadius,
-            this.zoningToolbarUI.selectedZone
-          );
-          this.zoningMesh.rebuild(this.zoningManager, false);
-        }
-      } else if (this.activeTool === ActiveTool.ROAD) {
-        let targetGx = gx;
-        let targetGz = gz;
-
-        // Snapping magnético a nodos y aristas existentes
-        this.currentSnapNode = this.roadGraph.findClosestNode(gx, gz, 3.0);
-        if (this.currentSnapNode) {
-          this.currentSnapEdge = null;
-          targetGx = this.currentSnapNode.x;
-          targetGz = this.currentSnapNode.z;
-          const nwx = (targetGx + 0.5) * cs - halfW;
-          const nwz = (targetGz + 0.5) * cs - halfH;
-          this.roadPreview.showSnapRing(nwx, this.currentSnapNode.elevation, nwz);
-        } else {
-          this.currentSnapEdge = this.roadGraph.findClosestEdge(gx, gz, 2.2);
-          if (this.currentSnapEdge) {
-            targetGx = Math.round(this.currentSnapEdge.projX * 10) / 10;
-            targetGz = Math.round(this.currentSnapEdge.projZ * 10) / 10;
-            const ewx = (this.currentSnapEdge.projX + 0.5) * cs - halfW;
-            const ewz = (this.currentSnapEdge.projZ + 0.5) * cs - halfH;
-            const eElev = this.getCellElevation(Math.round(this.currentSnapEdge.projX), Math.round(this.currentSnapEdge.projZ));
-            this.roadPreview.showSnapRing(ewx, eElev, ewz);
-          } else {
-            this.roadPreview.hideSnapRing();
-          }
-        }
-
-        if (this.selectedDrawMode === RoadDrawMode.ROUNDABOUT) {
-          this.roadPreview.updatePreview(
-            gx,
-            gz,
-            gx,
-            gz,
-            RoadDrawMode.ROUNDABOUT,
-            this.selectedRoadType,
-            this.getCellElevation,
-            isCellInBounds,
-            this.selectedElevationOffset
-          );
-          this.roadConstructionHUD.update(
-            event.clientX,
-            event.clientY,
-            22.0,
-            0,
-            300,
-            isCellInBounds,
-            isCellInBounds ? undefined : 'Fuera de parcela',
-            this.selectedElevationOffset
-          );
-        } else if (this.isMouseDown && this.mouseButton === 0 && this.roadStartCell) {
-          const startX = this.roadStartCell.x;
-          const startZ = this.roadStartCell.z;
-
-          // Snapping magnético angular (0°, 45°, 90°, 135°, 180°, etc. con tolerancia ±6.5°)
-          if (this.selectedDrawMode === RoadDrawMode.STRAIGHT && !this.currentSnapNode && !this.currentSnapEdge) {
-            const dX = targetGx - startX;
-            const dZ = targetGz - startZ;
-            const dist = Math.hypot(dX, dZ);
-            if (dist > 1.2) {
-              const angleRad = Math.atan2(dZ, dX);
-              const angleDeg = ((angleRad * 180) / Math.PI + 360) % 360;
-
-              const snapAngles = [0, 45, 90, 135, 180, 225, 270, 315, 360];
-              for (const snapTarget of snapAngles) {
-                if (Math.abs(angleDeg - snapTarget) <= 6.5) {
-                  const rad = (snapTarget * Math.PI) / 180;
-                  targetGx = startX + Math.round(dist * Math.cos(rad) * 10) / 10;
-                  targetGz = startZ + Math.round(dist * Math.sin(rad) * 10) / 10;
-                  break;
-                }
-              }
-            }
-          }
-
-          this.currentTargetGrid = { x: targetGx, z: targetGz };
-
-          const startInBounds = this.cityTileManager.isCellBuildable(Math.round(startX), Math.round(startZ));
-          const endInBounds = this.cityTileManager.isCellBuildable(Math.round(targetGx), Math.round(targetGz));
-
-          const dX_m = (targetGx - startX) * cs;
-          const dZ_m = (targetGz - startZ) * cs;
-          this.currentRoadLength = Math.hypot(dX_m, dZ_m);
-          this.currentRoadAngle = Math.round(((Math.atan2(dZ_m, dX_m) * 180) / Math.PI + 360) % 360);
-
-          const config = ROAD_CONFIGS[this.selectedRoadType];
-          const cellSteps = Math.max(1, Math.round(this.currentRoadLength / cs));
-          this.currentRoadCost = cellSteps * config.costPerCell;
-
-          if (!startInBounds || !endInBounds) {
-            this.isCurrentRoadValid = false;
-            this.roadInvalidReason = 'Fuera de parcela';
-          } else if (this.currentStats.money < this.currentRoadCost) {
-            this.isCurrentRoadValid = false;
-            this.roadInvalidReason = 'Fondos insuficientes';
-          } else {
-            this.isCurrentRoadValid = true;
-            this.roadInvalidReason = '';
-          }
-
-          this.roadPreview.updatePreview(
-            startX,
-            startZ,
-            targetGx,
-            targetGz,
-            this.selectedDrawMode,
-            this.selectedRoadType,
-            this.getCellElevation,
-            this.isCurrentRoadValid,
-            this.selectedElevationOffset
-          );
-
-          this.roadConstructionHUD.update(
-            event.clientX,
-            event.clientY,
-            this.currentRoadLength,
-            this.currentRoadAngle,
-            this.currentRoadCost,
-            this.isCurrentRoadValid,
-            this.roadInvalidReason,
-            this.selectedElevationOffset
-          );
-        } else {
-          this.roadConstructionHUD.hide();
-        }
-      } else if (this.activeTool === ActiveTool.AREAS) {
-        const tx = Math.floor(gx / this.cityTileManager.tileCellSize);
-        const tz = Math.floor(gz / this.cityTileManager.tileCellSize);
-        const tile = this.cityTileManager.getTile(tx, tz);
-        const isAdj = this.cityTileManager.isTileAdjacentToUnlocked(tx, tz);
-        const check = this.cityTileManager.canUnlockTile(
-          tx,
-          tz,
-          this.currentStats.money,
-          this.currentStats.population
-        );
-        this.areasUI.setSelectedTile(tile, isAdj, this.currentStats.money, check);
-      }
-    } else {
-      this.hasHitPoint = false;
-      this.gridCursor.mesh.visible = false;
-      this.brushCursor.setVisible(false);
-      this.roadPreview.hide();
-      this.roadPreview.hideSnapRing();
-      this.roadConstructionHUD.hide();
-    }
-  }
-
-  private setupSpeedControls(): void {
-    const btnPause = document.getElementById('btn-speed-pause');
-    const btn1 = document.getElementById('btn-speed-1');
-    const btn2 = document.getElementById('btn-speed-2');
-
-    const setSpeed = (speed: number) => {
-      this.sendToWorker({ type: 'SET_SIMULATION_SPEED', payload: { speed } });
-      btnPause?.classList.toggle('active', speed === 0);
-      btn1?.classList.toggle('active', speed === 1);
-      btn2?.classList.toggle('active', speed === 2);
-    };
-
-    btnPause?.addEventListener('click', () => setSpeed(0));
-    btn1?.addEventListener('click', () => setSpeed(1));
-    btn2?.addEventListener('click', () => setSpeed(2));
-
-    window.addEventListener('keydown', (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      if (e.code === 'Space') {
-        e.preventDefault();
-        const isPaused = btnPause?.classList.contains('active');
-        setSpeed(isPaused ? 1 : 0);
-      }
-    });
-  }
-
-  private updateHUD(): void {
-    const timeOfDay = Math.floor(this.dayNightCycle.getTime() * 24);
-    const minutes = Math.floor((this.dayNightCycle.getTime() * 24 * 60) % 60);
-    const timeStr = `${timeOfDay.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
-    const unlockedTiles = this.cityTileManager.getUnlockedTileCount();
-    const totalTiles = this.cityTileManager.tilesX * this.cityTileManager.tilesZ;
-    const milestone = this.cityTileManager.getCurrentMilestone(this.currentStats.population);
-
-    const elMilestone = document.getElementById('hud-milestone');
-    if (elMilestone) elMilestone.textContent = milestone.name.toUpperCase();
-
-    const elMoney = document.getElementById('hud-money');
-    if (elMoney) elMoney.textContent = `$${this.currentStats.money.toLocaleString()}`;
-
-    const elPop = document.getElementById('hud-pop');
-    if (elPop) elPop.textContent = this.currentStats.population.toLocaleString();
-
-    const elTiles = document.getElementById('hud-tiles');
-    if (elTiles) elTiles.textContent = `${unlockedTiles}/${totalTiles}`;
-
-    const elTime = document.getElementById('hud-time');
-    if (elTime) elTime.textContent = `🕒 ${timeStr}`;
-  }
-
-  private onWindowResize(): void {
-    this.camera.aspect = window.innerWidth / window.innerHeight;
-    this.camera.updateProjectionMatrix();
-    this.renderer.setSize(window.innerWidth, window.innerHeight);
-  }
-
-  /**
-   * Inicializa el mundo natural con autovía regional de entrada (CityRT / Cities: Skylines):
-   * - Relieve continuo, montañas, ríos, lagunas, costa y bosques naturales.
-   * - Autovía regional conectada desde el límite del mapa que entra en la macro-parcela inicial.
-   * - Casillas de zonificación RCI 4x4m generadas a los lados de la calzada.
-   */
-  private async initStarterCity(): Promise<void> {
-    // 1. Limpiar red vial, edificios y agentes de tráfico previos
-    this.roadGraph.clear();
-    this.buildingManager.clear();
-    if (this.trafficManager) this.trafficManager.clear();
-    this.zoningManager.cells.clear();
-
-    // 2. Autovía regional de conexión exterior (Highway entrance / Dual carriageway)
-    // Entra desde el límite oeste de la macro-parcela central [1, 1] hacia su interior
-    const startX = 64;
-    const endX = 82;
-    const highwayGz = 96;
-    const elevA = this.getCellElevation(startX, highwayGz);
-    const elevB = this.getCellElevation(endX, highwayGz);
-    this.roadGraph.addRoadSegment(startX, highwayGz, endX, highwayGz, elevA, elevB, RoadType.AVENUE_4L);
-    this.roadMesh.rebuild(this.roadGraph);
-
-    // 3. Generar casillas de zonificación de 4m x 4m a lo largo de la vía de entrada
-    this.zoningManager.generateZoningCells(this.roadGraph, this.getCellElevation);
-    this.zoningMesh.rebuild(this.zoningManager, false);
-
-    // 4. Generar bosques y vegetación natural procedimental por TODO el mundo
-    this.baseFoliagePoints = FoliageGenerator.generateWorldFoliage(this.terrainData, this.currentLandscapeConfig);
-    this.updateFoliageInstances();
-
-    // 5. Reconstruir los límites de la parcela inicial de la ciudad
-    this.cityBoundaryMesh.rebuild(this.cityTileManager, this.getCellElevation);
-
-    // 6. Enfocar la cámara hacia el final de la autovía donde el jugador conectará su primera carretera
-    const cs = this.terrainData.cellSize;
-    const halfW = (this.terrainData.width * cs) / 2;
-    const halfH = (this.terrainData.height * cs) / 2;
-    const terminusWorldX = (endX + 0.5) * cs - halfW;
-    const terminusWorldZ = (highwayGz + 0.5) * cs - halfH;
-
-    this.cameraController.setView(
-      {
-        target: { x: terminusWorldX + 22, y: elevB + 4.2, z: terminusWorldZ },
-        distance: 380,
-        yaw: 0.82,
-        pitch: 0.40,
-      },
-      true
-    );
-
-    this.updateHUD();
-  }
-
-  /**
-   * Regenera completamente el mundo y paisaje natural en base a la configuración paramétrica
-   * seleccionada por el jugador (presets, cordilleras, extensión de costa, ríos, acantilados vs playas, semilla).
-   */
-  public regenerateWorld(config: LandscapeConfig): void {
-    this.currentLandscapeConfig = { ...config };
-
-    // 1. Regenerar topografía del terreno activo (163.8 km²)
-    this.terrainData = TerrainGenerator.generate(256, 256, 50.0, this.currentLandscapeConfig);
-    if (this.terrain) {
-      this.terrain.setGridData(this.terrainData, this.currentLandscapeConfig.waterLevel);
-    }
-
-    // 2. Regenerar paisaje exterior continuo hasta 36 km (cero cortes ni vacíos)
-    const gen = new NaturalLandscapeGenerator(this.currentLandscapeConfig);
-    if (this.outerLandscape) {
-      this.outerLandscape.rebuild(gen);
-    }
-
-    // 3. Sincronizar nivel del agua del océano y ríos
-    if (this.water) {
-      const initialWater = new Float32Array(256 * 256);
-      this.water.updateWaterLevels(initialWater, this.terrainData.heights, this.currentLandscapeConfig.waterLevel);
-    }
-
-    // 4. Reinicializar macro-parcelas con la inicial en el valle fértil
-    this.cityTileManager = new CityTileManager(256, 256, 50.0, 64, 1, 1);
-    this.cityTileManager.analyzeTerrainResources(this.terrainData.heights, this.terrainData.biomes);
-    this.cityBoundaryMesh.rebuild(this.cityTileManager, this.getCellElevation);
-
-    // 5. Restablecer límites de cámara sobre la parcela inicial
-    const initialBounds = this.cityTileManager.getUnlockedWorldBoundingBox();
-    this.cameraController.setBounds({ ...initialBounds, margin: 40.0 });
-
-    // 6. Regenerar autovía de entrada y vegetación
-    this.initStarterCity();
-
-    // 7. Sincronizar con el worker de simulación
-    this.initWorld(this.currentLandscapeConfig.seed, 256, 256);
-
-    // 8. Restablecer estadísticas de partida
-    this.currentStats.money = 50000;
-    this.currentStats.population = 0;
-    this.updateHUD();
-  }
-
-  /**
-   * Crecimiento procedimental de edificios en casillas zonificadas (CityRT / Cities: Skylines):
-   * Spawnea viviendas suburbanas con tejados cerámicos (Residencial), comercios/oficinas (Comercial)
-   * o naves de chapa y hormigón (Industrial).
-   */
-  private simulateBuildingGrowth(): void {
-    const unbuiltCells = this.zoningManager.getUnbuiltZonedCells();
-    if (unbuiltCells.length === 0) return;
-
-    // Desarrollar 1 o 2 parcelas por ciclo
-    const countToBuild = Math.min(unbuiltCells.length, 2);
-    let newPop = 0;
-
-    for (let i = 0; i < countToBuild; i++) {
-      const idx = Math.floor(Math.random() * unbuiltCells.length);
-      const cell = unbuiltCells.splice(idx, 1)[0]!;
-      cell.hasBuilding = true;
-
-      if (cell.zoneType === ZoneType.RESIDENTIAL) {
-        // Vivienda suburbana / unifamiliar con paredes de revoco y tejado cerámico
-        const w = 4.4 + (Math.random() * 1.2 - 0.6);
-        const d = 4.2 + (Math.random() * 1.2 - 0.6);
-        const h = 6.5 + Math.random() * 3.0;
-        this.buildingManager.addBuilding({
-          x: cell.x,
-          y: cell.elevation,
-          z: cell.z,
-          yaw: cell.yaw,
-          type: 'suburb',
-          width: w,
-          depth: d,
-          height: h,
-        });
-        newPop += Math.floor(4 + Math.random() * 8);
-      } else if (cell.zoneType === ZoneType.COMMERCIAL) {
-        // Bloque comercial contemporáneo
-        const w = 5.2 + (Math.random() * 1.4 - 0.7);
-        const d = 5.0 + (Math.random() * 1.4 - 0.7);
-        const h = 8.0 + Math.random() * 6.0;
-        this.buildingManager.addBuilding({
-          x: cell.x,
-          y: cell.elevation,
-          z: cell.z,
-          yaw: cell.yaw,
-          type: 'commercial',
-          width: w,
-          depth: d,
-          height: h,
-          colorTint: 0xd8d4cb,
-        });
-      } else if (cell.zoneType === ZoneType.INDUSTRIAL) {
-        // Nave industrial / fábrica de chapa ondulada
-        const w = 6.2 + (Math.random() * 1.6 - 0.8);
-        const d = 5.8 + (Math.random() * 1.6 - 0.8);
-        const h = 7.0 + Math.random() * 4.0;
-        this.buildingManager.addBuilding({
-          x: cell.x,
-          y: cell.elevation,
-          z: cell.z,
-          yaw: cell.yaw,
-          type: 'industrial',
-          width: w,
-          depth: d,
-          height: h,
-        });
-      }
-    }
-
-    if (newPop > 0) {
-      this.currentStats.population += newPop;
-      this.updateHUD();
-    }
-  }
-
-  /**
-   * Actualiza las instancias de vegetación en el mundo, despejando automáticamente
-   * los árboles y arbustos que coincidan con el trazado de carreteras construidas.
-   */
-  public updateFoliageInstances(): void {
-    if (this.roadGraph.nodes.size === 0) {
-      this.foliageManager.setFoliage(this.baseFoliagePoints);
+  const rebuildPlat = (): void => {
+    const zones = plattedZonesFor(store.getState().selectedTool);
+    if (zones.length === 0 || !zoneGrid.isVisible()) {
+      zoneGrid.setParcels([]);
       return;
     }
+    const net = clientGrid.roads;
+    if (net && (platCells === null || platCells.version !== net.version)) {
+      platCells = { version: net.version, cells: buildRoadCells(net, clientGrid.size) };
+    }
+    const src = platSourceOf(clientGrid, net ? platCells!.cells : null, latestLandValue, (id) =>
+      clientGrid.profileById(id),
+    );
+    const parcels: Parcel[] = [];
+    const framed: FramedParcel[] = [];
+    for (const zone of zones) {
+      const plat = platOf(src, zone);
+      parcels.push(...plat.parcels);
+      framed.push(...plat.framed);
+    }
+    zoneGrid.setParcels(parcels, framed);
+  };
 
-    const cs = this.terrainData.cellSize;
-    const halfW = (this.terrainData.width * cs) / 2;
-    const halfH = (this.terrainData.height * cs) / 2;
-    const roadClearanceSq = 4.2 * 4.2;
+  // Landfill facility: dumping-ground tint + trash piles + the entrance office
+  // kit. The entrance pick wants streets only (rail gives no frontage). It's a
+  // physical facility, not a lens overlay — always visible once painted.
+  const landfillRenderer = new LandfillRenderer(world.scene, heightAt, streetAt);
+  landfillRenderer.setVisible(true);
 
-    const filtered = this.baseFoliagePoints.filter((pt) => {
-      for (const node of this.roadGraph.nodes.values()) {
-        const nx = (node.x + 0.5) * cs - halfW;
-        const nz = (node.z + 0.5) * cs - halfH;
-        const distSq = (pt.x - nx) * (pt.x - nx) + (pt.z - nz) * (pt.z - nz);
-        if (distSq < roadClearanceSq) return false;
-      }
-      return true;
-    });
+  // Building dressing: setback massing tiers, roof props, and road-facing
+  // parked cars, all fed the same BuildingDelta stream as BuildingInstancer.
+  // They share roadAt so the body setback, its roof props, and the parking
+  // bays all agree on which edge faces the street.
+  // Lot pads go down before anything that stands on them: the building mass,
+  // the parking apron, a driveway. They claim the whole footprint so a block of
+  // lots meets edge to edge instead of leaving grass between properties.
+  const lots = new LotRenderer(
+    world.scene,
+    heightAt,
+    catalog,
+    roadAt,
+    street,
+    dirtAt,
+    kerb,
+    kerbCreditOf,
+    kitSensors,
+  );
+  // A farm's barn roof, farmhouse, silos, bins, orchard, fence and herd.
+  const farms = new FarmRenderer(world.scene, heightAt, catalog, dirtAt);
+  const massing = new MassingRenderer(world.scene, heightAt, catalog, roadAt, street);
+  const roofProps = new RoofPropRenderer(world.scene, heightAt, catalog, roadAt, kerb);
+  // Archetype kit: the parts that make a warehouse, a factory, a green works
+  // and a shopfront read as different things rather than as boxes of different
+  // heights — docks and doors, a monitor roof, a roof array, a canopy and a sign.
+  const buildingKit = new BuildingKitRenderer(
+    world.scene,
+    heightAt,
+    catalog,
+    roadAt,
+    kerb,
+    kerbCreditOf,
+  );
+  // The garage a dense block parks in on its own lot, behind the body.
+  const garages = new GarageRenderer(world.scene, heightAt, catalog, roadAt);
+  const parkedCars = new ParkedCarRenderer(
+    world.scene,
+    heightAt,
+    catalog,
+    roadAt,
+    (x, z) =>
+      inBounds(x, z)
+        ? ((clientGrid.roadTier[z * clientGrid.size + x] ?? 0) as RoadTier)
+        : RoadTier.None,
+    // The section the tile is DRAWN to, turn bay included, as the lots read
+    // it: where a bay has taken the parking, no car stands.
+    (x, z) => clientGrid.drawnProfileAt(x, z),
+    // The furniture's junction test, so a kerb beside a corridor's other half
+    // keeps its cars the way it keeps its lamps.
+    (x, z) => hasCrossingRoad(latestRoadTileSet, x, z),
+    // The junctions' no-parking zones and the marked stalls, both read off
+    // what the road mesh paints.
+    roadsMesh,
+    kerbCreditOf,
+  );
+  // Residential house kit: the roof, what each drive ends at, the car, the
+  // front door and the yard, stood on the lot plan laid out from the street the
+  // home fronts. Fed the same BuildingDelta stream.
+  const houseRoofs = new HouseRoofRenderer(world.scene, heightAt, catalog, roadAt, street);
+  // Cosmetic pedestrians: a few idlers at each bus-stop shelter + a sparse
+  // deterministic walker scatter near Active buildings, strolling the footway
+  // in front of home (where the street's own section puts it) and walking up
+  // the path to the front door. Fed the flattened transit stop list + the same
+  // BuildingDelta stream the other renderers get.
+  const catalogById = new Map<string, BuildingCatalogEntry>(catalog.map((e) => [e.id, e]));
+  const pedestrianRenderer = new PedestrianRenderer(
+    world.scene,
+    roadSurfaceAt,
+    roadAt,
+    street,
+    (building) => {
+      const entry = catalogById.get(building.catalogId);
+      return entry ? frontDoorOf(building, entry, roadAt, street) : null;
+    },
+  );
 
-    this.foliageManager.setFoliage(filtered);
+  // Landmark detail kits: terminal roof monitors,
+  // control tower + pulsing beacon, apron plate, parked planes — fed the same
+  // BuildingDelta stream as BuildingInstancer, keyed by catalog id.
+  const landmarks = new LandmarkRenderer(world.scene, heightAt, catalog);
+
+  // --- camera ----------------------------------------------------------------
+  const initialRect = viewport.getBoundingClientRect();
+  const camera = new THREE.PerspectiveCamera(
+    45,
+    Math.max(1, initialRect.width) / Math.max(1, initialRect.height),
+    2,
+    MAP_SIZE * TILE_METERS * 4,
+  );
+  handle.onResize((w, h) => {
+    camera.aspect = w / Math.max(1, h);
+    camera.updateProjectionMatrix();
+  });
+
+  const rig = new CameraRig(camera, heightAt);
+  // Boot framing: start closer than the rig's 600m default so the first
+  // frame is filled by readable terrain/city, not mostly sky.
+  rig.state = {
+    ...rig.state,
+    targetX: (map.spawn.x + 0.5) * TILE_METERS,
+    targetZ: (map.spawn.z + 0.5) * TILE_METERS,
+    distance: 380,
+  };
+  rig.attach(viewport);
+
+  // Dev-only handle for the visual smoke harness: exposes the
+  // map layers and a deterministic camera setter so screenshot checks can
+  // frame water/edges/regions exactly instead of navigating by dead
+  // reckoning. Stripped from production builds by the DEV guard.
+  // When set, pins the day/night phase (0..1) so lighting can be screenshotted
+  // at an exact time instead of waiting on the sim clock; null = clock-driven.
+  let devDayTOverride: number | null = null;
+  // Incident markers a screenshot has stood by hand; null = the sim's own.
+  let devIncidents: readonly Incident[] | null = null;
+  // The last frame's animation-loop delta, for the frame-budget harness.
+  let lastFrameMs = 0;
+  // How many snapshots carried each field, bumped by onSnapshot in dev builds
+  // only and read by the harness through the hook below.
+  const snapshotCounts: Record<string, number> = {
+    snapshots: 0,
+    buildings: 0,
+    junctions: 0,
+    controlsMoved: 0,
+    roads: 0,
+    roadNet: 0,
+    roadProfiles: 0,
+    roundabouts: 0,
+    heightPatches: 0,
+  };
+  if (import.meta.env.DEV) {
+    (window as unknown as Record<string, unknown>).__slimcity = {
+      map,
+      snapshotCounts: (): Record<string, number> => ({ ...snapshotCounts }),
+      freeRoadTriangles: (): number => freeRoads.triangleCount(),
+      setDayT: (t: number | null): void => {
+        devDayTOverride = t;
+      },
+      // yaw/pitch are optional and keep the current angle when omitted. A low
+      // pitch is what a screenshot check needs to see a structure edge-on —
+      // the default overhead angle hides exactly the faults (a deck sagging at
+      // its edges, a prop floating off a kerb) that read instantly from the side.
+      setCamera: (
+        targetX: number,
+        targetZ: number,
+        distance: number,
+        yaw?: number,
+        pitch?: number,
+      ): void => {
+        rig.state = {
+          ...rig.state,
+          targetX,
+          targetZ,
+          distance,
+          ...(yaw === undefined ? {} : { yaw }),
+          ...(pitch === undefined ? {} : { pitch }),
+        };
+      },
+      setTool: (tool: ToolId): void => {
+        useCityStore.getState().setTool(tool);
+      },
+      // Paints a fouling layer straight onto the water surface, so a
+      // screenshot check can see the tint at a stain size the sim takes a
+      // city to make. The next sim snapshot that moves the layer overrides it.
+      setWaterFouling: (data: ArrayLike<number>): void => {
+        water.setFouling(Uint8Array.from(data));
+      },
+      setSpeed: (speed: 0 | 1 | 2 | 4): void => {
+        useCityStore.getState().setSpeed(speed);
+      },
+      // Stands incident markers by hand, answered or not, so a screenshot can
+      // set an unanswered call beside an answered one without waiting for the
+      // sim to roll either. Holds against every snapshot until set to null.
+      setIncidents: (list: Incident[] | null): void => {
+        devIncidents = list;
+        serviceVehicles.setIncidents(list ?? []);
+      },
+      // Stands a cemetery's interments at an exact count, so a screenshot can
+      // see a few hundred headstones without the years of deaths that fill
+      // them. The next snapshot that carries death care puts the real count back.
+      setInterments: (id: number, used: number): void => {
+        utilityKits.setInterments([{ id, used }]);
+      },
+      // Stands a park's load at an exact figure, so a screenshot can set a
+      // worn lawn beside a fresh one without the crowd that wears it. The next
+      // snapshot that carries park loads puts the real figure back.
+      setParkLoad: (id: number, load: number): void => {
+        utilityKits.setParkLoads([{ id, load }]);
+      },
+      // Parks vehicles of any kind on the road, stopped, so a screenshot can set
+      // a hearse beside an ambulance and a car. The next snapshot that carries
+      // vehicles replaces them.
+      setVehicles: (list: { x: number; z: number; heading: number; kind: number }[]): void => {
+        const buf = new Float32Array(MAX_VEHICLES * VEHICLE_STRIDE);
+        for (let slot = 0; slot < MAX_VEHICLES; slot++)
+          buf[slot * VEHICLE_STRIDE] = INACTIVE_VEHICLE_X;
+        list.forEach((v, slot) => buf.set([v.x, v.z, v.heading, 0, v.kind], slot * VEHICLE_STRIDE));
+        for (let pass = 0; pass < 2; pass++) {
+          vehicles.setBuffer(buf);
+          serviceVehicles.setBuffer(buf);
+        }
+        latestVehicles = buf;
+        snapshotAgeMs = 0;
+        // Not a snapshot: the next real one must not measure its interval from here.
+        snapshotsLanded = 0;
+        snapshotIntervalMs = DEFAULT_SNAPSHOT_INTERVAL_MS;
+      },
+      getStats: (): CityStats => useCityStore.getState().stats,
+      // What the last frame drew, whole: the renderer resets its counters at the
+      // top of each animation-loop frame, so every pass of the frame (scene,
+      // shadow, bloom) is in the figure. frameMs is that frame's loop delta.
+      renderInfo: (): {
+        drawCalls: number;
+        triangles: number;
+        frameMs: number;
+        geometries: number;
+        textures: number;
+      } => ({
+        drawCalls: handle.renderer.info.render.drawCalls,
+        triangles: handle.renderer.info.render.triangles,
+        frameMs: lastFrameMs,
+        geometries: handle.renderer.info.memory.geometries,
+        textures: handle.renderer.info.memory.textures,
+      }),
+      setOverlay: (overlay: LensId | null): void => {
+        useCityStore.getState().setOverlay(overlay);
+      },
+      // Deterministic tile-addressed dispatch + grid reader for the visual
+      // harness: places roads/buildings/zones by exact tile (no screen
+      // picking), and reads back the client grid to pick buildable tiles.
+      // Goes through the same command path the tools use (funds/milestone/
+      // canPlace all enforced).
+      cmd: (label: string, commands: Command[]): void => env.send(label, commands),
+      // How much ground a tile covers. A harness aiming a camera at a tile has
+      // to turn tiles into metres, and one that hardcodes the figure points at
+      // empty grass the day the tile changes size.
+      tileMeters: (): number => TILE_METERS,
+      readGrid: (): {
+        size: number;
+        roadTier: number[];
+        roadMask: number[];
+        roadProfile: number[];
+        roadFlow: number[];
+        roadElevation: number[];
+        buildingId: number[];
+        zone: number[];
+        water: number[];
+        height: number[];
+        power: number[];
+        powerLine: number[];
+        waterPipe: number[];
+        waterFoul: number[];
+        overRoads: ReturnType<typeof clientGrid.overRoadTiles>;
+      } => ({
+        size: clientGrid.size,
+        roadTier: Array.from(clientGrid.roadTier),
+        // Which neighbours each road tile is joined to: two roads side by side
+        // are not necessarily one road, and only the mask says which.
+        roadMask: Array.from(clientGrid.roadMask),
+        // The profile id per tile: a harness can tell a composed road from
+        // the preset it stands nearest to, which a screenshot cannot.
+        roadProfile: Array.from(clientGrid.roadProfile),
+        // Which way each road runs: a harness can tell a one-way drawn north
+        // from one drawn south, which the tier alone never said.
+        roadFlow: Array.from(clientGrid.roadFlow),
+        // Deck height per tile: lets a screenshot check confirm a span actually
+        // rose before it reads anything into the picture of it.
+        roadElevation: Array.from(clientGrid.roadElevation),
+        buildingId: Array.from(clientGrid.buildingId),
+        zone: Array.from(clientGrid.zone),
+        water: Array.from(clientGrid.water),
+        height: Array.from(clientGrid.height),
+        // Which tiles the grid has actually reached, and where the wire runs:
+        // a screenshot shows poles but never says whether anything flows.
+        power: Array.from(clientGrid.power),
+        powerLine: Array.from(clientGrid.powerLine),
+        // Where the pipe runs: a screenshot shows two strips but never says
+        // whether a tile carries pipe or only paint.
+        waterPipe: Array.from(clientGrid.waterPipe),
+        // How fouled each water tile is, as the sim last said.
+        waterFoul: Array.from(clientGrid.waterFoul),
+        // The roads passing over crossing tiles: a screenshot of a deck says
+        // nothing about which road the world thinks is on top.
+        overRoads: clientGrid.overRoadTiles(),
+      }),
+      // Every known building instance with its lifecycle state and problem
+      // bits — tells a harness whether lots are failing to spawn, stuck
+      // constructing, or spawning and then being abandoned.
+      // Lines and their ridership as the worker last reported them: lets a
+      // screenshot check confirm a line actually routed and carries anyone
+      // before reading anything into a picture of a train.
+      readTransit: (): { lines: unknown[]; ridership: number[]; served: number[] } => ({
+        lines: useCityStore.getState().transitLines,
+        ridership: useCityStore.getState().transitRidership,
+        served: useCityStore.getState().transitFleet.served,
+      }),
+      // Where every live vehicle is, world metres, as the worker last sent
+      // them: lets a check count traffic on a road instead of reading it off
+      // a picture.
+      readVehicles: (): { x: number; z: number }[] => {
+        const out: { x: number; z: number }[] = [];
+        for (let i = 0; i < latestVehicles.length; i += VEHICLE_STRIDE) {
+          const x = latestVehicles[i]!;
+          if (x !== INACTIVE_VEHICLE_X) out.push({ x, z: latestVehicles[i + 1]! });
+        }
+        return out;
+      },
+      // Meshes the renderer would submit an empty draw for — no vertices, or
+      // an instanced mesh with a count of zero. WebGPU warns on these, and the
+      // warning names no object, so this finds the culprit.
+      readEmptyDraws: (): { name: string; vertices: number; instances: number }[] => {
+        const found: { name: string; vertices: number; instances: number }[] = [];
+        world.scene.traverse((obj) => {
+          const mesh = obj as THREE.Mesh & { isMesh?: boolean };
+          if (!mesh.isMesh) return;
+          const position = mesh.geometry?.getAttribute('position');
+          const vertices = position ? position.count : 0;
+          const instanced = obj as THREE.InstancedMesh & { isInstancedMesh?: boolean };
+          const instances = instanced.isInstancedMesh ? instanced.count : 1;
+          if (vertices !== 0 && instances !== 0) return;
+          // Only meshes that would actually be submitted: an invisible one, or
+          // one under an invisible parent, is never drawn and never warns.
+          for (let n: THREE.Object3D | null = obj; n; n = n.parent) {
+            if (!n.visible) return;
+          }
+          found.push({ name: mesh.name || mesh.type || 'unnamed', vertices, instances });
+        });
+        return found;
+      },
+      // Which archetype parts the kit actually built. A silhouette claim is
+      // exactly the kind a screenshot cannot settle on its own.
+      readKit: (): Record<string, number> => ({
+        loadingDock: buildingKit.instanceCount('loadingDock'),
+        rollUpDoors: buildingKit.instanceCount('rollUpDoors'),
+        monitorRoof: buildingKit.instanceCount('monitorRoof'),
+        roofArray: buildingKit.instanceCount('roofArray'),
+        canopy: buildingKit.instanceCount('canopy'),
+        signageBand: buildingKit.instanceCount('signageBand'),
+      }),
+      /** Ids the kit holds parts for, to reconcile against the known buildings. */
+      readKitIds: (): number[] => buildingKit.trackedIds(),
+      // The vehicles each depot kit has parked on its apron, by building id:
+      // a shot counts them against the panel's holds less in service.
+      readDepotFleets: (): Record<number, number> => utilityKits.parkedFleets(),
+      // How many barrier bays, panels and posts the sound walls drew: a wall
+      // seen edge-on from above is a line a screenshot cannot count.
+      readSoundWalls: (): ReturnType<SoundWallRenderer['counts']> => soundWalls.counts(),
+      // What the house kit stood up, part by part, and how many cars sit on
+      // drives: a fence or a trampoline too small to pick out in a shot is
+      // still counted here.
+      readHouseKit: (): Record<string, number> => ({
+        roof: houseRoofs.partCount('roof'),
+        garage: houseRoofs.partCount('garage'),
+        carport: houseRoofs.partCount('carport'),
+        door: houseRoofs.partCount('door'),
+        fence: houseRoofs.partCount('fence'),
+        pool: houseRoofs.partCount('pool'),
+        trampoline: houseRoofs.partCount('trampoline'),
+        grill: houseRoofs.partCount('grill'),
+        bush: houseRoofs.partCount('bush'),
+        tree: houseRoofs.partCount('tree'),
+        car: houseRoofs.carCount(),
+      }),
+      // Where a home's cars stand, world metres: a car on a drive and a car
+      // tucked out of sight behind the house look the same in a street shot.
+      readHouseCars: (buildingId: number): { x: number; y: number; z: number }[] =>
+        houseRoofs.carSlotsFor(buildingId).map((slot) => {
+          const m = new THREE.Matrix4();
+          houseRoofs.getCarMatrix(slot, m);
+          return { x: m.elements[12]!, y: m.elements[13]!, z: m.elements[14]! };
+        }),
+      // A home's lot plan as the renderers read it: where its body, drives and
+      // yard parts stand, in the frontage frame.
+      readHousePlan: (buildingId: number): HouseLotPlan | null => {
+        const b = knownBuildings.get(buildingId);
+        const entry = b ? catalogById.get(b.catalogId) : undefined;
+        return b && entry ? planHouseLot(b, entry, roadAt, street) : null;
+      },
+      // Where a building's cars actually stand. A parked car and a moving one
+      // look alike in a shot, so a screenshot cannot tell whether the kerb rule
+      // is being honoured; this can.
+      readParking: (
+        buildingId: number,
+      ): {
+        stalls: number;
+        occupied: number;
+        kerbStalls: number;
+        kerbOccupied: number;
+        category: string;
+        northTier: number;
+      } | null => {
+        const b = knownBuildings.get(buildingId);
+        if (!b) return null;
+        const entry = catalogById.get(b.catalogId);
+        // The stalls drawn on the building's own lot or in its own kit, and the
+        // kerb stalls it is credited, which belong to the street and are never
+        // its own.
+        const civic = utilityKits.ownStalls(buildingId);
+        const kerbStalls = parkedCars.kerbStallCount(buildingId);
+        const ownStalls = parkedCars.ownStallCount(buildingId);
+        const occupiedAll = parkedCars.occupiedStallCount(buildingId);
+        return {
+          stalls: ownStalls + civic.stalls,
+          // How many of them hold a car at this hour: the kerb's rule is about
+          // when, which a count of stalls cannot show.
+          occupied:
+            (kerbStalls > 0 ? 0 : occupiedAll) +
+            parkedCars.garageOccupiedCount(buildingId) +
+            civic.occupied,
+          kerbStalls,
+          kerbOccupied: kerbStalls > 0 ? occupiedAll : 0,
+          category: entry?.category ?? '?',
+          // Only the tile north of the origin — NOT the frontage the renderer
+          // actually chose, which may be any of the four sides.
+          northTier: inBounds(b.x, b.z - 1)
+            ? (clientGrid.roadTier[(b.z - 1) * clientGrid.size + b.x] ?? 0)
+            : 0,
+        };
+      },
+      // Every piece of kerb furniture, re-derived from where it ACTUALLY
+      // stands. Placement code and this audit share no helper on purpose: the
+      // positions come from the rendered transforms and the tiles come from the
+      // live grid, so a rule that is right about a fixture and wrong about the
+      // city it is fed still fails here.
+      // The underground as drawn: whether the surface is glass, how many
+      // materials went to it, what the system drew and what colour a run is.
+      // The plat as the lens draws it: the parcels of the zone in hand.
+      readPlat: (): { x: number; z: number; w: number; d: number; lot: string }[] => {
+        const zone = ZONE_TOOL_TO_TYPE[store.getState().selectedTool];
+        if (zone === undefined || !PLATTED_ZONES.includes(zone)) return [];
+        const net = clientGrid.roads;
+        const cells = net ? buildRoadCells(net, clientGrid.size) : null;
+        const src = platSourceOf(clientGrid, cells, latestLandValue, (id) =>
+          clientGrid.profileById(id),
+        );
+        return platOf(src, zone).parcels.map((p) => ({
+          x: p.x,
+          z: p.z,
+          w: p.w,
+          d: p.d,
+          lot: p.lot,
+        }));
+      },
+      // The parcels the plat cut along curved kerbs for the zone in hand.
+      readFramedPlat: (): FramedParcel[] => {
+        const zone = ZONE_TOOL_TO_TYPE[store.getState().selectedTool];
+        if (zone === undefined || !PLATTED_ZONES.includes(zone)) return [];
+        const net = clientGrid.roads;
+        const cells = net ? buildRoadCells(net, clientGrid.size) : null;
+        const src = platSourceOf(clientGrid, cells, latestLandValue, (id) =>
+          clientGrid.profileById(id),
+        );
+        return platOf(src, zone).framed;
+      },
+      // Each kerb parcel of the zone in hand against the drawn road: how far its
+      // origin stands off the nearest centre line, the road's half width there,
+      // and the land value the lens cut it by.
+      readFramedPlatFit: (): {
+        landValueKnown: boolean;
+        parcels: {
+          x: number;
+          z: number;
+          heading: number;
+          w: number;
+          d: number;
+          tiles: number;
+          centreLineM: number | null;
+          halfWidthM: number | null;
+          /** Half of what the road mesh draws there: the carriageway and its kerb strip. */
+          drawnHalfM: number | null;
+          /** The nearest centre-line sample, and the kerb point the half width out from it toward the parcel, metres. */
+          nearX: number | null;
+          nearZ: number | null;
+          kerbX: number | null;
+          kerbZ: number | null;
+          landValue: number;
+        }[];
+      } => {
+        const zone = ZONE_TOOL_TO_TYPE[store.getState().selectedTool];
+        const net = clientGrid.roads;
+        if (zone === undefined || !PLATTED_ZONES.includes(zone) || !net) {
+          return { landValueKnown: latestLandValue !== undefined, parcels: [] };
+        }
+        const cells = buildRoadCells(net, clientGrid.size);
+        const src = platSourceOf(clientGrid, cells, latestLandValue, (id) =>
+          clientGrid.profileById(id),
+        );
+        const lookup = (id: number): RoadProfile | null => clientGrid.profileById(id);
+        const parcels = platOf(src, zone).framed.map((p) => {
+          const near = nearestRoadPoint(
+            net,
+            { x: Math.round(p.frame.x * 100), z: Math.round(p.frame.z * 100) },
+            3 * TILE_METERS,
+          );
+          const first = p.tiles[0];
+          const profile = near ? lookup(net.segProfile[near.seg]!) : null;
+          const nearM = near ? { x: near.at.x / 100, z: near.at.z / 100 } : null;
+          const halfM = near ? segmentHalfWidthM(net, near.seg, lookup) : null;
+          const toOrigin = nearM ? Math.hypot(p.frame.x - nearM.x, p.frame.z - nearM.z) : null;
+          const kerb =
+            nearM && halfM !== null && toOrigin
+              ? {
+                  x: nearM.x + ((p.frame.x - nearM.x) / toOrigin) * halfM,
+                  z: nearM.z + ((p.frame.z - nearM.z) / toOrigin) * halfM,
+                }
+              : null;
+          return {
+            drawnHalfM: profile ? carriagewayHalfWidthOf(profile) + kerbWidthOf(profile) : null,
+            nearX: nearM?.x ?? null,
+            nearZ: nearM?.z ?? null,
+            kerbX: kerb?.x ?? null,
+            kerbZ: kerb?.z ?? null,
+            x: p.frame.x,
+            z: p.frame.z,
+            heading: p.frame.heading,
+            w: p.w,
+            d: p.d,
+            tiles: p.tiles.length,
+            centreLineM: near
+              ? Math.hypot(near.at.x / 100 - p.frame.x, near.at.z / 100 - p.frame.z)
+              : null,
+            halfWidthM: near ? segmentHalfWidthM(net, near.seg, lookup) : null,
+            landValue: first ? (latestLandValue?.[tileIndex(first.x, first.z)] ?? 0) : 0,
+          };
+        });
+        return { landValueKnown: latestLandValue !== undefined, parcels };
+      },
+      readUnderground: (): {
+        active: boolean;
+        faded: number;
+        pipesVisible: boolean;
+        triangles: { water: number; sewer: number; mainWater: number; mainSewer: number };
+        risers: number;
+        waterColorAt: (x: number, z: number) => [number, number, number] | null;
+      } => ({
+        active: underground.isActive(),
+        faded: underground.fadedCount(),
+        pipesVisible: pipes.isVisible(),
+        triangles: pipes.triangleCount(),
+        risers: pipes.riserCount(),
+        waterColorAt: (x, z) => pipes.waterColorAt(x, z),
+      }),
+      readKerbAudit: (): {
+        cars: {
+          total: number;
+          offRoad: number;
+          junction: number;
+          wrongTier: number;
+          samples: { id: number; tx: number; tz: number; why: string }[];
+        };
+        lamps: { total: number; driveways: number; onDriveway: number; samples: number[][] };
+        walkers: { total: number; offFootway: number; wrongAxis: number };
+      } => {
+        const isRoad = (tx: number, tz: number): boolean =>
+          inBounds(tx, tz) &&
+          (clientGrid.roadTier[tz * clientGrid.size + tx] ?? 0) !== RoadTier.None;
+        const tierOf = (tx: number, tz: number): RoadTier =>
+          inBounds(tx, tz)
+            ? ((clientGrid.roadTier[tz * clientGrid.size + tx] ?? 0) as RoadTier)
+            : RoadTier.None;
+
+        const cars = { total: 0, offRoad: 0, junction: 0, wrongTier: 0 };
+        const carSamples: { id: number; tx: number; tz: number; why: string }[] = [];
+        for (const building of knownBuildings.values()) {
+          const entry = catalogById.get(building.catalogId);
+          if (!entry) continue;
+          // Only kerbside cars are the street's business — a bay-row car stands
+          // on its owner's lot and has no kerb rule to break.
+          const profileOf = (tx: number, tz: number) => clientGrid.ownProfileAt(tx, tz);
+          if (
+            !usesRoadsideParking(
+              entry,
+              building.x,
+              building.z,
+              roadAt,
+              tierOf,
+              profileOf,
+              building.rotation,
+              kerb,
+            )
+          ) {
+            continue;
+          }
+          for (const stall of parkedCars.stallWorldPositions(building.id)) {
+            const tx = worldToTile(stall.x);
+            const tz = worldToTile(stall.z);
+            cars.total += 1;
+            let why = '';
+            const parkable = (side: KerbSide): boolean =>
+              kerbAllowance(tierOf(tx, tz), profileOf(tx, tz), side) !== 'none';
+            if (!isRoad(tx, tz)) why = 'off-road';
+            else if (!parkable('low') && !parkable('high')) why = 'tier';
+            else if (
+              (isRoad(tx - 1, tz) || isRoad(tx + 1, tz)) &&
+              (isRoad(tx, tz - 1) || isRoad(tx, tz + 1))
+            )
+              why = 'junction';
+            if (why === 'off-road') cars.offRoad += 1;
+            if (why === 'tier') cars.wrongTier += 1;
+            if (why === 'junction') cars.junction += 1;
+            if (why && carSamples.length < 8) carSamples.push({ id: building.id, tx, tz, why });
+          }
+        }
+
+        const lampSamples: number[][] = [];
+        let onDriveway = 0;
+        for (let slot = 0; slot < lamps.lampCount(); slot += 1) {
+          const pole = lamps.polePosition(slot);
+          const tx = worldToTile(pole.x);
+          const tz = worldToTile(pole.z);
+          if (drivewayTiles.has(tx * 100_000 + tz)) {
+            onDriveway += 1;
+            if (lampSamples.length < 8) lampSamples.push([tx, tz]);
+          }
+        }
+
+        const walkers = { total: 0, offFootway: 0, wrongAxis: 0 };
+        for (const path of pedestrianRenderer.walkerPathsForAudit()) {
+          walkers.total += 1;
+          // The anchor stands on the footway, which is the street's own tile.
+          const rx = worldToTile(path.anchor.x);
+          const rz = worldToTile(path.anchor.z);
+          if (!isRoad(rx, rz)) {
+            walkers.offFootway += 1;
+            continue;
+          }
+          const runsEW = isRoad(rx - 1, rz) || isRoad(rx + 1, rz);
+          const runsNS = isRoad(rx, rz - 1) || isRoad(rx, rz + 1);
+          if (path.alongX !== (runsEW || !runsNS)) walkers.wrongAxis += 1;
+        }
+
+        return {
+          cars: { ...cars, samples: carSamples },
+          lamps: {
+            total: lamps.lampCount(),
+            driveways: drivewayTiles.size,
+            onDriveway,
+            samples: lampSamples,
+          },
+          walkers,
+        };
+      },
+      // Where every lamp post stands, in world metres. A pole in the
+      // carriageway and one on the kerb are a metre apart in a screenshot, so
+      // a harness measures them against the road's real edge instead.
+      readLampPoles: (): { x: number; z: number }[] =>
+        Array.from({ length: lamps.lampCount() }, (_, slot) => {
+          const pole = lamps.polePosition(slot);
+          return { x: pole.x, z: pole.z };
+        }),
+      // Where every power-line pole stands, in world metres — so a harness
+      // can tell a run that was strung from one the sim quietly refused.
+      readPowerPoles: (): { x: number; z: number }[] =>
+        Array.from({ length: powerLines.poleCount() }, (_, slot) => {
+          const pole = powerLines.polePosition(slot);
+          return { x: pole?.x ?? 0, z: pole?.z ?? 0 };
+        }),
+      // Where every junction box and transformer of a buried cable stands, how
+      // many riser guards stand, and what the underground view draws of the cable.
+      readPowerCables: (): {
+        boxes: { x: number; z: number }[];
+        guards: number;
+        overlay: { tiles: number; feet: number; visible: boolean };
+      } => ({
+        boxes: Array.from({ length: powerLines.boxCount() }, (_, slot) => {
+          const box = powerLines.boxPosition(slot);
+          return { x: box?.x ?? 0, z: box?.z ?? 0 };
+        }),
+        guards: powerLines.guardCount(),
+        overlay: { ...cableOverlay.counts(), visible: cableOverlay.isVisible() },
+      }),
+      // Who gives way where, and the boards that follow from it. A screenshot
+      // shows a post beside a road but not which board it is or why, so a
+      // check that the right junction got the right control reads it here.
+      readJunctions: (): { x: number; z: number; control: string; turns: number }[] =>
+        latestRoadTiles
+          .filter((t) => t.control !== undefined)
+          .map((t) => ({
+            x: t.x,
+            z: t.z,
+            control: t.control!,
+            turns: clientGrid.junctionAt(t.x, t.z)?.turns ?? 0,
+          })),
+      // The junction a tile approaches and what its cross-section is there —
+      // a turn pocket is a lane the road has for a few tiles and nowhere else,
+      // and a screenshot cannot say how many lanes wide a stretch of asphalt
+      // is or which junction it belongs to.
+      readApproach: (
+        x: number,
+        z: number,
+      ): {
+        toward: number;
+        distance: number;
+        allowed: number;
+        pocket: boolean;
+        openness: number;
+        auxiliary: { side: number; openness: number; merging: boolean } | null;
+        taper: { remaining: number; length: number; closed: number } | null;
+        lanes: number;
+        width: number;
+      } | null => {
+        // The tile's OWN cross-section, not the road's: on a corridor those
+        // differ, and comparing the drawn section against the whole road would
+        // call every corridor tile a turn pocket.
+        const own = clientGrid.ownProfileAt(x, z);
+        const drawn = clientGrid.drawnProfileAt(x, z);
+        // Compared by shape rather than by identity: a corridor half is built
+        // fresh on every call, so two reads of an unchanged tile are two
+        // objects, and identity would report a pocket on all of them.
+        if (!own || !drawn) return null;
+        const ahead = clientGrid.approachAt(x, z);
+        const taper = clientGrid.narrowingAt(x, z);
+        return {
+          // A tile that approaches no junction still carries a cross-section,
+          // and a taper is the reason it might differ from the road's own.
+          toward: ahead?.toward ?? taper?.toward ?? 0,
+          distance: ahead?.distance ?? -1,
+          // The movements the arm offers, which is what every lane-use arrow
+          // on it is painted from. An arrow head is a metre of paint read at a
+          // shallow angle, and whether one of them points left is a question a
+          // screenshot has been read wrongly on; this is the same set the
+          // geometry drew from.
+          allowed: ahead?.allowed ?? 0,
+          pocket: !taper && !profilesEqual(drawn, own),
+          openness: ahead?.openness ?? 1,
+          auxiliary: clientGrid.auxiliaryAt(x, z) ?? null,
+          taper: taper
+            ? { remaining: taper.remaining, length: taper.length, closed: taper.closed }
+            : null,
+          lanes: drawn.pieces.filter((p) => p.kind === 'travel').length,
+          width: carriagewayWidth(drawn),
+        };
+      },
+      // The same question put to the MESH instead of the grid. Where the two
+      // disagree the picture follows this one, so a check that only ever asks
+      // the grid can pass while the road on screen is wrong.
+      readDrawn: (
+        x: number,
+        z: number,
+      ): { lanes: number; width: number; pocket: boolean; distance: number } | null =>
+        roadsMesh.drawnAt(x, z),
+      // The bands a tile actually lays, measured off the vertex buffer: colour
+      // by colour, the stretch each covers across the road. A band whose width
+      // steps along an otherwise uniform run is invisible to every read-back
+      // that asks the cross-section, because the cross-section is right; this
+      // reads the geometry instead.
+      readPaint: (x: number, z: number): ({ color: string; axis: 'x' | 'z' } & BandSpan)[] =>
+        roadsMesh.paintBandsAt(x, z),
+      // The same geometry asked point by point instead of band by band: what
+      // covers each sample of a rectangle of ground, topmost surface first,
+      // null where the terrain shows through. A kerb return is a couple of
+      // metres of corner and reaches no tile edge, so it is invisible to
+      // readPaint and has been checkable only by eye — which has been wrong
+      // about it more than once.
+      readSurface: (x0: number, z0: number, x1: number, z1: number, n: number): (string | null)[] =>
+        roadsMesh.surfaceGridAt(x0, z0, x1, z1, n),
+      // The same sampling, reporting the ROAD SURFACE's height rather than its
+      // colour. A road's vertices take their Y from the ground under them, so
+      // it follows the terrain instead of sitting flat across a tile — which
+      // makes "is the ground above the road here" a question about two
+      // surfaces, answerable only by reading both.
+      readSurfaceHeight: (
+        x0: number,
+        z0: number,
+        x1: number,
+        z1: number,
+        n: number,
+      ): (number | null)[] => roadsMesh.surfaceHeightGridAt(x0, z0, x1, z1, n),
+      readSigns: (): { x: number; z: number; type: string }[] =>
+        computeSignPlacements(latestRoadTiles).map((s) => ({ x: s.x, z: s.z, type: s.type })),
+      // What each signal head is showing. A lit lens is a few pixels across in
+      // a screenshot, so a check that the cycle really runs reads it here.
+      readSignalAspects: (): string[] => roadFurniture.signalAspects(),
+      // Where each signal's mast stands and where its head hangs, in world
+      // metres. A mast arm is foreshortened to nothing in an overhead shot, so
+      // whether a head reaches out over the lanes it holds is measured here
+      // rather than guessed at from a picture.
+      readSignals: (): {
+        mast: { x: number; z: number };
+        head: { x: number; z: number };
+        axis: string;
+        side: number;
+        tile: { x: number; z: number };
+      }[] => roadFurniture.signalPlacements(),
+      // Where each kerbside cabinet stands and which of the two it is.
+      readCabinets: (): { x: number; z: number; kind: string }[] =>
+        roadFurniture.cabinetPlacements().map((c) => ({ x: c.x, z: c.z, kind: c.kind })),
+      // How many of each kerb prop actually went out. A screenshot at the
+      // wrong zoom says nothing about whether a manhole cover exists.
+      readFurnitureCounts: (): Record<string, number> => ({
+        ...roadFurniture.furnitureCounts(),
+        tramPoles: roadFurniture.tramPoleStands().length,
+        tramStations: tramStations.stationCount(),
+        lamps: lamps.lampCount(),
+      }),
+      // What the transit renderer actually built. A transit vehicle and a
+      // traffic-spawned one look alike in a screenshot, so a shot cannot tell
+      // whether a line's own vehicles are on the road; this can.
+      readTransitRender: (): { lines: number; stops: number; vehicles: number } => ({
+        lines: transitRenderer.lineCount(),
+        stops: transitRenderer.stopCount(),
+        vehicles: transitRenderer.busCount(),
+      }),
+      readBuildings: (): Array<{
+        id: number;
+        catalogId: string;
+        x: number;
+        z: number;
+        state: number;
+        problems: number;
+        frame?: ParcelFrame;
+      }> =>
+        Array.from(knownBuildings.values()).map((b) => ({
+          id: b.id,
+          catalogId: b.catalogId,
+          x: b.x,
+          z: b.z,
+          state: b.state,
+          problems: b.problems,
+          frame: b.frame,
+        })),
+    };
   }
 
-  public start(): void {
-    if (this.isRunning) return;
-    this.isRunning = true;
-    this.initWorld(1337, 256, 256);
-    this.lastTime = performance.now();
+  // --- sim worker --------------------------------------------------------------
+  const worker = new Worker(new URL('./sim/worker.entry.ts', import.meta.url), { type: 'module' });
+  const initMsg: MainToWorker = { type: 'init', seed, map };
+  worker.postMessage(initMsg);
+  if (loadData) {
+    const loadMsg: MainToWorker = { type: 'loadSave', data: loadData };
+    worker.postMessage(loadMsg, [loadData]);
+  }
 
-    const animate = (time: number) => {
-      if (!this.isRunning) return;
-      requestAnimationFrame(animate);
+  const store = useCityStore;
+  const queue = new CommandQueue();
+  const undoStack = new UndoStack();
+  // Stats history (recorded every snapshot) + photo-mode controller.
+  const statsHistory = new StatsHistory();
+  const photoMode = new PhotoModeController();
 
-      const deltaTime = Math.min((time - this.lastTime) / 1000, 0.1);
-      this.lastTime = time;
+  // --- audio ----------------------------------------------------------------------------
+  // Shared with the menu screen, so music carries across menu <-> game. The
+  // engine stays inert (and silent) until the first gesture unlocks it.
+  const { engine: audio, music } = audioRuntime();
+  const applyAudioSettings = (settings: GameSettings): void => {
+    audio.setMasterVolume(settings.masterVolume, settings.muted);
+    audio.setMusicVolume(settings.musicVolume);
+    music.setShuffle(settings.musicShuffle);
+    music.setRepeat(settings.musicRepeat);
+  };
+  applyAudioSettings(store.getState().settings);
+  const unlockAudio = (): void => audio.unlock();
+  window.addEventListener('pointerdown', unlockAudio);
+  window.addEventListener('keydown', unlockAudio);
+  // Files dropped anywhere on the window join the playlist for this session.
+  window.addEventListener('dragover', (e) => e.preventDefault());
+  window.addEventListener('drop', (e) => {
+    const files = e.dataTransfer?.files;
+    if (!files || files.length === 0) return;
+    e.preventDefault();
+    if (music.addFiles(Array.from(files)) > 0) audio.play('notify');
+  });
+  /** The dedicated renderers show only when their lens/tool is live. */
+  const refreshEpicVisibility = (): void => {
+    const { overlay, selectedTool } = store.getState();
+    transitRenderer.setVisible(overlay === 'transit' || selectedTool.startsWith('transit.'));
+    districtsRenderer.setVisible(overlay === 'districts' || selectedTool === 'district.paint');
+    // The city goes underground while the player works on the water: a water
+    // lens, the pipe tool, or any building of the Water tab in hand. The
+    // pipes show only there.
+    // Laying a buried cable takes the city underground too, where the pipes
+    // it must keep clear of show beside it.
+    const onWater =
+      overlay === 'watered' ||
+      overlay === 'sewered' ||
+      selectedTool === 'water.pipe' ||
+      selectedTool === 'power.cable' ||
+      selectedTool.startsWith('plop.water-');
+    if (onWater && !pipes.isVisible()) flushPipes(true);
+    if (onWater && !cableOverlay.isVisible()) flushCables(true);
+    pipes.setVisible(onWater);
+    cableOverlay.setVisible(onWater);
+    underground.setActive(onWater);
+  };
+  refreshEpicVisibility(); // start hidden until their lens/tool is selected
+  /** seq -> the player edit awaiting its ack (drives the undo stack). */
+  const pendingEdits = new Map<number, { label: string; forward: Command[] }>();
+  /** seqs of undo/redo replays: acked, but never re-recorded as new edits. */
+  const silentSeqs = new Set<number>();
+  /** The undos and redos in flight, by seq: what was sent, so a refused one can be put back. */
+  const historySeqs = new Map<number, { commands: Command[]; label: 'Undo' | 'Redo' }>();
+  /** Client-side mirror of building instances, for select-tool info panels. */
+  const knownBuildings = new Map<number, BuildingInstance>();
+  /**
+   * Road tiles a lot's driveway crosses, keyed the way lamps.ts keys tiles.
+   * Kerb furniture keeps off these — a lamp in a car park entrance stands in
+   * the middle of the way in. Rebuilt whenever the building set changes, which
+   * is also when the lamps have to be rebuilt to notice.
+   */
+  let drivewayTiles: ReadonlySet<number> = new Set();
+  const drivewayCache = new DrivewayTiles();
+  let latestRoadTiles: ReturnType<typeof clientGrid.roadTiles> = [];
+  /** The same tiles indexed the way the furniture reads them; kept in step with latestRoadTiles. */
+  let latestRoadTileSet: RoadTileIndex = new Map();
+  const setLatestRoadTiles = (tiles: ReturnType<typeof clientGrid.roadTiles>): void => {
+    latestRoadTiles = tiles;
+    latestRoadTileSet = buildTileSet(tiles);
+  };
+  /** The vehicle buffer as the worker last sent it. */
+  let latestVehicles: Float32Array = new Float32Array(0);
+  /** The transit snapshot and its lines as the worker last sent them; the raised stations are read off the stops. */
+  let latestTransit: TransitSnapshot | null = null;
+  let latestTransitLines: readonly TransitLine[] = [];
+  /**
+   * The stations over the current lines, roads and guideway. True when the
+   * tiles they occupy changed, which is when the kerb furniture has to move.
+   */
+  const rebuildTramStations = (): boolean => {
+    const before = tramStations.tiles();
+    tramStations.rebuild(latestTransitLines, latestRoadTiles, guideway.structure());
+    return !sameTileKeySet(before, tramStations.tiles());
+  };
+  /** The bus stops as the worker last sent them; an older worker sends none. */
+  let latestStops: readonly BusStopState[] = [];
+  /** The tiles holding a bus stop: a line's stop there is the stop's own furniture, not a shelter of the line's. */
+  let stopTiles: ReadonlySet<number> = new Set();
+  /** Where every signal mast, stop sign and give-way board stands, as the last roadside laying left it. */
+  let roadsideControl: readonly Spot[] = [];
+  /**
+   * The trees of the scatter that stand over a lamp, a control board or a bus
+   * stop's pad are taken down: a tree beside a street keeps clear of them.
+   */
+  const keepTreesOffRoadside = (): void => {
+    trees.clearNear([
+      ...lamps.standSpots().map((s) => ({ ...s, radius: TREE_FROM_LAMP_M })),
+      ...roadsideControl.map((s) => ({ ...s, radius: TREE_FROM_CONTROL_M })),
+      ...busStops.padSpots().map((s) => ({ ...s, radius: TREE_FROM_STOP_M })),
+    ]);
+  };
+  /** Draws the stops on the roads as they stand now. */
+  const redrawStops = (): void => {
+    busStops.apply(latestStops, (x, z) => stopRoadAt(latestRoadTileSet, x, z));
+    keepTreesOffRoadside();
+  };
+  /** The lines as the transit renderer draws them: no shelter at a bus stop or under a raised station. */
+  const applyTransit = (transit: TransitSnapshot | null): void => {
+    if (!transit) return;
+    transitRenderer.apply(
+      transit,
+      (x, z) => stopTiles.has(x * 100_000 + z),
+      tramStations.isStation,
+    );
+  };
+  /**
+   * The street's own power line, kept by terrain chunk. A change re-lays only
+   * the chunks its poles and spans reach — a tile whose supply moved, a road
+   * delta, a drive or a station that came or went — never the whole city.
+   */
+  const dirtyPoleChunks = new Set<number>();
+  const poleSlots = { line: false, free: false };
+  /** The tiles a generator or a substation stands on, as the pole layout keys them. */
+  const sourceTiles = (): Set<number> => {
+    const out = new Set<number>();
+    for (let z = 0; z < clientGrid.size; z++) {
+      for (let x = 0; x < clientGrid.size; x++) {
+        const id = clientGrid.buildingId[z * clientGrid.size + x] ?? 0;
+        const b = id === 0 ? undefined : knownBuildings.get(id);
+        if (b && feedsLines(catalogById.get(b.catalogId))) out.add(tileKey(x, z));
+      }
+    }
+    return out;
+  };
+  let poleKeepOff: ReadonlySet<number> = new Set();
+  let poleClosed: ReadonlySet<number> = new Set();
+  /**
+   * What stands before a power pole does: the stops' spans, the drives, and the
+   * signal masts, stop signs, tram poles and lamps. A pole gives way to them.
+   */
+  let roadsideUpper: Roadside = { clear: KEEP_CLEAR_NONE, taken: new Standing() };
+  /** Where those stood when the poles were last laid, by place, so a change re-lays only its own chunks. */
+  let upperSpots = new Map<string, Spot>();
+  let upperStops: ReadonlySet<number> = new Set();
+  /**
+   * Where a buried cable lies and where a line on poles stands, as the pole
+   * layout keys tiles. Read off the mirror once, and again after the layer moves.
+   */
+  type CableWorld = { cables: Set<number>; lines: Set<number>; built: Set<number> };
+  let cableTiles: CableWorld | null = null;
+  const cableWorld = (): CableWorld => {
+    if (cableTiles) return cableTiles;
+    const cables = new Set<number>();
+    const lines = new Set<number>();
+    const built = new Set<number>();
+    for (const t of clientGrid.cableTiles()) cables.add(tileKey(t.x, t.z));
+    for (const t of clientGrid.powerLineTiles()) lines.add(tileKey(t.x, t.z));
+    // A box never stands in a building's lot.
+    for (let i = 0; i < clientGrid.buildingId.length; i++) {
+      if (clientGrid.buildingId[i] !== 0) {
+        built.add(tileKey(i % clientGrid.size, Math.floor(i / clientGrid.size)));
+      }
+    }
+    cableTiles = { cables, lines, built };
+    return cableTiles;
+  };
+  const poleWorld = (): PowerWorld => ({
+    tileSet: latestRoadTileSet,
+    keepOff: poleKeepOff,
+    closed: poleClosed,
+    roadside: roadsideUpper,
+    ...cableWorld(),
+  });
+  const markPolesAt = (x: number, z: number): void => {
+    for (const key of chunksAroundTile(x, z)) dirtyPoleChunks.add(key);
+  };
+  const markPoleKeysChanged = (a: ReadonlySet<number>, b: ReadonlySet<number>): void => {
+    for (const key of a) if (!b.has(key)) markPolesAt(Math.floor(key / 100_000), key % 100_000);
+    for (const key of b) if (!a.has(key)) markPolesAt(Math.floor(key / 100_000), key % 100_000);
+  };
+  /**
+   * Lays what has been marked and nothing else. `sourcesMoved` says the tiles
+   * that keep poles off, or carry the supply inside a structure, may have
+   * changed since the last flush.
+   */
+  /** The tiles that take no pole, and those that carry the supply inside a structure, as they stand now. */
+  const poleSources = (): { keepOff: Set<number>; closed: Set<number> } => ({
+    // A tile an overpass crosses takes no pole: the deck is over the strip.
+    keepOff: new Set([
+      ...drivewayTiles,
+      ...freeJunctionTiles,
+      ...tramStations.tiles(),
+      ...clientGrid.overRoadTiles().map((t) => t.x * 100_000 + t.z),
+    ]),
+    closed: new Set(guideway.structure()?.tiles.keys() ?? []),
+  });
+  const flushPoles = (sourcesMoved: boolean): void => {
+    if (sourcesMoved) {
+      cableTiles = null;
+      const { keepOff, closed } = poleSources();
+      markPoleKeysChanged(poleKeepOff, keepOff);
+      markPoleKeysChanged(poleClosed, closed);
+      poleKeepOff = keepOff;
+      poleClosed = closed;
+    }
+    if (dirtyPoleChunks.size === 0 && !poleSlots.line && !poleSlots.free) return;
+    const world: PowerWorld = {
+      ...poleWorld(),
+      sources: poleSlots.line ? sourceTiles() : new Set<number>(),
+    };
+    for (const key of dirtyPoleChunks) powerLines.setSlot(key, layStreetChunk(world, key));
+    dirtyPoleChunks.clear();
+    if (poleSlots.line) {
+      powerLines.setSlot(STRUNG_LINE_SLOT, layStrungLine(world, clientGrid.powerLineTiles()));
+    }
+    if (poleSlots.free) {
+      powerLines.setSlot(
+        FREE_ROAD_SLOT,
+        clientGrid.roads
+          ? freeRoadPoleLay(
+              clientGrid.roads,
+              (id) => clientGrid.profileById(id),
+              (wx, wz) => clientGrid.poweredAt(worldToTile(wx), worldToTile(wz)),
+              roadsideUpper,
+            )
+          : null,
+      );
+    }
+    poleSlots.line = false;
+    poleSlots.free = false;
+    powerLines.commit();
+    // The underground cable marks the feet of the boxes and risers just laid.
+    rebuildCables();
+  };
+  /**
+   * Every object beside a street, laid in the order they take their places:
+   * signal masts and stop signs, tram poles, lamps (those on the grid and along
+   * roads off it), then the power poles' places, then the other boards, meters
+   * and cabinets. Each gives way to the ones before it by moving along its
+   * strip, off every drive and bus stop's span, or is not stood.
+   */
+  const rebuildLamps = (): void => {
+    // Nothing kerbside stands on a raised station's stop tile or its landing tile.
+    const stationTiles = tramStations.tiles();
+    const keepOff =
+      freeJunctionTiles.size > 0 || stationTiles.size > 0
+        ? new Set([...drivewayTiles, ...freeJunctionTiles, ...stationTiles])
+        : drivewayTiles;
+    const clear = keepClearOf(
+      drivewayTiles,
+      latestStops,
+      STOP_CLEAR_HALF_M,
+      (tx, tz) => lateralAxis(latestRoadTileSet, tx, tz),
+      tileKey,
+    );
+    const control = controlSignSpots(latestRoadTiles, freeJunctionTiles);
+    roadsideControl = control;
+    // The tram's contact poles keep off the same kerbs, and a lamp beside one
+    // gives way to it, so both are placed from the one answer.
+    const poles = computeTramPolePlacements(latestRoadTiles, keepOff, {
+      clear,
+      taken: new Standing().addAll(control),
+    });
+    roadFurniture.setTramPoles(poles);
+    const ahead = new Standing().addAll(control).addAll(poles);
+    const free = clientGrid.roads
+      ? freeRoadLampStands(
+          clientGrid.roads,
+          (id) => clientGrid.profileById(id),
+          (wx, wz) => clientGrid.poweredAt(worldToTile(wx), worldToTile(wz)),
+          { clear, taken: ahead },
+        )
+      : [];
+    lamps.rebuild(latestRoadTiles, keepOff, free, poles, latestStops, control);
+    const upper = ahead.clone().addAll(lamps.standSpots());
+    roadsideUpper = { clear, taken: upper };
+    // A pole is laid again only where something it keeps clear of has moved.
+    const spots = new Map<string, Spot>();
+    for (const s of [...control, ...poles, ...lamps.standSpots()]) {
+      spots.set(`${Math.round(s.x * 4)}:${Math.round(s.z * 4)}`, s);
+    }
+    let moved = false;
+    for (const [key, s] of spots) {
+      if (upperSpots.has(key)) continue;
+      markPolesAt(worldToTile(s.x), worldToTile(s.z));
+      moved = true;
+    }
+    for (const [key, s] of upperSpots) {
+      if (spots.has(key)) continue;
+      markPolesAt(worldToTile(s.x), worldToTile(s.z));
+      moved = true;
+    }
+    upperSpots = spots;
+    const stopKeys = new Set(latestStops.map((s) => s.x * 100_000 + s.z));
+    markPoleKeysChanged(upperStops, stopKeys);
+    if (!sameTileKeySet(upperStops, stopKeys)) moved = true;
+    upperStops = stopKeys;
+    if (moved && clientGrid.roads) poleSlots.free = true;
+    keepTreesOffRoadside();
+    // The places the lower objects find taken include the power poles'.
+    const poleSpotWorld: PowerWorld = {
+      tileSet: latestRoadTileSet,
+      ...poleSources(),
+      roadside: roadsideUpper,
+      ...cableWorld(),
+    };
+    // A cable's boxes and transformers hold their places like a pole.
+    const poleSpots = [...streetPoleSpots(poleSpotWorld), ...cableBoxSpots(poleSpotWorld)];
+    roadFurniture.rebuild(latestRoadTiles, freeJunctionTiles, {
+      clear,
+      taken: upper.clone().addAll(poleSpots),
+    });
+  };
+  /**
+   * Grid tiles where a road off the grid meets, keyed as the lamps key tiles.
+   * The free-road renderer draws the whole junction there, so the tile
+   * renderer leaves the tile's own road undrawn and nothing kerbside stands
+   * on it by the tile's old shape.
+   */
+  let freeJunctionTiles: ReadonlySet<number> = new Set();
+  const syncFreeJunctions = (): void => {
+    const tiles = freeRoads.gridJunctionTiles();
+    const next = new Set(tiles.map((t) => t.x * 100_000 + t.z));
+    if (sameTileKeySet(next, freeJunctionTiles)) return;
+    freeJunctionTiles = next;
+    roadsMesh.setFreeJunctionTiles(tiles);
+    rebuildLamps();
+  };
+  /** Counts down to the next advisor re-rank (see ADVISOR_REFRESH_SNAPSHOTS). */
+  let snapshotsSinceAdvice = 0;
+  /** What growth last said it is holding back for want of supply, for the advisor. */
+  let growthWaiting: GrowthWaiting = { power: 0, water: 0, sewer: 0 };
+  let zonedUnserved: ZonedUnserved = { power: 0, water: 0, sewer: 0 };
+  let deathCare: DeathCareReport = { facilities: [], uncollected: 0, regionalThisMonth: 0 };
+  let incidents: readonly Incident[] = [];
+  /** Latest flattened transit stop tile-points, mirrored so pedestrian
+   * idlers can be re-applied on building-only deltas (PedestrianRenderer does
+   * not cache stops itself — same pattern as knownBuildings above). */
+  let latestStopPoints: StopIdleInput[] = [];
+  const autoSaver = new AutoSaver(() => saveNow(worker));
 
-      if (
-        this.activeTool === ActiveTool.TERRAFORM &&
-        this.isMouseDown &&
-        this.mouseButton === 0 &&
-        this.hasHitPoint &&
-        this.currentBrushSettings.tool !== TerraformTool.NONE &&
-        this.terrain
-      ) {
-        // Restricción: la brocha solo modifica terreno dentro de parcelas desbloqueadas (Cities: Skylines)
-        const bounds = TerrainModifier.applyBrush(
-          this.terrainData.heights,
-          this.terrainData.width,
-          this.terrainData.height,
-          this.terrainData.cellSize,
-          this.currentHitPoint.x,
-          this.currentHitPoint.z,
-          this.currentBrushSettings,
-          deltaTime,
-          (gx, gz) => this.cityTileManager.isCellBuildable(gx, gz)
-        );
+  let snapshotAgeMs = 0;
+  /** Snapshots with vehicles that have landed since the last reset; one is needed before an interval can be measured. */
+  let snapshotsLanded = 0;
+  /** How long vehicles take to interpolate to the next snapshot: how long the last one was on screen. */
+  let snapshotIntervalMs = DEFAULT_SNAPSHOT_INTERVAL_MS;
+  let overlayAgeMs = 0;
+  /** Last calendar month pushed into TreeRenderer.setSeason (0 = never). */
+  let lastSeasonMonth = 0;
+  /** Latest snapshot-derived clock values, consumed by the frame loop's
+   * water/cloud updates (WaterRenderer wants nightFactor; CloudLayer wants
+   * the sim tick + time-of-day for its coverage/tint). */
+  let lastTick = 0;
+  let lastDayT = 0.5;
+  let lastNightFactor = timeOfDayColors(lastDayT).nightFactor;
 
-        if (bounds) {
-          const [minVX, maxVX, minVZ, maxVZ] = bounds;
-          this.terrain.updateRegion(minVX, maxVX, minVZ, maxVZ);
+  const postCommands = (commands: Command[], silent: boolean): number => {
+    const seq = queue.push(commands);
+    if (silent) silentSeqs.add(seq);
+    const msg: MainToWorker = { type: 'commands', seq, commands };
+    worker.postMessage(msg);
+    return seq;
+  };
 
-          for (const node of this.roadGraph.nodes.values()) {
-            node.elevation = this.getCellElevation(node.x, node.z);
-          }
-          this.roadMesh.rebuild(this.roadGraph);
-          this.zoningManager.generateZoningCells(this.roadGraph, this.getCellElevation);
-          this.zoningMesh.rebuild(this.zoningManager, false);
-          this.cityBoundaryMesh.rebuild(this.cityTileManager, this.getCellElevation);
+  // Sandbox setting is applied as a worker command (not init state), so it
+  // takes effect immediately whether carried over from Options or toggled
+  // live mid-game (see bindActions' onSettings below).
+  if (store.getState().settings.sandboxUnlockAll) {
+    postCommands([{ kind: 'setSandbox', on: true }], true);
+  }
+  if (store.getState().settings.unlimitedMoney) {
+    postCommands([{ kind: 'setUnlimitedMoney', on: true }], true);
+  }
 
-          // Sincronizar elevación de árboles afectados por la brocha de terraformación
-          const cs = this.terrainData.cellSize;
-          const halfW = (this.terrainData.width * cs) / 2;
-          const halfH = (this.terrainData.height * cs) / 2;
-          for (let i = 0; i < this.baseFoliagePoints.length; i++) {
-            const pt = this.baseFoliagePoints[i]!;
-            const gx = Math.floor((pt.x + halfW) / cs);
-            const gz = Math.floor((pt.z + halfH) / cs);
-            if (gx >= minVX && gx <= maxVX && gz >= minVZ && gz <= maxVZ) {
-              pt.y = this.getCellElevation(gx, gz);
+  const syncUndoState = (): void => {
+    store.getState().setUndoState(undoStack.canUndo(), undoStack.canRedo());
+  };
+
+  const undo = (): void => {
+    const commands = undoStack.undo();
+    if (commands && commands.length > 0) {
+      historySeqs.set(postCommands(commands, true), { commands, label: 'Undo' });
+    }
+    syncUndoState();
+  };
+
+  const redo = (): void => {
+    const commands = undoStack.redo();
+    if (commands && commands.length > 0) {
+      historySeqs.set(postCommands(commands, true), { commands, label: 'Redo' });
+    }
+    syncUndoState();
+  };
+
+  // --- screen -> world -> tile picking ----------------------------------------
+  const groundPointAt = (px: number, py: number): { x: number; z: number } | null => {
+    const rect = viewport.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return null;
+    camera.updateMatrixWorld(true);
+    const ndcX = (px / rect.width) * 2 - 1;
+    const ndcY = -(py / rect.height) * 2 + 1;
+    const near = new THREE.Vector3(ndcX, ndcY, -1).unproject(camera);
+    const far = new THREE.Vector3(ndcX, ndcY, 1).unproject(camera);
+    const dir = far.sub(near);
+
+    // Iteratively refine a ray/heightfield intersection: start on the y=0
+    // plane, then re-solve against the terrain height under each hit.
+    let hitX = 0;
+    let hitZ = 0;
+    let groundY = 0;
+    for (let i = 0; i < 3; i++) {
+      const denom = Math.abs(dir.y) < 1e-6 ? (dir.y < 0 ? -1e-6 : 1e-6) : dir.y;
+      const t = (groundY - near.y) / denom;
+      if (t < 0) return null; // looking away from the ground
+      hitX = near.x + dir.x * t;
+      hitZ = near.z + dir.z * t;
+      groundY = heightAt(hitX, hitZ);
+    }
+    return { x: hitX, z: hitZ };
+  };
+
+  const screenToTile = (sx: number, sy: number): TilePoint | null => {
+    const p = groundPointAt(sx, sy);
+    if (!p) return null;
+    const x = worldToTile(p.x);
+    const z = worldToTile(p.z);
+    return inBounds(x, z) ? { x, z } : null;
+  };
+
+  // Second half of the dev-only __slimcity smoke hook (the first half is
+  // declared above, before screenToTile exists): pixel->tile
+  // picking so screenshot scripts can aim tools at exact tiles instead of
+  // dead-reckoning the camera projection. Stripped from production builds.
+  if (import.meta.env.DEV) {
+    const hook = (window as unknown as Record<string, unknown>).__slimcity;
+    if (hook && typeof hook === 'object') {
+      (hook as Record<string, unknown>).screenToTile = screenToTile;
+      // Audio can only be judged in a real browser (jsdom has no WebAudio and
+      // no playback), so tools/audio-check.mjs drives it through here.
+      (hook as Record<string, unknown>).audio = { engine: audio, music };
+      // The placement ghost's own extent in world metres, so a screenshot
+      // script can MEASURE the road width a preview is promising rather than
+      // judge it by eye. Null whenever nothing is previewed.
+      // The rendered ground height at any world point — the interpolated
+      // surface a player sees, not the per-tile figure the grid stores. A road
+      // deck is flat across its tile while the terrain quad under it is not,
+      // so comparing the two is the only way to measure ground standing proud
+      // of a road rather than judging it from a screenshot.
+      (hook as Record<string, unknown>).terrainHeightAt = (x: number, z: number): number =>
+        heightAt(x, z);
+      // What the farm kit is drawing, so a screenshot script can confirm the
+      // orchard, the herd and the silos exist before judging how they look.
+      (hook as Record<string, unknown>).farmKit = (): Record<string, number> => ({
+        crowns: farms.partCount('crown'),
+        silos: farms.partCount('silo'),
+        bins: farms.partCount('bin'),
+        barnRoofs: farms.partCount('barnRoof'),
+        herd: farms.herdSize(),
+        litWindows: farms.litWindowCount(),
+        trucks: farms.truckCount(),
+      });
+      // Holds every building's construction countdown where it is, so a tool
+      // can photograph a building going up; false releases it.
+      (hook as Record<string, unknown>).holdConstruction = (hold: boolean): void => {
+        const msg: MainToWorker = { type: 'devHoldConstruction', hold };
+        worker.postMessage(msg);
+      };
+      (hook as Record<string, unknown>).soilAt = (x: number, z: number): number =>
+        clientGrid.soil[z * clientGrid.size + x] ?? 0;
+      (hook as Record<string, unknown>).ghostBounds = (): {
+        minX: number;
+        maxX: number;
+        minZ: number;
+        maxZ: number;
+        minY: number;
+        maxY: number;
+      } | null => {
+        const base = ghosts.layers().base;
+        const geometry = base.geometry;
+        const position = geometry.getAttribute('position');
+        if (!position || position.count === 0) return null;
+        geometry.computeBoundingBox();
+        const box = geometry.boundingBox;
+        if (!box) return null;
+        return {
+          minX: box.min.x,
+          maxX: box.max.x,
+          minZ: box.min.z,
+          maxZ: box.max.z,
+          minY: box.min.y,
+          maxY: box.max.y,
+        };
+      };
+    }
+  }
+
+  // --- tools -------------------------------------------------------------------
+  const roadSpecByTier = new Map<number, RoadSpec>(roadSpecs.map((s) => [s.tier, s]));
+
+  /** Ghost tint/decoration family for the active tool. */
+  /**
+   * Road tiers where direction is a real property of the road rather than a
+   * drawing artifact: a one-way street, a slip road, and a motorway
+   * carriageway, which carries traffic one way and is paired with a second run
+   * to make a dual carriageway. These get flow arrows on the placement ghost.
+   */
+  const isDirectionalTier = (tier: RoadTier): boolean => roadSpecByTier.get(tier)?.oneWay === true;
+
+  /**
+   * Whether the tile carries water for the pipe overlay to join a pipe to: a
+   * pipe, a street whose main carries water, or a building the pipe feeds.
+   */
+  const carriesWaterAt = (x: number, z: number): boolean => {
+    if (!inBounds(x, z)) return false;
+    if (clientGrid.waterPipeAt(x, z)) return true;
+    const i = z * clientGrid.size + x;
+    if (clientGrid.buildingId[i] !== 0) return true;
+    const tier = (clientGrid.roadTier[i] ?? 0) as RoadTier;
+    return isStreetTier(tier) && roadSpecByTier.get(tier)?.carriesWater !== false;
+  };
+  /** Whether a street tile's main carries water: the town's own pipe under it. */
+  const mainAt = (x: number, z: number): boolean => {
+    if (!inBounds(x, z)) return false;
+    const i = z * clientGrid.size + x;
+    const tier = (clientGrid.roadTier[i] ?? 0) as RoadTier;
+    return isStreetTier(tier) && roadSpecByTier.get(tier)?.carriesWater !== false;
+  };
+  /** The water buildings: where the buried system comes up into a riser. */
+  const isWaterBuilding = (catalogId: string): boolean =>
+    catalogId.startsWith('water-') || catalogId === 'sewage-works';
+  /**
+   * The system as the underground draws it, read from the mirror: the mains
+   * under the streets, the laid pipes, a lead from each served building's
+   * street into its lot, and the water buildings' risers.
+   */
+  const pipeSystemView = (): Parameters<typeof pipes.rebuild>[0] => {
+    const mains: TilePoint[] = [];
+    for (let z = 0; z < clientGrid.size; z++) {
+      for (let x = 0; x < clientGrid.size; x++) if (mainAt(x, z)) mains.push({ x, z });
+    }
+    const leads: PipeLead[] = [];
+    const risers: TilePoint[] = [];
+    const connections: PipeConnection[] = [];
+    const carrierAt = (x: number, z: number): boolean =>
+      mainAt(x, z) || clientGrid.waterPipeAt(x, z);
+    for (const b of knownBuildings.values()) {
+      const entry = catalogById.get(b.catalogId);
+      if (!entry) continue;
+      const { w, d } = footprintForRotation(entry, b.rotation);
+      if (isWaterBuilding(b.catalogId)) {
+        const riser = { x: b.x + Math.floor(w / 2), z: b.z + Math.floor(d / 2) };
+        risers.push(riser);
+        // Wherever a carrier lies just past the footprint's edge, a run of
+        // tiles from the riser to that edge tile joins them: across first,
+        // then along, which stays inside the rectangle.
+        for (let z = b.z; z < b.z + d; z++) {
+          for (let x = b.x; x < b.x + w; x++) {
+            for (const [dx, dz] of [
+              [0, -1],
+              [1, 0],
+              [0, 1],
+              [-1, 0],
+            ] as const) {
+              const ox = x + dx;
+              const oz = z + dz;
+              const outside = ox < b.x || ox >= b.x + w || oz < b.z || oz >= b.z + d;
+              if (!outside || !carrierAt(ox, oz)) continue;
+              const run: TilePoint[] = [{ ...riser }];
+              let cx = riser.x;
+              let cz = riser.z;
+              while (cx !== x) {
+                cx += Math.sign(x - cx);
+                run.push({ x: cx, z: cz });
+              }
+              while (cz !== z) {
+                cz += Math.sign(z - cz);
+                run.push({ x: cx, z: cz });
+              }
+              connections.push({ run, dx, dz });
             }
           }
-          this.updateFoliageInstances();
+        }
+        continue;
+      }
+      if (entry.waterUse <= 0) continue;
+      const edge = findRoadFacingEdge(b.x, b.z, w, d, carrierAt);
+      if (!edge) continue;
+      const step = { N: [0, 1], E: [-1, 0], S: [0, -1], W: [1, 0] }[edge.side]!;
+      leads.push({ x: edge.roadTileX, z: edge.roadTileZ, dx: step[0]!, dz: step[1]! });
+    }
+    return {
+      pipes: clientGrid.waterPipeTiles(),
+      mains,
+      leads,
+      risers,
+      connections,
+      carriesWater: carriesWaterAt,
+      wet: (x, z) => overlays.coverageAt('watered', x, z),
+      drained: (x, z) => overlays.coverageAt('sewered', x, z),
+    };
+  };
+  /** The drawn system is behind what the mirror knows until the next flush. */
+  let pipesDirty = true;
+  /** Rebuilds the drawn system if it is out of date, and only while it can be seen. */
+  const flushPipes = (showing = pipes.isVisible()): void => {
+    if (!pipesDirty || !showing) return;
+    pipes.rebuild(pipeSystemView());
+    pipesDirty = false;
+  };
+  const rebuildPipes = (): void => {
+    pipesDirty = true;
+    flushPipes();
+  };
+  /** The drawn cable is behind what the mirror knows until the next flush. */
+  let cablesDirty = true;
+  /** Rebuilds the drawn cable if it is out of date, and only while it can be seen. */
+  const flushCables = (showing = cableOverlay.isVisible()): void => {
+    if (!cablesDirty || !showing) return;
+    // Boxes and riser poles stand on the cable; their feet are marked on it.
+    const feet = [...powerLines.footings()];
+    const world = poleWorld();
+    cableOverlay.rebuild(clientGrid.cableTiles(), feet, (x, z) => cablePlaceOf(world, x, z));
+    cablesDirty = false;
+  };
+  const rebuildCables = (): void => {
+    cablesDirty = true;
+    flushCables();
+  };
 
-          this.sendToWorker({
-            type: 'SYNC_TERRAIN',
-            payload: { heights: this.terrainData.heights },
-          });
+  const ghostKindFor = (tool: ToolId): GhostKind => {
+    if (tool === 'bulldoze') return 'bulldoze';
+    if (tool.startsWith('road.') || tool === 'interchange') return 'road';
+    // A roundabout's block reads as the square of ground it takes.
+    if (tool === 'roundabout') return 'zone';
+    if (tool.startsWith('zone.')) return 'zone';
+    // District paint reads as a zone-style tint; transit stops read as a road path.
+    if (tool === 'district.paint') return 'zone';
+    if (tool.startsWith('transit.')) return 'road';
+    return 'plop';
+  };
+
+  const env: ToolEnv = {
+    screenToTile,
+    send: (label, commands) => {
+      const seq = postCommands(commands, false);
+      pendingEdits.set(seq, { label, forward: commands });
+    },
+    roadSpec: (tier: RoadTier): RoadSpec => {
+      const spec = roadSpecByTier.get(tier);
+      if (!spec) throw new Error(`No road spec for tier ${tier}`);
+      return spec;
+    },
+    profileIdFor: (profile) => clientGrid.profileIdFor(profile),
+    roadProfileAt: (tile) => clientGrid.profileAt(tile.x, tile.z),
+    roadFlowAt: (tile) => clientGrid.flowAt(tile.x, tile.z),
+    roadProfileIdAt: (tile) =>
+      inBounds(tile.x, tile.z)
+        ? (clientGrid.roadProfile[tile.z * clientGrid.size + tile.x] ?? 0)
+        : 0,
+    overRoadAt: (tile) => clientGrid.overRoadAt(tile.x, tile.z),
+    gravesUnder: (tiles) => {
+      const interred = new Map(deathCare.facilities.map((f) => [f.id, f.used]));
+      const seen = new Set<number>();
+      let graves = 0;
+      for (const t of tiles) {
+        if (!inBounds(t.x, t.z)) continue;
+        const id = clientGrid.buildingId[t.z * clientGrid.size + t.x] ?? 0;
+        if (id === 0 || seen.has(id)) continue;
+        seen.add(id);
+        graves += interred.get(id) ?? 0;
+      }
+      return graves;
+    },
+    roadMaskAt: (tile) =>
+      inBounds(tile.x, tile.z) ? (clientGrid.roadMask[tile.z * clientGrid.size + tile.x] ?? 0) : 0,
+    stopAt: (x, z, side) =>
+      latestStops.find((s) => s.x === x && s.z === z && s.side === side)?.kind ?? null,
+    roadElevationAt: (tile) =>
+      inBounds(tile.x, tile.z)
+        ? (clientGrid.roadElevation[tile.z * clientGrid.size + tile.x] ?? 0)
+        : 0,
+    // The grid as an interchange is laid out on it, read off the mirror, with
+    // the world's own rule for ground a road may be laid on.
+    interchangeGround: () => {
+      const at = (x: number, z: number): number => z * clientGrid.size + x;
+      return {
+        motorwayFlowAt: (x, z) =>
+          inBounds(x, z) && clientGrid.roadTier[at(x, z)] === RoadTier.Highway
+            ? flowDirection(clientGrid.roadFlow[at(x, z)] ?? 0)
+            : RoadFlow.None,
+        maskAt: (x, z) => (inBounds(x, z) ? (clientGrid.roadMask[at(x, z)] ?? 0) : 0),
+        roadAt: (x, z) =>
+          inBounds(x, z) &&
+          (clientGrid.roadTier[at(x, z)] !== RoadTier.None || clientGrid.overTier[at(x, z)] !== 0),
+        overRoadAt: (x, z) => inBounds(x, z) && clientGrid.overTier[at(x, z)] !== 0,
+        buildableAt: (x, z) =>
+          isRoadBuildable(clientGrid, x, z) && clientGrid.buildingId[at(x, z)] === 0,
+        heightAt: (x, z) => (inBounds(x, z) ? (clientGrid.height[at(x, z)] ?? 0) : 0),
+      };
+    },
+    // The world's own roundabout rules, over the mirror; the roundabouts it
+    // knows of are the ones the world has said stand there.
+    roundaboutGround: () =>
+      roundaboutGroundOf(
+        clientGrid,
+        (x, z) => (clientGrid.roundaboutAt(x, z) ? ROUNDABOUT_CODE : 0),
+        (id) => clientGrid.profileById(id),
+      ),
+    // The worker's own deck solver, run against the mirror, so the ghost
+    // stands where the road will be laid.
+    deckLifts: (tiles, elevation) => {
+      const deck = solveElevationProfile(clientGrid, tiles, elevation);
+      return deck.ok ? deck.elevations : null;
+    },
+    worldPointAt: groundPointAt,
+    snapRoadEnd: (p) => snapRoadEnd(clientGrid, p),
+    roadEndNear: (p) => (clientGrid.roads ? nearestRoadEnd(clientGrid.roads, p) : null),
+    roadEndDirection: (p) =>
+      clientGrid.roads
+        ? roadEndDirection(clientGrid, clientGrid.roads, p, (id) => clientGrid.profileById(id))
+        : null,
+    // The world's own rules, run against the mirror of it, so the preview
+    // refuses exactly what the command would.
+    planFreeRoad: (ask, profile) => {
+      if (!clientGrid.roads) return { ok: false, reason: 'The roads are still loading' };
+      const plan = planWithSplits(clientGrid, clientGrid.roads, ask, ask.splits, (id) =>
+        id === ask.profileId ? profile : clientGrid.profileById(id),
+      );
+      return plan.ok ? { ok: true, lengthM: plan.lengthM } : plan;
+    },
+    // The world's own rule for the ground roads off the grid hold, against the
+    // mirror as the drag's curve-end moves would leave it, so a grid drag into
+    // one is refused before release, not after.
+    gridRunRefusal: (tiles, moves) =>
+      clientGrid.roads
+        ? gridRunRefusalAfter(clientGrid, clientGrid.roads, tiles, moves, (id) =>
+            clientGrid.profileById(id),
+          )
+        : null,
+    // A drag the tool refused is told the way one the world refused is: the
+    // cursor's reason outlives the cursor.
+    onRefused: (label, reason) => {
+      audio.play('denied');
+      store.getState().pushNotification({
+        id: Date.now(),
+        severity: 'warning',
+        title: `${label} failed`,
+        body: reason,
+        tick: store.getState().stats.tick,
+      });
+    },
+    entry: (catalogId: string) => catalogById.get(catalogId),
+    onPreview: (preview) => {
+      store
+        .getState()
+        .setPreview(
+          preview ? { cost: preview.cost, label: preview.label, valid: preview.valid } : null,
+        );
+      // The stop being placed, laid by the placement function a placed stop is.
+      const road = preview?.stop
+        ? stopRoadAt(latestRoadTileSet, preview.stop.stop.x, preview.stop.stop.z)
+        : null;
+      busStops.setGhost(
+        preview?.stop?.stop ?? null,
+        road && preview?.stop ? { ...road, lateral: preview.stop.lateral } : null,
+        preview?.valid ?? false,
+      );
+      if (preview?.curve) {
+        // A road off the grid is drawn as its own line at its real width.
+        ghosts.setCurve(
+          preview.curve.centre,
+          preview.widthMeters ?? 0,
+          preview.valid,
+          preview.curve.clicks,
+        );
+        cursorChip.setChip(
+          preview.curve.centre.length > 0
+            ? {
+                cost: preview.cost,
+                lengthMeters: preview.lengthMeters,
+                radiusMeters: preview.radiusMeters,
+                invalidReason: preview.invalidReason,
+              }
+            : null,
+        );
+      } else if (preview) {
+        // Plop volume ghost: for plop tools, look up the catalog entry
+        // and pass the rotation-aware footprint volume (the preview tiles ARE
+        // footprintTiles(origin, entry, rotation), so their bounding rect is
+        // the rotated w×d and its min corner is the origin tile).
+        let opts: SetPreviewOptions | undefined;
+        const tool = toolManager.tool;
+        // Zone previews: tint the ghost with the zone being painted (R/C/I),
+        // so the preview color matches the tiles it will lay down.
+        if (tool.startsWith('zone.')) {
+          const zone = ZONE_TOOL_TO_TYPE[tool];
+          if (zone !== undefined) opts = { zone };
+        }
+        // Direction arrows while dragging a road whose direction is real. A
+        // one-way or a highway laid the wrong way round is otherwise only
+        // obvious once there is traffic on it.
+        const previewTier = ROAD_TOOL_TO_TIER[tool];
+        if (previewTier !== undefined && isDirectionalTier(previewTier)) {
+          opts = { ...opts, flowArrows: true };
+        }
+        // The ghost is drawn at the road's real width, so a wider road reads
+        // as wider before it is laid rather than after — which is the only
+        // warning a player gets when replacing a street with something twice
+        // its size.
+        if (preview.widthMeters !== undefined) {
+          opts = { ...opts, roadWidthMeters: preview.widthMeters };
+        }
+        if (preview.deckLifts) opts = { ...opts, deckLifts: preview.deckLifts };
+        if (preview.bandShifts) opts = { ...opts, roadBandShifts: preview.bandShifts };
+        if (tool.startsWith('plop.') && preview.tiles.length > 0) {
+          const entry = catalogById.get(tool.slice('plop.'.length));
+          if (entry) {
+            let minX = Infinity;
+            let minZ = Infinity;
+            let maxX = -Infinity;
+            let maxZ = -Infinity;
+            for (const t of preview.tiles) {
+              if (t.x < minX) minX = t.x;
+              if (t.x > maxX) maxX = t.x;
+              if (t.z < minZ) minZ = t.z;
+              if (t.z > maxZ) maxZ = t.z;
+            }
+            opts = {
+              volume: {
+                w: maxX - minX + 1,
+                d: maxZ - minZ + 1,
+                heightMeters: entry.height,
+                originTile: { x: minX, z: minZ },
+              },
+            };
+          }
+        }
+        // A stop is drawn as its own furniture, not as a tile.
+        if (isStopTool(tool)) ghosts.clear();
+        else ghosts.setPreview(preview.tiles, preview.valid, ghostKindFor(tool), opts);
+        cursorChip.setChip({
+          cost: preview.cost,
+          lengthMeters: preview.lengthMeters,
+          invalidReason: preview.invalidReason,
+          note: preview.note,
+        });
+      } else {
+        ghosts.clear();
+        cursorChip.setChip(null);
+      }
+    },
+    // Cursor-chip invalid reasons: live funds/milestone from the
+    // store; geometric overlap from the client grid mirror. A plop may overlap
+    // nothing; a road may overlap roads (to join or upgrade) and water (to
+    // bridge) but never a building; bulldoze and zones overlap by design.
+    funds: () => store.getState().stats.funds,
+    // With everything unlocked the worker builds whatever is asked for, so a
+    // preview reading "Locked" is the preview lying about what the click will
+    // do. The sandbox setting has to reach both sides of that judgement.
+    milestoneLevel: () =>
+      store.getState().settings.sandboxUnlockAll
+        ? Number.POSITIVE_INFINITY
+        : store.getState().stats.milestoneLevel,
+    canPlace: (tiles, rotation = 0) => {
+      const tool = store.getState().selectedTool;
+      // A stop stands on the street's side, never on a lot.
+      if (isStopTool(tool)) return true;
+      if (tool.startsWith('plop.')) {
+        return (
+          clientGrid.isFreeForPlop(tiles) &&
+          clientGrid.placeRefusal(catalogById.get(tool.slice('plop.'.length)), tiles, rotation) ===
+            null
+        );
+      }
+      if (tool in ROAD_TOOL_TO_TIER) return clientGrid.isClearOfBuildings(tiles);
+      return true;
+    },
+    // The sentence the worker would refuse a plop with, for the cursor chip.
+    placeRefusal: (catalogId, tiles, rotation) =>
+      clientGrid.isFreeForPlop(tiles)
+        ? clientGrid.placeRefusal(catalogById.get(catalogId), tiles, rotation)
+        : null,
+    // The turns a plop fronts a street at, for the ghost to turn itself by.
+    frontingTurns: (catalogId, x, z) => clientGrid.frontingTurns(catalogById.get(catalogId), x, z),
+    // Terraform hooks: the Level tool's drag-start height sample (tile
+    // center, same anchor the camera/buildings use) and the road/building
+    // structure-exclusion check backing the brush validity chip.
+    heightAt: (tile) => heightAt(tileToWorld(tile.x), tileToWorld(tile.z)),
+    hasStructure: (tile) => {
+      if (!inBounds(tile.x, tile.z)) return false;
+      const i = tile.z * clientGrid.size + tile.x;
+      return clientGrid.roadTier[i] !== RoadTier.None || clientGrid.buildingId[i] !== 0;
+    },
+    // So the cursor quotes only the tiles a power-line or pipe drag would change.
+    powerLineAt: (x, z) => clientGrid.powerLineAt(x, z),
+    // The cursor says what the world will: a street already carries power,
+    // and a line must start at a source.
+    cableAt: (x, z) => clientGrid.cableAt(x, z),
+    powerLineRefusal: (tiles, cable) => {
+      const sealed = (tier: number): boolean => isPaved(presetProfileForTier(tier as RoadTier));
+      return (
+        // A cable is laid along a street freely: it buries the street's supply.
+        (cable ? null : alongStreetRefusal(clientGrid, tiles, sealed)) ??
+        sourceEndRefusal(
+          clientGrid,
+          tiles,
+          (x, z) => {
+            const id = clientGrid.buildingId[z * clientGrid.size + x] ?? 0;
+            const b = id === 0 ? undefined : knownBuildings.get(id);
+            return b !== undefined && feedsLines(catalogById.get(b.catalogId));
+          },
+          cable ? PowerLineKind.Cable : PowerLineKind.Strung,
+          (x, z) => {
+            const tier = clientGrid.roadTier[z * clientGrid.size + x] ?? 0;
+            return isFrontageTier(tier) && sealed(tier);
+          },
+        )
+      );
+    },
+    waterPipeAt: (x, z) => clientGrid.waterPipeAt(x, z),
+    // Underground, a pipe drag snaps onto the system and says what it joins.
+    pipeWorld: {
+      mainAt,
+      pipeAt: (x, z) => clientGrid.waterPipeAt(x, z),
+      buildingNameAt: (x, z) => {
+        if (!inBounds(x, z)) return null;
+        const id = clientGrid.buildingId[z * clientGrid.size + x] ?? 0;
+        const b = id === 0 ? undefined : knownBuildings.get(id);
+        return b ? (catalogById.get(b.catalogId)?.name ?? null) : null;
+      },
+    },
+  };
+  const toolManager = new ToolManager(env);
+  toolManager.setBrush(store.getState().brushSettings);
+  toolManager.setInterchange(store.getState().interchange);
+
+  /**
+   * A committed bulldoze clears the cosmetic trees on every tile it covers,
+   * bare ground included (the sim owns g.trees). Trees under roads and
+   * buildings are kept off by `keepTreesOffOccupied`, from the mirror.
+   */
+  const clearTreesFor = (commands: Command[]): void => {
+    for (const command of commands) {
+      if (command.kind === 'bulldoze') trees.clearAt(command.tiles);
+    }
+  };
+  /**
+   * No tree stands where a road, a road off the grid or a building does. Read
+   * from the mirror rather than from the commands that put them there, so it
+   * holds for a curve, for a building the sim grew, and for a city just
+   * loaded, whose trees are regrown from the map it was founded on.
+   */
+  const keepTreesOffOccupied = (): void => trees.clearAt(clientGrid.occupiedTiles());
+
+  // --- worker messages -----------------------------------------------------------
+  const onAck = (ack: CommandAck): void => {
+    if (silentSeqs.has(ack.seq)) {
+      silentSeqs.delete(ack.seq);
+      const history = historySeqs.get(ack.seq);
+      historySeqs.delete(ack.seq);
+      // A batch lands whole or not at all, so a refused undo or redo changed
+      // nothing, and the edit goes back where it was.
+      const edit = history && !ack.ok ? undoStack.refused(history.commands) : null;
+      if (history && edit) {
+        audio.play('denied');
+        store.getState().pushNotification({
+          id: -ack.seq,
+          severity: 'warning',
+          title: `${history.label} of ${edit.label} failed`,
+          body: refusalText(ack.reason),
+          tick: store.getState().stats.tick,
+        });
+      }
+      syncUndoState();
+      return;
+    }
+    const edit = pendingEdits.get(ack.seq);
+    if (!edit) return;
+    pendingEdits.delete(ack.seq);
+    if (ack.ok) {
+      undoStack.push({
+        label: edit.label,
+        forward: edit.forward,
+        inverse: ack.inverse,
+        cost: ack.cost,
+      });
+      clearTreesFor(edit.forward);
+      syncUndoState();
+      audio.play('build');
+    } else {
+      audio.play('denied');
+      store.getState().pushNotification({
+        id: -ack.seq,
+        severity: 'warning',
+        title: `${edit.label} failed`,
+        body: refusalText(ack.reason),
+        tick: store.getState().stats.tick,
+      });
+    }
+  };
+
+  const onSnapshot = (snap: SimSnapshot): void => {
+    const state = store.getState();
+    state.applySnapshotStats(snap.stats);
+    autoSaver.onSnapshotTick(snap.stats.tick);
+    if (import.meta.env.DEV) {
+      snapshotCounts.snapshots! += 1;
+      if (snap.buildings) snapshotCounts.buildings! += 1;
+      if (snap.junctions) snapshotCounts.junctions! += 1;
+      if (snap.roads) snapshotCounts.roads! += 1;
+      if (snap.roadNet) snapshotCounts.roadNet! += 1;
+      if (snap.roadProfiles) snapshotCounts.roadProfiles! += 1;
+      if (snap.roundabouts) snapshotCounts.roundabouts! += 1;
+      if (snap.heightPatches && snap.heightPatches.length > 0) snapshotCounts.heightPatches! += 1;
+    }
+
+    // Record every snapshot's stats into the ring buffer and publish the
+    // oldest-first samples for the StatsPanel charts.
+    statsHistory.record(snap.stats);
+    state.setStatsSamples(statsHistory.samples());
+
+    // The advisor re-ranks on a slow cadence: iterating the building mirror is
+    // cheap, but a problem list that reshuffles ten times a second is unreadable.
+    if (snap.growthWaiting) growthWaiting = snap.growthWaiting;
+    if (snap.zonedUnserved) zonedUnserved = snap.zonedUnserved;
+    if (snap.deathCare) deathCare = snap.deathCare;
+    // Incidents travel only while any stand, so absent is none.
+    incidents = snap.incidents ?? [];
+    if (++snapshotsSinceAdvice >= ADVISOR_REFRESH_SNAPSHOTS) {
+      snapshotsSinceAdvice = 0;
+      state.setAdvisorIssues(
+        cityIssues(
+          knownBuildings.values(),
+          snap.stats,
+          growthWaiting,
+          zonedUnserved,
+          deathCare,
+          incidents,
+          state.settings.unlimitedMoney,
+        ),
+      );
+    }
+
+    // Visual day/night runs on VISUAL_DAY_TICKS, decoupled
+    // from the calendar day and consistent with the status-strip clock —
+    // both shift by CLOCK_START_OFFSET_TICKS so tick 0 = 09:00 morning light
+    // (ui/format.ts formatClock applies the identical offset).
+    const dayT =
+      devDayTOverride ??
+      ((snap.stats.tick + CLOCK_START_OFFSET_TICKS) % VISUAL_DAY_TICKS) / VISUAL_DAY_TICKS;
+    world.setTimeOfDay(dayT);
+    const colors = timeOfDayColors(dayT);
+    const nightFactor = colors.nightFactor;
+    // The soundscape rides the same clock and city size the visuals do. The
+    // engine glides between mixes, so updating per snapshot never steps.
+    audio.setAmbient(
+      ambientMix({ hour: dayT * 24, population: snap.stats.population, nightFactor }),
+    );
+    // The water surface mirrors the same sky ramp the dome uses.
+    water.setSkyColors(colors.skyZenithColor, colors.skyHorizonColor);
+    lastTick = snap.stats.tick;
+    lastDayT = dayT;
+    // Lot occupancy follows the clock: shops fill for trading hours, industry
+    // keeps a late shift, and both empty out overnight.
+    parkedCars.setDayFraction(dayT);
+    lastNightFactor = nightFactor;
+    instancer.setNightFactor(nightFactor);
+    terrain.setNightFactor(nightFactor); // the ground carries the same tint as the bodies on it
+    trees.setNightFactor(nightFactor);
+    lots.setNightFactor(nightFactor);
+    massing.setNightFactor(nightFactor);
+    roofProps.setNightFactor(nightFactor);
+    houseRoofs.setNightFactor(nightFactor);
+    garages.setNightFactor(nightFactor);
+    roadsMesh.setNightFactor(nightFactor); // dim the unlit road so lamp pools stay the bright spots
+    freeRoads.setNightFactor(nightFactor);
+    lamps.setTimeOfDay(dayT); // lamps run their own dusk-to-dawn schedule, not the night ramp
+    vehicles.setNightFactor(nightFactor);
+    landmarks.setNightFactor(nightFactor);
+    utilityKits.setNightFactor(nightFactor);
+    buildingKit.setNightFactor(nightFactor);
+    tramStations.setNightFactor(nightFactor);
+    farms.setNightFactor(nightFactor);
+    farms.setDayFraction(dayT); // the farm truck works sunrise to sunset
+    transitRenderer.setDayHour(dayT * 24); // the lines run 05:00 to 23:00; their buses are in the depot otherwise
+
+    // Seasonal foliage tint: only touch materials when the
+    // calendar month actually changes.
+    const month = tickToDate(snap.stats.tick).month;
+    if (month !== lastSeasonMonth) {
+      lastSeasonMonth = month;
+      trees.setSeason(month);
+    }
+
+    // Terraform/undo/loadSave height patches -> terrain chunk rebuilds.
+    // Auto-flatten: the client grid mirror must also absorb the
+    // patches so ZoneGridRenderer.rebuild's slope-buildable check (which reads
+    // clientGrid.height) conforms to the freshly flattened terrain. Rebuild
+    // the zone grid here too, since a flatten can arrive in a snapshot with no
+    // road/zone delta (e.g. a building footprint flatten).
+    if (snap.heightPatches && snap.heightPatches.length > 0) {
+      // Growth flattens a footprint under every new building, so this rides most
+      // snapshots. Only a kit that turns to the water beside it reads the ground
+      // for its drive; a walker's path reads the roads alone.
+      drivewayCache.invalidateWhere((b) => {
+        const entry = catalogById.get(b.catalogId);
+        return entry !== undefined && civicAccessFor(entry)?.turn === 'water';
+      });
+      pedestrianRenderer.redraw();
+      terrain.applyHeightPatches(snap.heightPatches);
+      clientGrid.applyHeightPatches(snap.heightPatches);
+      // The trees were scattered on the seed map: a riverbed sunk since loses
+      // them, and raised ground carries them up with it.
+      trees.applyHeightPatches(
+        snap.heightPatches,
+        (x, z) => clientGrid.water[z * clientGrid.size + x] === 1,
+      );
+      zoneGrid.rebuild(clientGrid);
+      // The mirror regraded the soil the new heights reshaped.
+      overlays.setSoil(clientGrid.soil);
+      // Roads sample terrain height at build time: any height change under or
+      // beside an existing road (terraform, building auto-flatten, a neighbor
+      // run's grading) must rebuild the affected road chunks, or their
+      // geometry keeps stale heights (buried edges / floating caps).
+      roadsMesh.invalidateHeights(snap.heightPatches);
+      freeRoads.rebuild(clientGrid.roads);
+    }
+    // What a lot's drive and a walker's path are laid against: the roads, their
+    // sections, and the controls that reshape them. Each is derived per building,
+    // so a change to any of them lays every one again.
+    if (snap.roads || snap.roadProfiles || snap.roadNet || snap.roundabouts) {
+      drivewayCache.invalidate();
+      pedestrianRenderer.invalidatePaths();
+    }
+    // The profile table lands before the road deltas that refer into it.
+    if (snap.roadProfiles) clientGrid.applyRoadProfiles(snap.roadProfiles);
+    if (snap.roadNet) {
+      clientGrid.applyRoadNetwork(snap.roadNet);
+      poleSlots.free = true;
+      freeRoads.rebuild(clientGrid.roads);
+      syncFreeJunctions();
+      // A road off the grid fronts lots and covers tiles with no road tile
+      // changing, so the zoning grid and the lamps are rebuilt here when
+      // nothing below will.
+      if (!snap.roads) {
+        zoneGrid.rebuild(clientGrid);
+        rebuildLamps();
+      }
+    }
+    // Who gives way lands before the road deltas too, so that when a drag
+    // changes both, the signs are rebuilt once against the new answer.
+    const controlsMoved = snap.junctions ? clientGrid.applyJunctions(snap.junctions) : false;
+    // The list is resent whenever anything in it moves, a warrant included; only
+    // a control or its turns reshape a section.
+    if (controlsMoved) {
+      if (import.meta.env.DEV) snapshotCounts.controlsMoved! += 1;
+      drivewayCache.invalidate();
+      pedestrianRenderer.invalidatePaths();
+    }
+    if (snap.roundabouts) {
+      clientGrid.applyRoundabouts(snap.roundabouts);
+      roadsMesh.setRoundabouts(snap.roundabouts);
+    }
+    const redrawnChunks = new Set<number>(
+      snap.junctions ? roadsMesh.setJunctionControls(snap.junctions) : [],
+    );
+    if (snap.junctions || snap.roundabouts) {
+      // An open inspector shows the junction as it IS: the worker may have
+      // refused the change, or the warrant may have moved it while the panel
+      // was open. A junction that has gone — bulldozed — closes the panel.
+      const open = store.getState().selectedJunction;
+      if (open) store.getState().setSelectedJunction(selectedJunctionAt(open.x, open.z));
+    }
+    if (snap.roads) {
+      // The mirror goes first. The road mesh samples roadSurfaceAt, which reads
+      // deck heights back out of the mirror — meshing before those land lays
+      // the carriageway on the ground underneath its own bridge.
+      const raised = clientGrid.applyRoadDeltas(snap.roads);
+      for (const key of roadsMesh.apply(snap.roads)) redrawnChunks.add(key);
+      // Tiles beside a deck sample the ramp blend but carry no delta of their
+      // own, so their geometry only rebuilds if we ask for it.
+      if (raised.length > 0)
+        roadsMesh.invalidateHeights(raised.map((t) => ({ x: t.x, z: t.z, w: 1, h: 1 })));
+      zoneGrid.rebuild(clientGrid);
+      // A yard, depot or station lays itself against the track beside it, so a
+      // changed tile lays again only the kits within its reach.
+      utilityKits.relayBeside(snap.roads.map((d) => ({ x: d.x, z: d.z })));
+      const roadTiles = clientGrid.roadTiles();
+      setLatestRoadTiles(roadTiles);
+      // The street's power line follows the tiles the road edit touched.
+      for (const delta of snap.roads) markPolesAt(delta.x, delta.z);
+      poleSlots.line = true;
+      // A stop stands on its tile's own cross-section, so it follows the road.
+      if (latestStops.length > 0) redrawStops();
+      // The guideway and its stations go before the lamps, which keep off the stations.
+      guideway.rebuild(roadTiles);
+      if (rebuildTramStations() && !snap.transit) applyTransit(latestTransit);
+      rebuildLamps();
+      bridges.rebuild(clientGrid.deckTiles());
+      soundWalls.rebuild(clientGrid.soundWalls());
+      // Ground cover follows the road only where the road touches the ground —
+      // a mown band under a bridge would be a stripe of lawn across a river.
+      terrain.applyRoadTiles(roadTiles.filter((t) => !t.elevated));
+    } else if (controlsMoved || snap.roundabouts) {
+      // A junction can change control with no tile changing at all — the
+      // traffic through it grew. Only the signs care, and, where a
+      // roundabout came or went, the lamps.
+      setLatestRoadTiles(clientGrid.roadTiles());
+      rebuildLamps();
+      if (snap.roundabouts) {
+        for (const block of snap.roundabouts) markPolesAt(block.x, block.z);
+      }
+    }
+    if (snap.buildings) {
+      // A plain body is drawn turned to its street, decided once for each
+      // building the delta carries; the lot, the cars and the sim keep its stored turn.
+      const faced = faceStreets(snap.buildings, catalogById, street);
+      lots.apply(snap.buildings);
+      instancer.apply(faced);
+      farms.apply(snap.buildings);
+      massing.apply(faced);
+      roofProps.apply(faced);
+      buildingKit.apply(faced);
+      houseRoofs.apply(snap.buildings);
+      garages.apply(snap.buildings);
+      parkedCars.apply(snap.buildings);
+      landmarks.apply(snap.buildings);
+      utilityKits.apply(snap.buildings);
+      // Walker scatter tracks the Active-building set incrementally; feed it
+      // the same delta (idlers ride the last-known stop list).
+      pedestrianRenderer.apply({ stops: latestStopPoints, buildings: snap.buildings });
+      clientGrid.applyBuildingDelta(snap.buildings, (catalogId) => catalogById.get(catalogId));
+      for (const inst of snap.buildings.added) knownBuildings.set(inst.id, inst);
+      for (const inst of snap.buildings.updated) knownBuildings.set(inst.id, inst);
+      // A strung line ends on a pole at the edge of the source it meets, so a
+      // source coming or going lays the line again.
+      const sourceMoved = (b: BuildingInstance | undefined): boolean =>
+        b !== undefined && feedsLines(catalogById.get(b.catalogId));
+      if (
+        snap.buildings.added.some(sourceMoved) ||
+        snap.buildings.removed.some((id) => sourceMoved(knownBuildings.get(id)))
+      ) {
+        poleSlots.line = true;
+      }
+      for (const id of snap.buildings.removed) knownBuildings.delete(id);
+
+      // A lot's driveway is decided by its building, so the tiles kerb furniture
+      // must avoid change with the building set; only the buildings this delta
+      // names are laid again, and a changed road or shore lays every one again.
+      drivewayCache.apply(snap.buildings, (inst) => {
+        const entry = catalogById.get(inst.catalogId);
+        if (!entry) return [];
+        const keys: number[] = [];
+        const cut = curbCutTileFor(entry, inst, roadAt, kerb, kerbCreditOf);
+        if (cut) keys.push(cut.x * 100_000 + cut.z);
+        const civic = civicSiteFor(entry, inst, street, kitSensors);
+        if (civic) {
+          for (const tile of civicCutTiles(civic, street)) keys.push(tile.x * 100_000 + tile.z);
+        }
+        // A tram depot's lead lies on a paved apron over the street tiles it crosses.
+        for (const tile of utilityKits.leadTiles(inst)) keys.push(tile.x * 100_000 + tile.z);
+        const home = planHouseGround(inst, entry, roadAt, street);
+        if (home) {
+          for (const tile of driveRoadTiles(inst, entry, home))
+            keys.push(tile.x * 100_000 + tile.z);
+        }
+        return keys;
+      });
+      const nextDriveways = drivewayCache.keys();
+      if (!sameTileKeySet(nextDriveways, drivewayTiles)) {
+        drivewayTiles = nextDriveways;
+        rebuildLamps();
+      }
+
+      const selected = state.selectedBuilding;
+      if (selected) {
+        const current = knownBuildings.get(selected.id) ?? null;
+        if (current !== selected) state.setSelectedBuilding(current);
+      }
+    }
+    // A control that moves gives or takes the turn bays down its arms, and a
+    // road edit reshapes the kerb: either changes the street with no building
+    // changing, so every lot beside a stretch the road mesh redrew is laid
+    // again against the kerb it now has, and its kerb stalls with it. A
+    // building this snapshot already delivered was laid against the new kerb.
+    if (redrawnChunks.size > 0) {
+      const delivered = new Set<number>();
+      if (snap.buildings) {
+        for (const b of snap.buildings.added) delivered.add(b.id);
+        for (const b of snap.buildings.updated) delivered.add(b.id);
+      }
+      const updated: BuildingInstance[] = [];
+      for (const b of knownBuildings.values()) {
+        if (delivered.has(b.id)) continue;
+        const entry = catalogById.get(b.catalogId);
+        if (!entry) continue;
+        const { w, d } = footprintForRotation(entry, b.rotation);
+        const beside = chunksOver(b.x - 1, b.z - 1, b.x + w, b.z + d);
+        if ([...beside].some((key) => redrawnChunks.has(key))) updated.push(b);
+      }
+      if (updated.length > 0) {
+        const relaid = { added: [], removed: [], updated };
+        const relaidFaced = faceStreets(relaid, catalogById, street);
+        lots.apply(relaid);
+        instancer.apply(relaidFaced);
+        massing.apply(relaidFaced);
+        roofProps.apply(relaidFaced);
+        buildingKit.apply(relaidFaced);
+        houseRoofs.apply(relaid);
+        garages.apply(relaid);
+        parkedCars.apply(relaid);
+        pedestrianRenderer.apply({ stops: latestStopPoints, buildings: relaid });
+      }
+    }
+    if (snap.roads || snap.roadNet || snap.buildings) keepTreesOffOccupied();
+    if (snap.deathCare) utilityKits.setInterments(snap.deathCare.facilities);
+    if (snap.parkLoads) utilityKits.setParkLoads(snap.parkLoads);
+    if (snap.zones) {
+      zoneGrid.applyZonePatches(snap.zones);
+      clientGrid.applyZonePatches(snap.zones);
+    }
+    // The cut follows the zone, the roads and the buildings.
+    if (snap.zones || snap.roads || snap.roadNet || snap.buildings) rebuildPlat();
+    if (snap.powerLines) {
+      clientGrid.applyPowerLinePatches(snap.powerLines);
+      cableTiles = null;
+      // A cable under a street takes its poles away, and a run's ends and
+      // branches carry boxes: the chunks around every changed tile are laid again.
+      for (const patch of snap.powerLines) {
+        for (let dz = 0; dz < patch.h; dz++) {
+          for (let dx = 0; dx < patch.w; dx++) markPolesAt(patch.x + dx, patch.z + dz);
         }
       }
+      poleSlots.line = true;
+    }
+    // A pipe's drawn joins read the roads and buildings beside it, so the
+    // overlay follows those too.
+    if (snap.waterPipes) clientGrid.applyWaterPipePatches(snap.waterPipes);
+    if (snap.waterPipes || snap.roads || snap.buildings) rebuildPipes();
+    // The drains' fouling, on the water itself: the surface retints only when it moves.
+    if (snap.waterFoul) {
+      clientGrid.applyWaterFoulPatches(snap.waterFoul);
+      water.setFouling(clientGrid.waterFoul);
+    }
+    if (snap.power) {
+      overlays.setCoverage('power', snap.power);
+      // Supply also decides which streets carry a lamp, so the mirror keeps it
+      // and the lamps are rebuilt when it moves — a district coming on line
+      // lights up without waiting for someone to touch a road.
+      const moved = clientGrid.applyPowerPatches(snap.power);
+      setLatestRoadTiles(clientGrid.roadTiles());
+      rebuildLamps();
+      // The poles follow only the tiles whose supply moved: a snapshot that
+      // restates the same supply lays none of them again.
+      for (const tile of moved) markPolesAt(tile.x, tile.z);
+      if (moved.length > 0) poleSlots.free = true;
+    }
+    if (snap.watered) overlays.setCoverage('watered', snap.watered);
+    if (snap.sewered) overlays.setCoverage('sewered', snap.sewered);
+    // The runs are coloured by what the water and the drains reach.
+    if (snap.watered || snap.sewered) rebuildPipes();
+    if (snap.vehicles) {
+      vehicles.setBuffer(snap.vehicles);
+      latestVehicles = snap.vehicles;
+      // Service vehicles share the SAME buffer (kind-filtered), no copy.
+      serviceVehicles.setBuffer(snap.vehicles);
+      snapshotIntervalMs = measuredSnapshotIntervalMs(snapshotsLanded > 0 ? snapshotAgeMs : null);
+      snapshotsLanded += 1;
+      snapshotAgeMs = 0;
+    }
+    // Bus stops: the furniture on the streets, and the selected one's figures.
+    if (snap.stops) {
+      // A stop's figures change every snapshot; only a stop put down, moved or
+      // taken up moves a lamp off its kerb.
+      const stopsMoved = !sameTileKeySet(stopSiteKeys(snap.stops), stopSiteKeys(latestStops));
+      latestStops = snap.stops;
+      stopTiles = new Set(snap.stops.map((s) => s.x * 100_000 + s.z));
+      if (stopsMoved) rebuildLamps();
+      redrawStops();
+      state.setStops(snap.stops);
+      if (snap.transit === undefined) applyTransit(latestTransit);
+    }
+    // Bus transit: rebuild stops/ribbon/buses + publish the line list.
+    if (snap.transit) {
+      latestTransit = snap.transit;
+      latestTransitLines = snap.transit.lines;
+      if (rebuildTramStations()) rebuildLamps();
+      applyTransit(snap.transit);
+      // The depots park what is not out on the lines; an older worker lists
+      // none, and every depot parks its whole fleet.
+      utilityKits.setDepotFleets(snap.transit.depots ?? []);
+      state.setTransit(snap.transit.lines, snap.transit.ridership, {
+        served: snap.transit.served ?? [],
+        requested: snap.transit.requested ?? [],
+        headwayMin: snap.transit.headwayMin ?? [],
+        runningCost: snap.transit.runningCost ?? [],
+        depotId: snap.transit.depotId ?? [],
+      });
+      // Refresh the idler crowd from the current stop set (walkers keep
+      // their incrementally-tracked building set; an empty delta leaves it be).
+      // Enrich each stop with its shelter's ground anchor (the same
+      // heading/side the TransitRenderer builds the shelter from) so idle
+      // pedestrians cluster at the shelter on the sidewalk instead of on the
+      // carriageway.
+      latestStopPoints = snap.transit.lines.flatMap((l) => {
+        const pts = toWorldPoints(l.stops);
+        return l.stops.map((s, i) => {
+          // A bus stop's idlers wait at its shelter, or on its pad.
+          const waiting = busStops.waitPoint(s.x, s.z);
+          if (waiting) return { x: s.x, z: s.z, anchor: waiting };
+          // Under a raised station no shelter stands at the kerb: the idlers
+          // wait up on its platforms.
+          const platforms = tramStations.platformsAt(s.x, s.z);
+          if (platforms) return { x: s.x, z: s.z, platforms };
+          const layout = computeShelterLayout(
+            pts[i]!,
+            computeStopHeading(pts, i),
+            shelterSide(s.x, s.z),
+          );
+          return { x: s.x, z: s.z, anchor: layout.benchCenter };
+        });
+      });
+      pedestrianRenderer.apply({
+        stops: latestStopPoints,
+        buildings: snap.buildings ?? { added: [], removed: [], updated: [] },
+      });
+    }
+    // Incidents: place/clear the marker pins (empty array clears them).
+    serviceVehicles.setIncidents(devIncidents ?? snap.incidents ?? []);
+    // Districts: fold patches into the tint/boundary overlay + publish defs.
+    if (snap.districts) {
+      districtsRenderer.applyDistrictPatches(snap.districts.patches, snap.districts.defs);
+      if (snap.districts.defs.length > 0) state.setDistricts(snap.districts.defs);
+    }
+    // Garbage: landfill-area tint + trash piles, and feed the 'trash' coverage lens.
+    if (snap.garbage) {
+      landfillRenderer.apply(snap.garbage);
+      if (snap.garbage.trash) overlays.setCoverage('trash', snap.garbage.trash);
+    }
+    // Service load: publish the per-kind gauges the Services panel reads. Absent
+    // until the first service pass has run, which leaves the rows unread rather
+    // than reading zero.
+    if (snap.serviceLoad) state.setServiceLoad(snap.serviceLoad);
+    state.setResponders(snap.responders ?? null);
+    state.setOpenSpace(snap.openSpace ?? null);
+    flushPoles(
+      Boolean(snap.roads || snap.roadNet || snap.buildings || snap.transit || snap.roundabouts),
+    );
+  };
 
-      // 1. Simulación y circulación de vehículos por carretera
-      this.trafficManager.update(deltaTime);
+  worker.onmessage = (ev: MessageEvent<WorkerToMain>) => {
+    const msg = ev.data;
+    switch (msg.type) {
+      case 'ready':
+        break;
+      case 'ack':
+        onAck(msg.ack);
+        break;
+      case 'snapshot':
+        onSnapshot(msg.snap);
+        break;
+      case 'field':
+        overlays.setFieldData(msg.field, msg.data);
+        if (msg.field === FieldId.LandValue) {
+          latestLandValue = msg.data;
+          rebuildPlat();
+        }
+        break;
+      case 'save':
+        void storeSave(msg.data).then((header) => {
+          store.getState().pushNotification({
+            id: header.savedAt,
+            severity: 'info',
+            title: 'Game saved',
+            body: `${header.mapName} — tick ${header.tick}`,
+            tick: store.getState().stats.tick,
+          });
+        });
+        break;
+      case 'notify':
+        store.getState().pushNotification(msg.note);
+        break;
+      case 'selection':
+        store.getState().setSelectionInfo(msg.info);
+        break;
+    }
+  };
 
-      // 2. Crecimiento periódico de edificios en casillas zonificadas
-      this.buildingGrowthTimer += deltaTime;
-      if (this.buildingGrowthTimer >= 2.5) {
-        this.buildingGrowthTimer = 0;
-        this.simulateBuildingGrowth();
+  // --- UI store bridge -------------------------------------------------------------
+  // Photo mode: flips the wider photo-mode camera bounds + hides chrome
+  // (via the store flag App reads). Exit restores the captured gameplay state.
+  const togglePhoto = (): void => {
+    const result = photoMode.toggle(rig.state);
+    if (result) rig.state = result;
+    store.getState().setPhotoMode(photoMode.chromeHidden);
+  };
+
+  store.getState().bindActions({
+    sendCommands: (label, commands) => env.send(label, commands),
+    undo,
+    redo,
+    setSpeed: (speed) => {
+      const msg: MainToWorker = { type: 'setSpeed', speed };
+      worker.postMessage(msg);
+    },
+    togglePhoto,
+    saveGame: () => saveNow(worker),
+    onSettings: (patch) => {
+      if (patch.sandboxUnlockAll !== undefined) {
+        postCommands([{ kind: 'setSandbox', on: patch.sandboxUnlockAll }], true);
       }
-
-      this.cameraController.update(deltaTime);
-      this.dayNightCycle.update(deltaTime);
-
-      const nightFactor = this.dayNightCycle.nightFactor;
-      if (this.terrain) this.terrain.setNightFactor(nightFactor);
-      if (this.roadMesh) this.roadMesh.setNightFactor(nightFactor);
-      if (this.buildingManager) this.buildingManager.setNightFactor(nightFactor);
-      if (this.outerLandscape) this.outerLandscape.setNightFactor(nightFactor);
-      if (this.water) {
-        this.water.setTime(time * 0.001);
-        this.water.setNightFactor(nightFactor);
-        this.water.setSunDirection(this.dayNightCycle.sunDirection);
+      if (patch.unlimitedMoney !== undefined) {
+        postCommands([{ kind: 'setUnlimitedMoney', on: patch.unlimitedMoney }], true);
       }
+      applyAudioSettings(store.getState().settings);
+    },
+    // Advisor "show me": drop the camera on a tile, keeping the player's own
+    // zoom. Render-side only — the sim never hears about it.
+    focusTile: (x, z) => {
+      rig.state = { ...rig.state, targetX: tileToWorld(x), targetZ: tileToWorld(z) };
+    },
+  });
 
-      this.renderer.render(this.scene, this.camera);
+  /**
+   * The junction at a tile as the inspector needs it: what the sim says about
+   * it, plus which cardinals actually carry a road, so the panel lists the arms
+   * that exist rather than four of them.
+   */
+  const selectedJunctionAt = (x: number, z: number): SelectedJunction | null => {
+    const junction = clientGrid.junctionAt(x, z);
+    if (!junction) return null;
+    const ring = clientGrid.roundaboutAt(x, z);
+    const arms = (
+      [
+        [0, -1, RoadFlow.North],
+        [1, 0, RoadFlow.East],
+        [0, 1, RoadFlow.South],
+        [-1, 0, RoadFlow.West],
+      ] as const
+    )
+      .filter(([dx, dz]) =>
+        isStreetTier(clientGrid.roadTier[(z + dz) * clientGrid.size + (x + dx)] ?? 0),
+      )
+      .map(([dx, dz, flow]) => ({ dx, dz, flow }));
+    // What each arm's lanes offer before the player says anything — worked out
+    // the way the arrows on the ground are, from the tile that approaches the
+    // junction, so the panel and the paint agree about how many lanes there
+    // are and what each one is for.
+    const armLaneSets: Partial<Record<RoadFlow, number[]>> = {};
+    for (const { dx, dz, flow } of arms) {
+      const ax = x + dx;
+      const az = z + dz;
+      const drawn = clientGrid.drawnProfileAt(ax, az);
+      const ahead = clientGrid.approachAt(ax, az);
+      if (!drawn || !ahead) continue;
+      const lanes = drawn.pieces.filter((p) => p.kind === 'travel').length;
+      armLaneSets[flow] = ahead.pocket
+        ? pocketLaneMovements(lanes, ahead.allowed)
+        : laneMovementsFor(lanes, ahead.allowed);
+    }
+    return {
+      ...junction,
+      arms: arms.map((a) => a.flow),
+      laneTurns: [...(junction.laneTurns ?? [0, 0, 0, 0])],
+      armLaneSets,
+      ...(ring ? { roundabout: ring } : {}),
     };
+  };
 
-    requestAnimationFrame(animate);
-  }
+  const requestField = (field: FieldId): void => {
+    const msg: MainToWorker = { type: 'requestField', field };
+    worker.postMessage(msg);
+  };
 
-  public destroy(): void {
-    this.isRunning = false;
-    this.worker.terminate();
-    this.cameraController.dispose();
-    this.dayNightCycle.dispose();
-    this.gridCursor.dispose();
-    this.brushCursor.dispose();
-    this.roadMesh.dispose();
-    this.roadPreview.dispose();
-    this.roadConstructionHUD.dispose();
-    this.zoningMesh.dispose();
-    this.trafficManager.dispose();
-    this.buildingManager.dispose();
-    this.foliageManager.dispose();
-    this.cityBoundaryMesh.dispose();
-    this.worldGridHelper.dispose();
-    if (this.outerLandscape) this.outerLandscape.dispose();
-    if (this.terrain) this.terrain.dispose();
-    if (this.water) this.water.dispose();
-    this.renderer.dispose();
+  /**
+   * Selection side effects: keep the worker's selection
+   * stream, the green outline shell, and the roof map-pin in step with
+   * store.selectedBuilding, however it changes (click, ESC, panel close,
+   * demolition via snapshot).
+   */
+  const syncSelection = (
+    building: BuildingInstance | null,
+    previous: BuildingInstance | null,
+  ): void => {
+    if (!building) {
+      if (previous) {
+        const msg: MainToWorker = { type: 'clearSelect' };
+        worker.postMessage(msg);
+      }
+      store.getState().setSelectionInfo(null);
+      selectionOutline.highlight(null);
+      mapPin.hide();
+      return;
+    }
+    if (!previous || previous.id !== building.id) {
+      if (previous) store.getState().setSelectionInfo(null); // drop the old building's rows
+      const msg: MainToWorker = { type: 'select', buildingId: building.id };
+      worker.postMessage(msg);
+    }
+    const entry = catalogById.get(building.catalogId);
+    if (!entry) return;
+    // Same ground-center anchor BuildingInstancer computes per instance
+    // (outline.ts documents this contract).
+    const lot = footprintForRotation(entry, building.rotation);
+    const centerX = (building.x + lot.w / 2) * TILE_METERS;
+    const centerZ = (building.z + lot.d / 2) * TILE_METERS;
+    const groundY = heightAt(centerX, centerZ);
+    selectionOutline.highlight({
+      position: { x: centerX, y: groundY, z: centerZ },
+      footprint: lot,
+      height: entry.height,
+    });
+    mapPin.showAt(centerX, groundY + entry.height, centerZ);
+  };
+
+  store.subscribe((state, prev) => {
+    if (state.selectedTool !== prev.selectedTool) {
+      toolManager.setTool(state.selectedTool);
+      audio.play('click');
+      // Zoning grid layer while a zone tool is in hand — for the landfill
+      // brush, which paints into the same road-frontage grid — and for a
+      // ploppable, so the painted lots show before a building is set on them.
+      zoneGrid.setPaintZone(ZONE_TOOL_TO_TYPE[state.selectedTool] ?? ZoneType.None, clientGrid);
+      zoneGrid.setVisible(
+        state.selectedTool.startsWith('zone.') ||
+          state.selectedTool === 'landfill.paint' ||
+          (state.selectedTool.startsWith('plop.') && !isStopTool(state.selectedTool)),
+      );
+      rebuildPlat();
+      if (zoneGrid.isVisible()) requestField(FieldId.LandValue);
+      // The dedicated overlays follow tool selection too.
+      refreshEpicVisibility();
+    }
+    if (state.selectedDistrict !== prev.selectedDistrict) {
+      toolManager.setDistrictId(state.selectedDistrict); // paint target
+    }
+    if (state.toolFlags !== prev.toolFlags) {
+      toolManager.setFlags(state.toolFlags);
+    }
+    if (state.roadElevation !== prev.roadElevation) {
+      toolManager.setRoadElevation(state.roadElevation); // viaduct height stepper
+    }
+    if (state.roadProfileEdits !== prev.roadProfileEdits) {
+      toolManager.setProfileEdits(state.roadProfileEdits); // the Profile row's parking/bike/footway choices
+    }
+    if (state.interchange !== prev.interchange) {
+      toolManager.setInterchange(state.interchange); // the Interchange row's form and crossing road
+    }
+    if (state.brushSettings !== prev.brushSettings) {
+      toolManager.setBrush(state.brushSettings); // Brush radius / Strength rows
+    }
+    if (state.overlay !== prev.overlay) {
+      overlays.setActive(state.overlay);
+      // Transit/district lenses drive their dedicated renderers, not the overlay quad.
+      refreshEpicVisibility();
+      // Only FieldId lenses use the requestField round trip; 'power'/'watered'
+      // coverage arrives pushed in snapshots and repaints from its cache.
+      if (typeof state.overlay === 'number') requestField(state.overlay);
+    }
+    if (state.selectedBuilding !== prev.selectedBuilding) {
+      syncSelection(state.selectedBuilding, prev.selectedBuilding);
+    }
+  });
+
+  /** How near the ground a click is to a stop's pad, metres, for the click to select the stop. */
+  const STOP_PICK_RADIUS_M = 3;
+  // --- pointer routing ---------------------------------------------------------------
+  const localXY = (e: PointerEvent): { x: number; y: number } => {
+    const rect = viewport.getBoundingClientRect();
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  };
+
+  // The current sim tick rides along on pointer events so continuous
+  // terraform brushing throttles against deterministic game time.
+  viewport.addEventListener('pointerdown', (e) => {
+    const { x, y } = localXY(e);
+    toolManager.pointerDown(x, y, e.button, store.getState().stats.tick);
+  });
+
+  viewport.addEventListener('pointermove', (e) => {
+    const { x, y } = localXY(e);
+    cursorChip.setPointer(x, y);
+    toolManager.pointerMove(x, y, (e.buttons & 1) !== 0 ? 0 : -1, store.getState().stats.tick);
+  });
+
+  viewport.addEventListener('pointerup', (e) => {
+    const { x, y } = localXY(e);
+    const consumed = toolManager.pointerUp(x, y, e.button);
+    if (consumed || e.button !== 0) return;
+
+    // Select tool: pick a building under the cursor.
+    const rect = viewport.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+    const ndc = new THREE.Vector2((x / rect.width) * 2 - 1, -(y / rect.height) * 2 + 1);
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(ndc, camera);
+    const id = idPicker.pickBuilding(raycaster, instancer);
+    store.getState().setSelectedBuilding(id !== null ? (knownBuildings.get(id) ?? null) : null);
+    // Nothing built under the cursor: the ground might still be a junction,
+    // which has its own inspector. A building always wins the click, since it
+    // is the thing standing there.
+    store.getState().setSelectedStop(null);
+    if (id !== null) {
+      store.getState().setSelectedJunction(null);
+      return;
+    }
+    // A bus stop is furniture on the street, picked by the ground beside it.
+    const ground = groundPointAt(x, y);
+    const stop = ground ? busStops.pick(ground.x, ground.z, STOP_PICK_RADIUS_M) : null;
+    if (stop) {
+      store.getState().setSelectedStop({ x: stop.x, z: stop.z, side: stop.side });
+      store.getState().setSelectedJunction(null);
+      return;
+    }
+    const tile = screenToTile(x, y);
+    store.getState().setSelectedJunction(tile ? selectedJunctionAt(tile.x, tile.z) : null);
+  });
+
+  // --- keyboard -------------------------------------------------------------------------
+  let lastRunningSpeed: 1 | 2 | 4 = 1;
+  window.addEventListener('keydown', (e) => {
+    if (e.code === 'Space') {
+      e.preventDefault();
+      const { speed, setSpeed } = store.getState();
+      if (speed === 0) {
+        setSpeed(lastRunningSpeed);
+      } else {
+        lastRunningSpeed = speed;
+        setSpeed(0);
+      }
+      return;
+    }
+    if (e.code === 'Escape') {
+      // Photo mode owns Escape first: exit + restore the gameplay camera,
+      // and consume the press so the staged escape stack below doesn't also run.
+      const restored = photoMode.handleKeyDown(e);
+      if (restored) {
+        rig.state = restored;
+        store.getState().setPhotoMode(photoMode.chromeHidden);
+        e.preventDefault();
+        return;
+      }
+      // Staged escape stack, stage 1: cancel an active drag and
+      // consume the press (preventDefault marks it consumed for App.tsx's
+      // later-registered listener, which owns stage 2 — close the drawer —
+      // and stage 3 — deselect tool/building).
+      if (toolManager.dragActive) {
+        toolManager.cancel();
+        e.preventDefault();
+      }
+      return;
+    }
+    if (e.code === 'KeyR' && !e.ctrlKey && !e.metaKey) {
+      toolManager.rotatePlop();
+      return;
+    }
+    // Backspace takes back a curve's last click — never while typing in a field.
+    if (e.code === 'Backspace') {
+      const target = e.target as HTMLElement | null;
+      const typing =
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target?.isContentEditable === true;
+      if (!typing && toolManager.takeBackClick()) e.preventDefault();
+      return;
+    }
+    // Road elevation, on the keys every builder reaches for. Live mid-drag: the
+    // ghost re-solves its profile on the next preview, so the span can be
+    // raised or dropped while it is being drawn. Ground is the floor until
+    // there is somewhere below it to go.
+    if ((e.code === 'PageUp' || e.code === 'PageDown') && ROAD_TOOL_TO_TIER[toolManager.tool]) {
+      e.preventDefault();
+      const state = store.getState();
+      const step = e.code === 'PageUp' ? ROAD_ELEVATION_STEP_M : -ROAD_ELEVATION_STEP_M;
+      state.setRoadElevation(state.roadElevation + step);
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && e.code === 'KeyZ') {
+      e.preventDefault();
+      if (e.shiftKey) redo();
+      else undo();
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && e.code === 'KeyY') {
+      e.preventDefault();
+      redo();
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && e.code === 'KeyS') {
+      e.preventDefault();
+      saveNow(worker);
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.code === 'KeyL') {
+      e.preventDefault();
+      void loadLatest(worker);
+      return;
+    }
+    const tool = CATEGORY_HOTKEYS[e.code];
+    if (tool && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      store.getState().setTool(tool);
+    }
+  });
+
+  // --- UI ------------------------------------------------------------------------------
+  mountUi(uiRoot);
+  useCityStore.getState().setScreen('playing');
+
+  // --- bloom post-process ------------------------------------------
+  // Wraps the plain renderer.render(scene, camera) so emissive windows, lamp
+  // heads, and vehicle lights bleed softly at night. createBloomPipeline
+  // is self-degrading (it catches a failed node-graph build or first-frame
+  // render and permanently falls back to a direct scene render), but we also
+  // guard construction itself so a throw here can never abort boot — the frame
+  // loop then renders straight through handle.renderer.
+  let bloomPipeline: BloomPipeline | null = null;
+  // DEV-only escape hatch: `?nobloom` skips the
+  // post-process pipeline whose per-frame GPU readback destabilises headless
+  // software rendering (swiftshader) during long screenshot sessions. Never
+  // affects production — the query param is only read under import.meta.env.DEV.
+  const bloomDisabled = import.meta.env.DEV && new URLSearchParams(location.search).has('nobloom');
+  if (!bloomDisabled) {
+    try {
+      bloomPipeline = createBloomPipeline(handle.renderer, world.scene, camera);
+    } catch (err) {
+      console.warn('SlimCity: bloom pipeline unavailable, rendering without post-FX:', err);
+      bloomPipeline = null;
+    }
   }
+  // Bloom intensity at full night; scales linearly with nightFactor so it
+  // fades in on the same dusk ramp as the emissive materials it blooms. Kept
+  // deliberately low: the additive bloom node (bloom.ts, scenePassColor + bloom)
+  // is combined on top of already-bright emissive windows/lamp heads, so higher
+  // values (1.0+) blow the whole night scene to white. Lamps get their heavier
+  // glow from hotter emitters (lamps.ts), not from raising this — that would
+  // blow out the windows this level is tuned for.
+  const BLOOM_NIGHT_STRENGTH = 0.25;
+
+  // --- frame loop -------------------------------------------------------------------------
+  let visualSeconds = 0; // elapsed visual time for the outline pulse / pin bob
+  let signalSeconds = 0; // elapsed TRAFFIC time, which is what the signal cycle runs on
+  handle.start((dtMs) => {
+    lastFrameMs = dtMs;
+    rig.update(dtMs);
+    // Shadow sweep: keep the limited-span sun shadow frustum centred on the
+    // camera target so lamp/prop/pedestrian shadows stay resolved on screen.
+    world.setShadowFocus(rig.state.targetX, rig.state.targetZ);
+    terrain.update();
+    water.update(dtMs, lastNightFactor);
+    clouds.update(dtMs, lastTick, lastDayT);
+
+    snapshotAgeMs += dtMs;
+    const vehicleAlpha = snapshotAlpha(snapshotAgeMs, snapshotIntervalMs);
+    vehicles.update(vehicleAlpha);
+    serviceVehicles.update(vehicleAlpha); // same interpolation alpha as VehicleRenderer
+    transitRenderer.update(dtMs / 1000); // buses run on real elapsed seconds
+
+    // Signals run on the clock the TRAFFIC runs on, not the frame clock: a
+    // paused city holds its lights, and a fast-forwarded one cycles them as
+    // fast as it moves the cars past them.
+    signalSeconds += (dtMs / 1000) * SPEED_MULTIPLIERS[store.getState().speed];
+    roadFurniture.setSignalPhase(signalSeconds);
+
+    visualSeconds += dtMs / 1000;
+    underground.update(); // anything that came into the scene underground fades too
+    selectionOutline.update(visualSeconds);
+    mapPin.update(visualSeconds);
+    landmarks.update(visualSeconds * 1000); // tower-beacon pulse (elapsed visual ms)
+    utilityKits.update(visualSeconds * 1000); // wind-turbine rotor spin
+    farms.update(visualSeconds * 1000); // cattle grazing
+    pedestrianRenderer.update(visualSeconds * 1000); // walker walk-cycle (same accumulated-tMs clock)
+
+    overlayAgeMs += dtMs;
+    if (overlayAgeMs >= OVERLAY_REFRESH_MS) {
+      overlayAgeMs = 0;
+      const overlay = store.getState().overlay;
+      // FieldId lenses only — coverage lenses are push-fed (see subscription).
+      if (typeof overlay === 'number') requestField(overlay);
+      // The plat cuts by land value, so the zone lens keeps it fresh too.
+      if (zoneGrid.isVisible() && overlay !== FieldId.LandValue) requestField(FieldId.LandValue);
+    }
+
+    if (bloomPipeline && useCityStore.getState().settings.bloom) {
+      bloomPipeline.setStrength(lastNightFactor * BLOOM_NIGHT_STRENGTH);
+      bloomPipeline.render();
+    } else {
+      handle.renderer.render(world.scene, camera);
+    }
+  });
 }
+
+async function main(): Promise<void> {
+  const session = readAppSession();
+  if (session.screen === 'playing') {
+    await startGame(session);
+    return;
+  }
+  // Menu-only boot: mount the UI (App renders the StartMenu when
+  // screen === 'menu'); no world/worker exists until New/Load Game reloads
+  // into startGame() above.
+  const uiRoot = document.getElementById('ui-root');
+  if (!uiRoot) throw new Error('SlimCity: #ui-root missing');
+  const store = useCityStore.getState();
+  store.setScreen('menu');
+  store.bindActions({
+    sendCommands: () => {},
+    undo: () => {},
+    redo: () => {},
+    setSpeed: () => {},
+    togglePhoto: () => {},
+    saveGame: () => {},
+    onSettings: () => {},
+    focusTile: () => {},
+  });
+  mountUi(uiRoot);
+}
+
+void main().catch((err: unknown) => {
+  console.error('SlimCity failed to boot:', err);
+});

@@ -1,0 +1,478 @@
+/**
+ * SlimCity shared constants & pure helpers. Same contract rules as types.ts:
+ * module agents code against this file and must not edit it.
+ */
+
+// --- world dimensions -------------------------------------------------------
+export const MAP_SIZE = 256; // tiles per side
+/**
+ * How much ground a tile covers. It is the budget every road is composed
+ * inside, and at 16 m it could not pay for one: an urban street 15 m wide had
+ * a metre left for two pavements, so the four-lane and the bus lane declared a
+ * kerb with nowhere to walk behind it, and the avenue could only afford a
+ * footway by cutting its lanes to the 10 ft floor and its median to 0.8 m —
+ * under the 4 ft a person has to stand in halfway across.
+ *
+ * At 20 m the widest street the game builds pays for itself: four 3.75 m
+ * lanes, a 1.2 m refuge, and a full 1.875 m footway each side, in 19.95 m.
+ * Lane and vehicle sizes are real metres and do not scale with this; building
+ * footprints are given in TILES and do, so a lot grows with the street it
+ * fronts rather than being stranded on it.
+ */
+export const TILE_METERS = 20;
+export const MAP_TILES = MAP_SIZE * MAP_SIZE;
+
+/** Flat index for tile (x, z). Callers guarantee 0 <= x,z < MAP_SIZE. */
+export const tileIndex = (x: number, z: number): number => z * MAP_SIZE + x;
+export const inBounds = (x: number, z: number): boolean =>
+  x >= 0 && z >= 0 && x < MAP_SIZE && z < MAP_SIZE;
+/** Tile center in world meters (world origin = map corner tile 0,0). */
+export const tileToWorld = (t: number): number => (t + 0.5) * TILE_METERS;
+export const worldToTile = (w: number): number => Math.floor(w / TILE_METERS);
+
+// --- time -------------------------------------------------------------------
+export const TICK_RATE = 20; // sim ticks per real second at raw multiplier 1.0
+export const TICK_MS = 1000 / TICK_RATE;
+
+/**
+ * Real-time pacing multiplier for each speed button. The FixedTimestep is a
+ * pure driver (1.0 = TICK_RATE ticks/real-second); the worker maps the
+ * player-facing SimSpeed button (1/2/4) through this table before advancing, so:
+ *   1× → 1/3   (a calm baseline — a visual day takes ~6 real min)
+ *   2× → 4/3   (4× the 1× rate)
+ *   4× → 16/3  (16× the 1× rate — each button is an exponential ×4 step)
+ * Every step is a third slower than the pacing it replaced, which read as too
+ * hurried. Pause (0) maps to 0. Keyed by the SimSpeed union (0 | 1 | 2 | 4).
+ */
+export const SPEED_MULTIPLIERS: Readonly<Record<0 | 1 | 2 | 4, number>> = {
+  0: 0,
+  1: 0.5 / 1.5,
+  2: 2 / 1.5,
+  4: 8 / 1.5,
+};
+export const TICKS_PER_DAY = 200; // 10s per game day at 1x
+export const DAYS_PER_MONTH = 30;
+export const TICKS_PER_MONTH = TICKS_PER_DAY * DAYS_PER_MONTH;
+export const MONTHS_PER_YEAR = 12;
+export const TICKS_PER_YEAR = TICKS_PER_MONTH * MONTHS_PER_YEAR;
+export const SNAPSHOT_HZ = 10;
+
+export interface GameDate {
+  year: number;
+  month: number; // 1..12
+  day: number; // 1..30
+}
+export const tickToDate = (tick: number): GameDate => {
+  const totalDays = Math.floor(tick / TICKS_PER_DAY);
+  return {
+    year: 1 + Math.floor(totalDays / (DAYS_PER_MONTH * 12)),
+    month: 1 + (Math.floor(totalDays / DAYS_PER_MONTH) % 12),
+    day: 1 + (totalDays % DAYS_PER_MONTH),
+  };
+};
+
+// --- economy ----------------------------------------------------------------
+export const START_FUNDS = 50_000;
+export const DEFAULT_TAX_RATE = 0.09;
+export const MAX_TAX_RATE = 0.3;
+/**
+ * The share of residents who work, the rest being children, retirees and
+ * carers: the US labour force is 50.0% of residents (BLS Current Population
+ * Survey, 2025 annual average).
+ */
+export const EMPLOYMENT_RATE = 0.5;
+
+/**
+ * How far an emergency vehicle gets from its station in the time a standard
+ * allows, in tiles of road. NFPA 1710 gives a first engine 240 s of travel at
+ * the 90th percentile and 480 s to an advanced-life-support unit; the ISO fire
+ * rating schedule credits a first-due engine within 1.5 road miles (2,414 m),
+ * which fixes the speed at 2,414 / 240 = 10.06 m/s. Police has no response
+ * distance standard and borrows fire's.
+ */
+const FIRST_DUE_DISTANCE_M = 2_414;
+const FIRST_DUE_TRAVEL_S = 240;
+const LIFE_SUPPORT_TRAVEL_S = 480;
+const RESPONSE_SPEED_MPS = FIRST_DUE_DISTANCE_M / FIRST_DUE_TRAVEL_S;
+const fromSeconds = (seconds: number): number =>
+  Math.floor((seconds * RESPONSE_SPEED_MPS) / TILE_METERS);
+export const RESPONSE_REACH_TILES: Readonly<Record<'fire' | 'crime' | 'medical', number>> = {
+  fire: fromSeconds(FIRST_DUE_TRAVEL_S),
+  crime: fromSeconds(FIRST_DUE_TRAVEL_S),
+  medical: fromSeconds(LIFE_SUPPORT_TRAVEL_S),
+};
+
+/**
+ * Calls a year per resident: the fire department's non-medical calls and its
+ * medical ones (NFPA 2023, 14.0 M and 28.4 M over about 334.9 M residents), and
+ * police calls for service (Benchmark Cities, 451.8 per 1,000 in 2019).
+ */
+export const CALLS_PER_RESIDENT_PER_YEAR: Readonly<Record<'fire' | 'crime' | 'medical', number>> = {
+  fire: 0.042,
+  crime: 0.45,
+  medical: 0.085,
+};
+
+/**
+ * The field value at which a building calls at the national rate: a dial, since
+ * no source ties a field byte to a rate.
+ */
+export const FIELD_REFERENCE = 128;
+
+/** The residents who work: what employment, industrial demand and the Advisor measure against. */
+export function workforceOf(population: number): number {
+  return Math.floor(population * EMPLOYMENT_RATE);
+}
+
+/**
+ * Deaths per 1,000 residents a year: the US crude death rate, 9.03 per 1,000 in
+ * 2024 (CDC/NCHS FastStats), taken as 9 since the population has no age
+ * structure to skew it older.
+ */
+export const DEATHS_PER_1000_PER_YEAR = 9;
+/** A resident's chance of dying in one tick, as a rate: 1.25e-7. */
+export const DEATH_RATE_PER_RESIDENT_PER_TICK = DEATHS_PER_1000_PER_YEAR / 1000 / TICKS_PER_YEAR;
+/**
+ * Game days a vacant home takes to be let again while the town attracts
+ * residents: RentCafe 2025, 41 days on average to rent a vacant apartment
+ * across 137 markets; NAR's 2025 Profile of Home Buyers and Sellers (median 4
+ * weeks on market) is the cross-check.
+ */
+export const VACANCY_RELET_DAYS = 41;
+export const MAX_LOAN = 100_000;
+export const LOAN_MONTHLY_INTEREST = 0.01;
+/**
+ * Service funding range. Funding scales a facility's range, its capacity and
+ * its upkeep together, so the bound the worker clamps a setServiceFunding
+ * command to is the same bound the panel's slider offers.
+ */
+export const SERVICE_FUNDING_MIN = 0;
+export const SERVICE_FUNDING_MAX = 1.5;
+
+/**
+ * Open space a city should hold per 1,000 residents, in tiles: the Six Acre
+ * Standard's 2.4 ha per 1,000 at 25 tiles a hectare. What the parks row reads
+ * the city's provision against.
+ */
+export const OPEN_SPACE_TILES_PER_THOUSAND = 60;
+
+// --- buildability -----------------------------------------------------------
+export const MAX_BUILD_SLOPE = 4; // max height delta (m) across a tile's corners
+/** Manhattan tiles a lot may stand from the road that serves it. */
+export const ROAD_CHECK_RADIUS = 3;
+export const SEA_LEVEL = 0;
+/** Land this close above sea level is beach: the ground draws it as sand, and nothing is farmed on it. */
+export const SAND_BAND_METERS = 3;
+/**
+ * Road-on-slope placement: roads tolerate a steeper grade than
+ * buildings/zoning (MAX_BUILD_SLOPE=4) because the footprint auto-flatten
+ * re-levels/banks the built tiles + apron on placement anyway — the terrain
+ * never actually stays at this slope under the road. 10m/tile is a moderate
+ * grade (climbable, still looks like a road hugging a hillside) well below the
+ * point an unflattened slope would look absurd. Curved centerlines/elevation/
+ * bridges remain unsupported — this only widens which tiles a (straight,
+ * flat-banked) road may be built ON.
+ */
+export const ROAD_MAX_SLOPE = 10; // max height delta (m) across a tile's neighbor, for road placement only
+
+// --- bridges & elevated roads -----------------------------------------------
+/** Deck underside clearance (m) above the water surface on an auto-bridge. */
+export const BRIDGE_CLEARANCE_M = 5;
+/**
+ * Steepest an approach ramp may climb, in metres of deck per tile. Holds the
+ * ramp to a grade a road can plausibly carry and keeps a tall deck from
+ * erupting out of flat ground in one tile.
+ */
+export const BRIDGE_MAX_GRADE = 2;
+/**
+ * Ceiling on deliberate elevation, and on what an auto-bridge may solve to.
+ * Ground level is the floor — there is nowhere below it to build until roads
+ * can go under.
+ */
+export const BRIDGE_MAX_ELEVATION = 40;
+/** One press of the raise/lower control, in metres. */
+export const ROAD_ELEVATION_STEP_M = 2;
+/** Per metre of deck height, per tile, on top of the road tier's own cost. */
+export const BRIDGE_COST_PER_METER_TILE = 6;
+/** Piers drop to the ground every Nth deck tile. */
+export const PIER_SPACING_TILES = 3;
+/**
+ * Clear height an overpass leaves over a road beneath it, deck surface to the
+ * girder's underside (m). The game's own figure: the AASHTO standard it stands
+ * in for is not held in docs/road-guides.
+ */
+export const OVERPASS_CLEARANCE_M = 5;
+/** The same over a railway (m), standing in for AREMA, likewise not held. */
+export const OVERPASS_RAIL_CLEARANCE_M = 7;
+
+// --- milestones -------------------------------------------------------------
+export interface Milestone {
+  name: string;
+  population: number;
+  reward: number; // one-time funds grant
+}
+export const MILESTONES: readonly Milestone[] = [
+  { name: 'Tiny Village', population: 0, reward: 0 },
+  { name: 'Small Town', population: 400, reward: 10_000 },
+  { name: 'Busy Township', population: 1_200, reward: 15_000 },
+  { name: 'Big Town', population: 3_500, reward: 25_000 },
+  { name: 'Small City', population: 8_000, reward: 40_000 },
+  { name: 'Grand City', population: 20_000, reward: 75_000 },
+  { name: 'Metropolis', population: 50_000, reward: 120_000 },
+] as const;
+/**
+ * The index of Big Town, 3,500 people: the rung from which a town runs its own
+ * public works. One source for every rule that cuts over there.
+ */
+export const BIG_TOWN_MILESTONE = MILESTONES.findIndex((m) => m.name === 'Big Town');
+/**
+ * The milestone from which a building on the mains needs a drain. Below it
+ * the whole town is on septic tanks, as a community under the Census' old
+ * urban line of 2,500 people mostly is; Big Town, 3,500, is the first rung
+ * past that line.
+ */
+export const SEWER_MILESTONE = BIG_TOWN_MILESTONE;
+/**
+ * The milestone from which the regional funeral service stops: below it every
+ * body no cemetery of the town's own collected is taken off the map the tick it
+ * falls, from it the body stays where it fell.
+ */
+export const DEATH_CARE_MILESTONE = BIG_TOWN_MILESTONE;
+/**
+ * ¢ the regional funeral service bills for a body. Crow Wing County MN's 2026
+ * indigent contract pays $2,900 for a cremation and $3,900 for a burial
+ * (Brainerd Dispatch, 3 Feb 2026); weighted by the 2025 US cremation share of
+ * 62.8% (CANA 2026) that is 0.628 × 2,900 + 0.372 × 3,900 = $3,272, which at
+ * the game's operating scale of about $901 to the ¢ is ¢3.6. Laramie County
+ * WY's $1,500 flat rate is the low cross-check.
+ */
+export const REGIONAL_FUNERAL_FEE = 3.6;
+/**
+ * Health points an uncollected body takes from its tile and the two tiles
+ * around it for each game month it lies there. A dial: no published figure
+ * stands behind it. It is never fed back into the death rate.
+ */
+export const BODY_HEALTH_PENALTY_PER_MONTH = 32;
+/** Ticks between offers of the bodies still waiting to the cemeteries; a body is offered the tick it falls. */
+export const DEATH_CARE_PERIOD = 10;
+/**
+ * ¢ to exhume and reinter one grave when a cemetery holding interments is
+ * demolished. The median of four municipal fee schedules for an adult
+ * disinterment plus reinterment, Salt Lake City FY2026-27 $3,500, Richmond VA
+ * 2021 $2,000, Lorain OH $4,200 and Douglas GA $2,200, is $2,850; on the
+ * death-care capital scale of $200 to the ¢ (the cemetery's own ¢3,500 for 780
+ * plots) that is ¢14.25, taken down to 14.
+ */
+export const EXHUMATION_FEE_PER_INTERMENT = 14;
+/** A crematorium's two retorts, the cremations each runs in a working day, and the days it works a year. */
+export const CREMATORIUM_RETORTS = 2;
+export const CREMATIONS_PER_RETORT_DAY = 4;
+export const CREMATORIUM_WORKING_DAYS = 260;
+/** Cremations a crematorium does in a year: 2 × 4 × 260 = 2,080. */
+export const CREMATIONS_PER_YEAR =
+  CREMATORIUM_RETORTS * CREMATIONS_PER_RETORT_DAY * CREMATORIUM_WORKING_DAYS;
+/** The most throughput a crematorium banks: one working day's cremations, so an idle one stores nothing. */
+export const CREMATION_CREDIT_CAP = CREMATORIUM_RETORTS * CREMATIONS_PER_RETORT_DAY;
+
+// --- camera -----------------------------------------------------------------
+export const CAMERA_MIN_DISTANCE = 40;
+export const CAMERA_MAX_DISTANCE = 2_400;
+export const CAMERA_MIN_PITCH = 0.18; // radians above horizon
+export const CAMERA_MAX_PITCH = 1.45;
+
+// --- rendering --------------------------------------------------------------
+export const CHUNK_TILES = 16; // terrain chunk edge, in tiles
+export const CHUNKS_PER_SIDE = MAP_SIZE / CHUNK_TILES;
+
+// --- night cycle & emissive city --------------------------------------------
+/**
+ * Visual day/night period in ticks. Deliberately decoupled from the calendar
+ * day (TICKS_PER_DAY = 200 would strobe day/night every 10s): 2400 ticks =
+ * 120s of real time per full cycle at 1×. The status-strip clock maps
+ * `tick % VISUAL_DAY_TICKS` onto 24h; the date still advances on sim days.
+ */
+export const VISUAL_DAY_TICKS = 2400;
+/**
+ * Boot-time clock offset: a fresh game starts at 09:00 —
+ * bright morning light — instead of tick 0's raw midnight, which made every
+ * first boot near-black. Both the lighting rig (main.ts dayT) and the
+ * status-strip clock (ui/format.ts formatClock) add this same offset before
+ * mapping onto the 24h visual day, so displayed time always matches lighting.
+ * 9/24 of the visual day = 900 ticks.
+ */
+export const CLOCK_START_OFFSET_TICKS = Math.round((VISUAL_DAY_TICKS * 9) / 24);
+/**
+ * Street lamps are auto-placed along a street, deterministic from tile
+ * coords. A street up to 15 m of carriageway alternates its lamps between
+ * kerbs, one every LAMP_SPACING_TILES tiles (60 m at TILE_METERS).
+ */
+export const LAMP_SPACING_TILES = 3;
+/** A wider street stands its lamps in facing pairs, one pair every 4 tiles (80 m). */
+export const LAMP_SPACING_WIDE_TILES = 4;
+/**
+ * Fraction of a building's windows lit at full night: each window's
+ * hash(buildingId, windowIndex) threshold lands in this band, so 40–70%
+ * of windows glow and the mix is stable per building.
+ */
+export const NIGHT_WINDOW_LIT_MIN = 0.4;
+export const NIGHT_WINDOW_LIT_MAX = 0.7;
+
+// --- landscaping & water ----------------------------------------------------
+/** Terrain-brush radius bounds, in tiles (tool-options "Brush radius" row). */
+export const TERRAFORM_BRUSH_MIN = 2;
+export const TERRAFORM_BRUSH_MAX = 16;
+/** Terrain-brush strength bounds (tool-options "Strength" row). */
+export const TERRAFORM_STRENGTH_MIN = 1;
+export const TERRAFORM_STRENGTH_MAX = 5;
+/**
+ * ¢ charged per meter of |Δheight| per edited tile — terraform strokes are
+ * funds-gated like every other edit.
+ */
+export const TERRAFORM_COST_PER_METER_TILE = 0.5;
+/**
+ * Depth in meters below SEA_LEVEL at which the underwater seabed tint
+ * (blue-green vertex-color ramp) reaches full strength.
+ */
+export const MAX_WATER_DEPTH_VIS = 12;
+/**
+ * Shoreline foam band: vertices with |height − SEA_LEVEL| < this (meters)
+ * draw the waterline, giving every coast a drawn edge.
+ */
+export const SHORELINE_BAND_METERS = 0.4;
+
+// --- garbage & waste (§21) --------------------------------------------------
+/** Ticks between garbage generation + collection passes (staggered like the other periodic sim work). */
+export const GARBAGE_PERIOD = 10;
+export const GARBAGE_OFFSET = 5;
+/** Garbage passes in one game day. */
+export const GARBAGE_PASSES_PER_DAY = TICKS_PER_DAY / GARBAGE_PERIOD;
+/** The one trash unit is 0.25 kg: 4,000 to a tonne. */
+export const TRASH_UNITS_PER_TONNE = 4000;
+/** A resident's trash a day: 2.2 kg a person, 60% of it from homes. */
+export const TRASH_KG_PER_RESIDENT_DAY = 1.32;
+/** A job's trash a day: the other 40% of the city's waste, over all jobs. */
+export const TRASH_KG_PER_JOB_DAY = 1.86;
+/** Per-tile uncollected-trash value is clamped to this (matches the 0..255 lens byte). */
+export const TRASH_TILE_MAX = 255;
+/** Tonnes per cubic metre of modern compacted landfill (1,200 lb a cubic yard). */
+export const LANDFILL_DENSITY_T_PER_M3 = 0.712;
+/** Rendered trash-pile height (m) at a full landfill tile. */
+export const LANDFILL_MAX_PILE_METERS = 6;
+/** Trash units one landfill tile holds before it's full: a tile's footprint piled to full height. */
+export const LANDFILL_CAPACITY_PER_TILE = Math.round(
+  TILE_METERS *
+    TILE_METERS *
+    LANDFILL_MAX_PILE_METERS *
+    LANDFILL_DENSITY_T_PER_M3 *
+    TRASH_UNITS_PER_TONNE,
+);
+/** Road-BFS tile radius a landfill services — generous, so one covers a small/medium city. */
+export const LANDFILL_COLLECTION_RANGE = 28;
+/** ¢ to paint one landfill tile. */
+export const LANDFILL_PAINT_COST_PER_TILE = 40;
+/** ¢/month upkeep per painted landfill tile. */
+export const LANDFILL_UPKEEP_PER_TILE = 3;
+/** Months of post-closure care a landfill owes: 30 years. */
+export const LANDFILL_AFTERCARE_MONTHS = 360;
+/** A served resident's recyclables a day (kg): 264 lb a household a year over 2.5 people. */
+export const RECYCLING_KG_PER_RESIDENT_DAY = 0.131;
+/** Homes one recycling truck covers, collecting every other week. */
+export const RECYCLING_HOMES_PER_TRUCK = 9500;
+/** The most homes a building may hold and still get the kerbside round. */
+export const KERBSIDE_MAX_HOMES = 4;
+/**
+ * ¢ a recovered unit earns: the landfill space it does not take, priced as a
+ * tile's paint plus its aftercare over the units the tile holds.
+ */
+export const RECYCLING_CREDIT_PER_UNIT =
+  (LANDFILL_PAINT_COST_PER_TILE + LANDFILL_AFTERCARE_MONTHS * LANDFILL_UPKEEP_PER_TILE) /
+  LANDFILL_CAPACITY_PER_TILE;
+/** Tonnes in a US short ton (2,000 lb). */
+export const TONNES_PER_SHORT_TON = 0.90718474;
+/** The units one garbage pass carries of a daily throughput in short tons. */
+const unitsPerPassOfShortTons = (shortTonsPerDay: number): number =>
+  Math.round(
+    (shortTonsPerDay * TONNES_PER_SHORT_TON * TRASH_UNITS_PER_TONNE) / GARBAGE_PASSES_PER_DAY,
+  );
+/** A Materials Recovery Facility's daily throughput, in short tons: a small single-stream plant. */
+export const MRF_SHORT_TONS_PER_DAY = 50;
+/** The units an MRF sorts in one garbage pass, its throughput spread over the day. */
+export const MRF_SORT_UNITS_PER_PASS = unitsPerPassOfShortTons(MRF_SHORT_TONS_PER_DAY);
+/** The percentage of what a sorting plant takes that it sells to market; the rest is residue. */
+export const MRF_YIELD_PERCENT = 87;
+/** An MRF's residue store: a week of residue at full throughput. */
+export const MRF_RESIDUE_STORE_UNITS = Math.round(
+  ((100 - MRF_YIELD_PERCENT) / 100) * MRF_SORT_UNITS_PER_PASS * GARBAGE_PASSES_PER_DAY * 7,
+);
+/** A home's recycling a day (kg) in a block of more than KERBSIDE_MAX_HOMES homes, on an MRF's round. */
+export const MRF_KG_PER_HOME_DAY = 0.3;
+/** A commercial job's recycling a day (kg) on an MRF's round. */
+export const MRF_KG_PER_COMMERCIAL_JOB_DAY = 0.3;
+/** An industrial job's recycling a day (kg) on an MRF's round. */
+export const MRF_KG_PER_INDUSTRIAL_JOB_DAY = 0.25;
+/** A transfer station's daily throughput, in short tons: a station in the small class. */
+export const TRANSFER_SHORT_TONS_PER_DAY = 50;
+/** The units a transfer station collects, and forwards, in one garbage pass. */
+export const TRANSFER_UNITS_PER_PASS = unitsPerPassOfShortTons(TRANSFER_SHORT_TONS_PER_DAY);
+/** The days of throughput a tipping floor may hold: the common 48-hour limit. */
+export const TRANSFER_FLOOR_DAYS = 2;
+/** A transfer station's tipping floor, in units: its throughput over the days it may hold. */
+export const TRANSFER_FLOOR_UNITS =
+  TRANSFER_UNITS_PER_PASS * GARBAGE_PASSES_PER_DAY * TRANSFER_FLOOR_DAYS;
+
+/**
+ * ¢ to string one tile of power line. Deliberately CHEAPER than the cheapest
+ * road (a two-lane tile is 20): a line has to be the cheapest thing that
+ * reaches, or laying a road stays the answer to every question and the network
+ * never becomes a decision.
+ */
+export const POWER_LINE_COST_PER_TILE = 12;
+/**
+ * ¢/month upkeep per tile of power line. The utility owns the wire and the
+ * city pays for it, so reaching further is a standing drain on the budget
+ * rather than a purchase that disappears from view — which is the whole trade
+ * the mechanic exists to put in front of the player.
+ */
+export const POWER_LINE_UPKEEP_PER_TILE = 0.5;
+/** ¢ to bury one tile of cable: eight tiles of strung line, the trench and the duct. */
+export const POWER_CABLE_COST_PER_TILE = POWER_LINE_COST_PER_TILE * 8;
+/**
+ * ¢/month upkeep per tile of buried cable: half a line's, since nothing weathers.
+ * Under a sealed street the cable charges none of its own and takes this much
+ * off that street tile's upkeep instead.
+ */
+export const POWER_CABLE_UPKEEP_PER_TILE = POWER_LINE_UPKEEP_PER_TILE / 2;
+/**
+ * ¢ to lay one tile of water pipe, and ¢/month to keep it: the power line's
+ * figures, for the same reason — a pipe has to be the cheapest thing that
+ * reaches a shore, or a street is laid to the water instead.
+ */
+export const WATER_PIPE_COST_PER_TILE = 12;
+export const WATER_PIPE_UPKEEP_PER_TILE = 0.5;
+/**
+ * The share of the water a building draws that comes back as sewage: public
+ * supply consumes 12% of what it withdraws (USGS), and the rest returns.
+ */
+export const SEWAGE_RETURN_FRACTION = 0.88;
+/**
+ * Pollution per kL a day of raw sewage, for a building nothing drains and for
+ * an outfall: medium-strength sewage carries 200 mg/L of oxygen demand, 161 lb
+ * a year per kL a day, on the scale that puts an electric utility's 484,000 lb
+ * a year at the coal plant's 140. A building emits at least one unit of it, so
+ * a cesspit is never nothing.
+ */
+export const SEWAGE_POLLUTION_PER_KL = (161 * 140) / 484_000;
+/**
+ * How fouled the water beside a discharge is, per kL a day of raw sewage it
+ * empties, on the 0..255 fouling layer: a full one-million-gallon outfall
+ * (3,785 kL) saturates its tile.
+ */
+export const WATER_FOUL_PER_KL = 255 / 3785;
+/** How far along connected water a discharge's fouling reaches before it fades to nothing, in tiles. */
+export const WATER_FOUL_REACH_TILES = 25;
+/** Cosmetic trucks a landfill area fields: base + one per LANDFILL_TRUCKS_PER_TILES painted tiles, capped. */
+export const LANDFILL_TRUCKS_BASE = 1;
+export const LANDFILL_TRUCKS_PER_TILES = 16;
+export const LANDFILL_TRUCKS_MAX = 4;
+/** Smallest connected landfill area (tiles) that can operate — room for the gatehouse office plus a truck dump run. Paint batches leaving a smaller new fragment are rejected. */
+export const LANDFILL_MIN_AREA_TILES = 4;

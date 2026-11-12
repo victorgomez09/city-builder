@@ -1,0 +1,2230 @@
+/**
+ * SlimCity shared contracts.
+ *
+ * This file is the API boundary between all modules.
+ * Module agents code AGAINST these types and must not edit this file.
+ * Enum-like values are stored in typed-array layers — values are stable,
+ * never reorder them.
+ */
+
+import { tileToWorld } from './constants';
+
+// ---------------------------------------------------------------------------
+// Tiles & zones
+// ---------------------------------------------------------------------------
+
+export interface TilePoint {
+  x: number;
+  z: number;
+}
+
+export const ZoneType = {
+  None: 0,
+  ResLow: 1,
+  ResHigh: 2,
+  ComLow: 3,
+  ComHigh: 4,
+  Industrial: 5,
+  // Zoning types expansion — additive, save-safe. Values 1–5 above are
+  // serialized into GridState.zone bytes, saves, and ZonePatch — they MUST NOT
+  // be reordered. New city-builder zones append with new numbers:
+  //   ResMediumRow (6) — Medium Density Row Housing (narrow attached rows)
+  //   ResMedium    (7) — Medium Density Housing (small apartment blocks)
+  //   Mixed        (8) — Mixed Housing (commercial ground floor + apartments)
+  ResMediumRow: 6,
+  ResMedium: 7,
+  Mixed: 8,
+  /** Farmland: grows farms on fertile soil off a dirt road; its jobs are industrial. */
+  Agriculture: 9,
+  /** Heavy industry: the plants that pollute and make noise, kept off the housing; its jobs are industrial. */
+  IndHeavy: 10,
+} as const;
+export type ZoneType = (typeof ZoneType)[keyof typeof ZoneType];
+
+export const RoadTier = {
+  None: 0,
+  TwoLane: 1,
+  Avenue: 2,
+  Highway: 3,
+  // Roads catalog expansion — additive, existing tiers keep their numbers
+  // (they are persisted in GridState.roadTier bytes and saves).
+  Gravel: 4,
+  Alley: 5,
+  OneWay: 6,
+  FourLane: 7,
+  // Roads epic R2 — transit lane variants (cosmetic colored lanes on the
+  // same 1-tile model). Append only; persisted as roadTier bytes.
+  BusLane: 8,
+  BikeLane: 9,
+  // Roads epic R3 — tram track (embedded rails on a shared street).
+  Tram: 10,
+  // Roads epic R4 — dedicated heavy-rail line (ballast bed; not drivable by cars).
+  RailTrack: 11,
+  // Roads epic wave 5 — the slip road a motorway is reached by: one lane, one
+  // way, shoulders instead of kerbs.
+  Ramp: 12,
+} as const;
+export type RoadTier = (typeof RoadTier)[keyof typeof RoadTier];
+
+/**
+ * Which way a road tile runs — the cardinal its drag went in. Stored per tile
+ * so a one-way street flows the way it was drawn rather than the way its
+ * geometry happens to read, and so a profile can say which of its lanes are
+ * which. None means no drag ever said.
+ */
+export const RoadFlow = {
+  None: 0,
+  North: 1,
+  East: 2,
+  South: 3,
+  West: 4,
+} as const;
+export type RoadFlow = (typeof RoadFlow)[keyof typeof RoadFlow];
+
+/**
+ * What a byte of GridState.powerLine holds. These are save bytes: never
+ * reorder or reuse one, only append.
+ * Held is a line an older save kept, which a street may feed; Strung is a
+ * line laid from a source, which only a source or a live line feeds; Cable is
+ * a buried cable, fed the same way as a strung line and drawn only underground.
+ */
+export const PowerLineKind = {
+  Held: 1,
+  Strung: 2,
+  Cable: 3,
+} as const;
+export type PowerLineKind = (typeof PowerLineKind)[keyof typeof PowerLineKind];
+
+/**
+ * The bits of a stored `roadFlow` byte that hold the direction. Everything
+ * above them says something else about the tile, so a reader that wants the
+ * direction must mask — reading the byte raw and comparing it to a RoadFlow
+ * is the mistake this constant exists to prevent.
+ */
+export const ROAD_FLOW_DIRECTION_MASK = 0b111;
+/** Set when the tile is one half of a two-tile corridor rather than a road in its own right. */
+export const CORRIDOR_BIT = 0b1000;
+/**
+ * Which half of the corridor the tile is, by the side of the road it stands on:
+ * clear is the half at the LOW offset (the tile at the lower coordinate across
+ * the road), set is the one at the high offset. It is cut from the section in
+ * WORLD order — see `worldOrderedProfile` — so the low half is the driver's
+ * left heading north or east and their right heading south or west.
+ */
+export const CORRIDOR_RIGHT_BIT = 0b1_0000;
+
+/** Which half of a corridor a tile is, or that it is not part of one. */
+export type CorridorHalf = 'none' | 'left' | 'right';
+
+/** The direction a stored flow byte points, ignoring everything else it carries. */
+export function flowDirection(stored: number): RoadFlow {
+  return (stored & ROAD_FLOW_DIRECTION_MASK) as RoadFlow;
+}
+
+/** Which half of a corridor a stored flow byte says the tile is. */
+export function corridorHalfOf(stored: number): CorridorHalf {
+  if ((stored & CORRIDOR_BIT) === 0) return 'none';
+  return (stored & CORRIDOR_RIGHT_BIT) === 0 ? 'left' : 'right';
+}
+
+/** A stored flow byte carrying both a direction and a corridor half. */
+export function storedFlow(direction: RoadFlow, half: CorridorHalf = 'none'): number {
+  const bits =
+    half === 'none' ? 0 : half === 'left' ? CORRIDOR_BIT : CORRIDOR_BIT | CORRIDOR_RIGHT_BIT;
+  return (direction & ROAD_FLOW_DIRECTION_MASK) | bits;
+}
+
+/** The flow that points from a tile to the orthogonal neighbour one step away, or None. */
+export function flowForStep(dx: number, dz: number): RoadFlow {
+  if (dx === 0 && dz === -1) return RoadFlow.North;
+  if (dx === 1 && dz === 0) return RoadFlow.East;
+  if (dx === 0 && dz === 1) return RoadFlow.South;
+  if (dx === -1 && dz === 0) return RoadFlow.West;
+  return RoadFlow.None;
+}
+
+/**
+ * The way each tile of a drawn path runs: every tile points at the next one
+ * along it, and the tile it ends on keeps the heading it arrived with. A road
+ * runs the way it was drawn, so this is the flow a drag lays.
+ */
+export function flowsAlong(path: readonly TilePoint[]): RoadFlow[] {
+  return path.map((t, i) => {
+    const next = path[i + 1];
+    if (next) return flowForStep(next.x - t.x, next.z - t.z);
+    const prev = path[i - 1];
+    return prev ? flowForStep(t.x - prev.x, t.z - prev.z) : RoadFlow.None;
+  });
+}
+
+/** The step a flow points along: {dx, dz}, or a zero step for None. */
+export function stepForFlow(flow: number): { dx: number; dz: number } {
+  switch (flow) {
+    case RoadFlow.North:
+      return { dx: 0, dz: -1 };
+    case RoadFlow.East:
+      return { dx: 1, dz: 0 };
+    case RoadFlow.South:
+      return { dx: 0, dz: 1 };
+    case RoadFlow.West:
+      return { dx: -1, dz: 0 };
+    default:
+      return { dx: 0, dz: 0 };
+  }
+}
+
+/**
+ * True for road tiers that behave as a functional STREET — carrying vehicle
+ * traffic + road-graph utilities (power/water) + providing road frontage for
+ * zoning/growth/service coverage. RailTrack (a dedicated rail line) sits on the
+ * grid and blocks building like any road, but is NOT a street: it does none of
+ * the above. None is not a street either. Accepts a raw roadTier byte.
+ */
+export function isStreetTier(tier: number): boolean {
+  return tier !== RoadTier.None && tier !== RoadTier.RailTrack;
+}
+
+/**
+ * True for a street a building stands beside: one that carries general traffic
+ * and lets a door and a drive open onto it, so any street tier but a motorway
+ * and its slip road. A road's deck height is the caller's to read.
+ */
+export function isFrontageTier(tier: number): boolean {
+  return isStreetTier(tier) && tier !== RoadTier.Highway && tier !== RoadTier.Ramp;
+}
+
+/**
+ * True for the dedicated heavy-rail tier — the tiles a TRAIN's network is built
+ * from, exactly as isStreetTier picks the tiles a car's is. The two predicates
+ * are disjoint, which is what keeps the two graphs from ever sharing an edge:
+ * a car cannot railroad and a train cannot drive down a street.
+ */
+export function isRailTier(tier: number): boolean {
+  return tier === RoadTier.RailTrack;
+}
+
+/**
+ * True for the Tramway's tier, the preset whose lanes the trams share. Tram
+ * track is not only this tier: any street whose profile carries a tram lane is
+ * track too (`isTramTrack` in roadprofile.ts), and the tram network is built
+ * from that. Unlike the rail predicate it is NOT disjoint from isStreetTier:
+ * tram track is a street, so cars drive it and it carries utilities and
+ * frontage like any other road. A tram tile is therefore in both graphs, and
+ * only the tram is confined to the smaller one.
+ */
+export function isTramTier(tier: number): boolean {
+  return tier === RoadTier.Tram;
+}
+
+/** What a road is to a tramway: track, a street the track may cross, or neither. */
+export type TramCrossingRoad = 'track' | 'street' | 'none';
+
+/** A road for `tramCrossingAxes`, given whether it is tram track; a railway or no road is neither. */
+export function tramCrossingRoad(tier: number, track: boolean): TramCrossingRoad {
+  if (!isStreetTier(tier)) return 'none';
+  return track ? 'track' : 'street';
+}
+
+/**
+ * Along which axes a tramway crosses this road tile. A tramway drawn across a
+ * street leaves the crossing tiles as the street's, since it never takes a tile
+ * from a road it does not outrank, so the crossing is read off the tiles
+ * rather than stored: a straight run of one or two street tiles that are not
+ * tram track themselves, with tram track joined at both ends, carries the
+ * tramway straight over. Two tiles is a road laid as two carriageways, whose
+ * median opens where the tramway crosses it.
+ *
+ * `joined(dx, dz, steps)` is the road `steps` tiles away in that direction
+ * along a chain of JOINED roads, `none` where the chain breaks first — a tram
+ * arm that only lies alongside crosses nothing.
+ */
+export function tramCrossingAxes(
+  own: TramCrossingRoad,
+  joined: (dx: number, dz: number, steps: 1 | 2) => TramCrossingRoad,
+): { alongX: boolean; alongZ: boolean } {
+  if (own !== 'street') return { alongX: false, alongZ: false };
+  // What lies that way: track at once, track beyond one more street tile, or neither.
+  const reach = (dx: number, dz: number): 'track' | 'street' | null => {
+    const next = joined(dx, dz, 1);
+    if (next === 'track') return 'track';
+    return next === 'street' && joined(dx, dz, 2) === 'track' ? 'street' : null;
+  };
+  // Track both ways, with at most one other street tile between: never three.
+  const along = (dx: number, dz: number): boolean => {
+    const ahead = reach(dx, dz);
+    const behind = reach(-dx, -dz);
+    return ahead !== null && behind !== null && (ahead === 'track' || behind === 'track');
+  };
+  return { alongX: along(1, 0), alongZ: along(0, 1) };
+}
+
+/**
+ * Scalar fields (classic diffusing scalar layers). Each is a Uint8Array of
+ * MAP_SIZE² tiles, 0..255. Indexed by FieldId into GridState.fields.
+ */
+export const FieldId = {
+  LandValue: 0,
+  Pollution: 1,
+  Noise: 2,
+  Traffic: 3,
+  Crime: 4,
+  FireRisk: 5,
+  Education: 6,
+  Health: 7,
+  Happiness: 8,
+  /** Middle school coverage. Saved after the tile's other layers (SAVE_VERSION 16), not beside the first nine. */
+  MiddleEducation: 9,
+  /** High school coverage. Saved with MiddleEducation. */
+  HighEducation: 10,
+  /** College coverage. Saved with MiddleEducation. */
+  CollegeEducation: 11,
+} as const;
+export type FieldId = (typeof FieldId)[keyof typeof FieldId];
+export const FIELD_COUNT = 12;
+/** The field planes saved together in the tile record's body; the rest follow its last layer. */
+export const CORE_FIELD_COUNT = 9;
+
+/**
+ * The road network: nodes and segments, the one place a road is stored, as
+ * growable slot tables. Built, derived from and saved by src/world/roadnet.ts.
+ */
+export interface RoadNet {
+  /** Node slots in use, live or free: the high-water mark of the tables. */
+  nodeSlots: number;
+  nodeLive: Uint8Array;
+  /** Tile centre, whole centimetres. */
+  nodeX: Int32Array;
+  nodeZ: Int32Array;
+  /** Deck height above the ground, metres; 0 on the ground. */
+  nodeHeight: Float32Array;
+  nodeTier: Uint8Array;
+  nodeProfile: Uint16Array;
+  nodeFlow: Uint8Array;
+
+  segSlots: number;
+  segLive: Uint8Array;
+  segA: Int32Array;
+  segB: Int32Array;
+  segTier: Uint8Array;
+  segProfile: Uint16Array;
+  segFlow: Uint8Array;
+  /** Deck height at the first and last tile the segment owns, metres. */
+  segH0: Float32Array;
+  segH1: Float32Array;
+  /** 1 where the centre line is a curve through the control point below. */
+  segCurved: Uint8Array;
+  segCX: Int32Array;
+  segCZ: Int32Array;
+
+  /** Bumped by every change, so what is derived from the network knows it is stale. */
+  version: number;
+}
+
+/**
+ * The complete mutable world state. Lives in the sim worker; the render
+ * thread keeps a read-only mirror updated from snapshots/patches.
+ * Implemented in src/world/grid.ts (createGrid, serializeGrid, deserializeGrid,
+ * plus tile accessors and buildability checks).
+ */
+export interface GridState {
+  readonly size: number; // tiles per side
+  height: Float32Array; // meters above sea level (negative = below)
+  water: Uint8Array; // 1 = water tile (unbuildable)
+  trees: Uint8Array; // 0..255 tree density (cosmetic + clearable)
+  zone: Uint8Array; // ZoneType
+  roadTier: Uint8Array; // RoadTier — derived from roadProfile; kept for every consumer that reads a tier
+  roadMask: Uint8Array; // 4-bit neighbor bitmask: +N=1 +E=2 +S=4 +W=8
+  /**
+   * Road composition: the profile a road tile carries. 0 = no road; 1..11 are
+   * the preset profiles and equal the tier; ids from FIRST_CUSTOM_PROFILE_ID
+   * up index the save's own table of player-composed profiles. This is the
+   * authoritative road identity; `roadTier` is the nearest preset, derived.
+   * ADDITIVE layer: serialized LAST in the grid save (SAVE_VERSION 6); older
+   * saves load with it derived from `roadTier`.
+   */
+  roadProfile: Uint16Array;
+  /**
+   * Which way each road tile runs: the cardinal its drag went in, as a
+   * RoadFlow value in the low three bits. RoadFlow.None means no drag ever
+   * said, and every reader falls back to what it did before there was a
+   * stored direction. The upper bits are reserved for the corridor half and
+   * approach-zone marker of later waves.
+   * ADDITIVE layer: serialized LAST in the grid save (SAVE_VERSION 7); older
+   * saves load with it unset.
+   */
+  roadFlow: Uint8Array;
+  /**
+   * The player's junction control at each tile, when they have overridden the
+   * one the warrant works out: 0 means they have not, and the warrant decides.
+   * An override is STICKY — the warrant never argues with a choice — so it has
+   * to be stored, which is what this layer is for.
+   * ADDITIVE layer: serialized LAST in the grid save (SAVE_VERSION 8); older
+   * saves load with every junction on its warrant.
+   */
+  junctionControl: Uint8Array;
+  /**
+   * Turn restrictions at each junction, one NIBBLE per arm — north, east,
+   * south, west — each the set of movements that arm allows (see
+   * src/shared/approach.ts). Zero is no restriction, so an untouched junction
+   * stores zero and every arm allows what its lanes offer.
+   * ADDITIVE layer: serialized LAST in the grid save (SAVE_VERSION 9); older
+   * saves load with nothing restricted.
+   */
+  junctionTurns: Uint16Array;
+  /**
+   * Per-LANE turn restrictions — FOUR entries per tile, one per arm in the
+   * order the cardinals climb, each packing four lanes into a nibble apiece
+   * (see src/shared/approach.ts). Zero is a lane nobody has touched, which
+   * takes the set its approach derives for it, so an untouched junction stores
+   * zero throughout.
+   *
+   * An arm restriction says what the whole approach may do; this says which
+   * LANE may do it, which is what turns a bay into a turn-only lane and a
+   * kerbside lane into a right-turn-only one.
+   * ADDITIVE layer: serialized LAST in the grid save (SAVE_VERSION 11); older
+   * saves load with every lane on its derived default.
+   */
+  junctionLaneTurns: Uint16Array;
+  /**
+   * Power lines — 1 = a line stands on this tile. A line conducts electricity
+   * between its own tiles and into any road or footprint it touches, which is
+   * how supply reaches what a road cannot: the off-grid lot on a dirt lane,
+   * the district a motorway separates, the pump across the valley.
+   *
+   * It is a network of its own and never a road: nothing drives along it, it
+   * carries no traffic and no water, and it has no tier.
+   * ADDITIVE layer: serialized LAST in the grid save (SAVE_VERSION 10); older
+   * saves load with no lines anywhere. A byte is a PowerLineKind; 0 no line.
+   */
+  powerLine: Uint8Array;
+  /**
+   * Water pipes: 1 where a pipe is laid. A pipe is to water and sewage what
+   * the power line is to electricity: it carries both between its own tiles
+   * and into any road or building it touches, so a shore intake or outfall
+   * joins the mains without a street. ADDITIVE layer: serialized last in the
+   * grid save (SAVE_VERSION 14); older saves load with no pipes.
+   */
+  waterPipe: Uint8Array;
+  /** 1 where a drain's reach covers the tile. Derived on every utility pass, never saved. */
+  sewered: Uint8Array;
+  /**
+   * 0..255 on a water tile: how fouled the water is, spread along connected
+   * water from what the drains and works discharge. 0 on land. Derived on
+   * every utility pass, never saved.
+   */
+  waterFoul: Uint8Array;
+  /**
+   * The road passing OVER this tile's road, where one does: its tier, profile
+   * id, stored flow byte and deck height in metres above terrain. Zero
+   * everywhere but a crossing tile, which is the only place a tile holds two
+   * roads. The road at ground level keeps the ordinary road layers; nothing
+   * joins the two. See docs/world-sim/overpasses.md.
+   * ADDITIVE layers: serialized LAST in the grid save (SAVE_VERSION 12); older
+   * saves load with no overpasses.
+   */
+  overTier: Uint8Array;
+  overProfile: Uint16Array;
+  overFlow: Uint8Array;
+  overElevation: Float32Array;
+  /**
+   * The road network the road layers above are derived from, where the grid
+   * has one: the worker's. A grid without one — a test that lays roads on the
+   * tiles directly — is read through the network its tiles describe.
+   */
+  roads?: RoadNet;
+  /**
+   * The ids of the profiles laid as a corridor nothing divides, whose halves a
+   * street joining either one opens to each other (`isDividedCorridor`). The
+   * grid holds ids and not profiles, so the worker hands it these from its
+   * profile table: derived, never saved. Absent, every corridor is divided.
+   */
+  oneCarriageway?: ReadonlySet<number>;
+  /**
+   * 1 where a road off the grid covers the tile, footways included: derived
+   * from the road network, never saved, and never built on.
+   */
+  roadFootprint: Uint8Array;
+  /**
+   * The arms of each tile's road held apart from a road beside it that the
+   * joining rules would otherwise join, as mask bits (+N=1 +E=2 +S=4 +W=8),
+   * set on both tiles: a road laid with snapping off. Derived from the road
+   * network, where the arm is a link it does not have; never saved.
+   */
+  roadSeparate: Uint8Array;
+  /**
+   * Each tile's SoilGrade (src/shared/soil.ts), derived from height, water and
+   * the map seed: worked out on init, on load and after terraforming, never
+   * saved. A grid nobody has graded reads unfit everywhere.
+   */
+  soil: Uint8Array;
+  buildingId: Uint32Array; // 0 = none, else building instance id occupying tile
+  power: Uint8Array; // 1 = powered
+  watered: Uint8Array; // 1 = water service reaches tile
+  fields: Uint8Array[]; // FIELD_COUNT arrays, indexed by FieldId
+  /**
+   * Districts & policies — per-tile district id (0 = unassigned,
+   * 1..255 = District.id). Worker-owned so per-district policies are applied
+   * server-side (never a render-only mask). ADDITIVE layer: serialized LAST in
+   * the grid save (SAVE_VERSION 2). See src/world/grid.ts serialize/deserialize
+   * and the SAVE_VERSION migration note there — v1 saves load with this layer
+   * defaulted to all-zero (no districts), so old saves remain loadable.
+   */
+  district: Uint8Array; // District id per tile
+  /**
+   * Garbage — per-tile landfill membership (0 = none, 1 = landfill area tile
+   * that collected trash piles up on). Worker-owned, painted by `paintLandfill`.
+   * ADDITIVE layer: serialized LAST in the grid save (SAVE_VERSION 3), after the
+   * district layer, so v1/v2 saves load with this defaulted to all-zero (no
+   * landfill). See src/world/grid.ts serialize/deserialize + the migration note.
+   */
+  landfill: Uint8Array;
+  /**
+   * Bridges & elevated roads — deck height in metres above this tile's terrain,
+   * 0 = at grade. Only meaningful where roadTier is set: an elevated tile is an
+   * ordinary road tile that sits higher, so the road graph, masks, utility
+   * propagation, and traffic are unaffected by it.
+   *
+   * Continuous, not whole metres: the deck's world height is this plus the
+   * terrain under it, so the offset has to carry the fraction that cancels an
+   * uneven riverbed. Quantized, a level span comes out bowed by up to half a
+   * metre as the bed rises and falls beneath it.
+   *
+   * ADDITIVE layer: serialized LAST in the grid save (SAVE_VERSION 5), after
+   * the landfill layer, so v1–v3 saves load with every road at grade.
+   */
+  roadElevation: Float32Array;
+}
+
+// ---------------------------------------------------------------------------
+// Map packs (AI-generated raster maps) & procedural fallback
+// ---------------------------------------------------------------------------
+
+export interface MapData {
+  name: string;
+  size: number; // tiles per side, MAP_SIZE
+  height: Float32Array; // sampled to tile grid, meters
+  water: Uint8Array; // derived: height < seaLevel
+  trees: Uint8Array; // 0..255 density
+  seaLevel: number; // meters (heights are absolute; water derived already)
+  spawn: TilePoint; // initial camera target
+}
+
+// ---------------------------------------------------------------------------
+// Player commands (UI/tools -> worker). The ONLY way the world mutates.
+// ---------------------------------------------------------------------------
+
+export type Sector = 'res' | 'com' | 'ind';
+/** The departments the player funds: one slider each. */
+export type FundingKey = 'police' | 'fire' | 'health' | 'education' | 'park';
+/**
+ * The kinds of facility the service pass runs. `education` is the elementary
+ * school; the other schools and the library are their own kinds so each reads its
+ * own load, yet all of them are paid for by the one Education slider.
+ */
+export type ServiceKind =
+  FundingKey | 'middle-education' | 'high-education' | 'college-education' | 'library';
+
+/** The department that funds a facility kind. */
+export function fundingKeyOf(kind: ServiceKind): FundingKey {
+  switch (kind) {
+    case 'middle-education':
+    case 'high-education':
+    case 'college-education':
+    case 'library':
+      return 'education';
+    default:
+      return kind;
+  }
+}
+
+export type Command =
+  // `elevation` raises a deliberate viaduct (metres, 0 = follow the ground and
+  // auto-bridge water only). `elevations`, when present, is the exact per-tile
+  // deck profile to restore instead of solving one — undo uses it so a reverted
+  // span comes back at precisely the heights it had.
+  | {
+      kind: 'buildRoad';
+      tier: RoadTier;
+      tiles: TilePoint[]; // contiguous path
+      elevation?: number;
+      elevations?: number[];
+      /** Profile id to lay. Omitted = the tier's preset. A custom id must already be defined. */
+      profile?: number;
+      /**
+       * Lay this road over whatever is there, rather than only over bare
+       * ground, a lesser road, or the same road differently composed.
+       */
+      replace?: boolean;
+      /**
+       * Exact per-tile flow directions (RoadFlow values), parallel to `tiles`.
+       * Omitted — the ordinary case — the direction is read off the drag
+       * itself. An undo sends the directions that were there before, the way
+       * it sends the deck heights that were there before.
+       */
+      flows?: number[];
+      /**
+       * Lay every tile on the over layer of a crossing, exactly as given. Only
+       * an undo sends it, to put back an overpass it took away; an ordinary
+       * drag leaves the worker to decide which tiles cross over.
+       */
+      layer?: 'over';
+      /**
+       * Whether the road joins the roads it lies beside or ends against.
+       * Omitted, it joins them, as a road always has. False — the road tool
+       * with snapping to roads off — every arm between a tile it lays and a
+       * road outside the drag stays as joined as it was before, so a road it
+       * only lies beside or ends against stays a road of its own.
+       */
+      join?: boolean;
+      /**
+       * Exactly which arms of the tiles it lays are held apart; every other
+       * arm of those tiles joins. Only an undo sends it, to put back what a
+       * command it reverses held apart.
+       */
+      apart?: TileArms[];
+    }
+  /**
+   * Registers a player-composed cross-section under an id the client chose
+   * from its mirror's next free slot. Idempotent for an identical redefinition;
+   * rejected when the id is a preset, already holds a different profile, or the
+   * profile breaks its class's width, piece or lane rules.
+   */
+  | { kind: 'defineRoadProfile'; id: number; profile: RoadProfile }
+  /**
+   * Sets who gives way at a junction, overriding the control its warrant works
+   * out. `control: null` hands it back to the warrant. Sticky: once set, the
+   * warrant never argues with it. Rejected for a tile that is not a junction
+   * of the street network.
+   */
+  | { kind: 'setJunctionControl'; x: number; z: number; control: JunctionControl | null }
+  /**
+   * Restricts what the arm lying in `arm` may do at the junction at (x, z):
+   * `allowed` is a set of Movement bits, or null to hand the arm back to what
+   * its lanes offer. Rejected for a tile that is not a junction, for an arm
+   * that has no road on it, and for a restriction that would leave the arm
+   * nothing to do.
+   */
+  | { kind: 'setJunctionTurns'; x: number; z: number; arm: RoadFlow; allowed: number | null }
+  /**
+   * What ONE LANE of an arm may do. `lane` counts from the driver's left, the
+   * order the derived sets come in. A null hands the lane back to the set its
+   * approach derives for it.
+   */
+  | {
+      kind: 'setJunctionLaneTurns';
+      x: number;
+      z: number;
+      arm: RoadFlow;
+      lane: number;
+      allowed: number | null;
+    }
+  /**
+   * Makes the 2×2 block whose north-west tile is (x, z) a compact roundabout:
+   * the roundabout control on its four tiles, and no turn or lane restriction
+   * on any of them. Rejected unless the block is a roundabout's site
+   * (`roundaboutRefusal`). Inverse: `removeRoundabout` carrying what the four
+   * tiles held before.
+   */
+  | { kind: 'buildRoundabout'; x: number; z: number }
+  /**
+   * Takes out the compact roundabout whose north-west tile is (x, z), writing
+   * `junctions` to its four tiles (north-west, north-east, south-west,
+   * south-east), or clearing all four when it is absent. Rejected unless a
+   * compact roundabout stands there. Inverse: `buildRoundabout`.
+   */
+  | { kind: 'removeRoundabout'; x: number; z: number; junctions?: RoundaboutJunction[] }
+  /**
+   * Clears road/building/zone/trees. On a crossing tile it takes only the road
+   * passing over, the one on top; `layer: 'over'` asks for exactly that and
+   * nothing else on any tile.
+   */
+  | { kind: 'bulldoze'; tiles: TilePoint[]; layer?: 'over' }
+  /**
+   * One road off the grid: a straight line at any angle, or a curve through
+   * `control`. Points are world centimetres. `flow` is 0 for a road that runs
+   * both ways, 1 for one running from `a` to `b`. Inverse: `removeSegment`.
+   */
+  | {
+      kind: 'buildSegment';
+      tier: RoadTier;
+      profile?: number;
+      a: { x: number; z: number };
+      b: { x: number; z: number };
+      control?: { x: number; z: number };
+      flow?: number;
+    }
+  /** Takes away the road off the grid with exactly these ends and control. Inverse: `buildSegment`. */
+  | {
+      kind: 'removeSegment';
+      a: { x: number; z: number };
+      b: { x: number; z: number };
+      control?: { x: number; z: number };
+    }
+  /**
+   * Cuts the road off the grid passing through `at` (world centimetres, on its
+   * centre line) in two, with a node where they meet, so another road can meet
+   * it there. Costs nothing. Inverse: `joinSegments`.
+   */
+  | { kind: 'splitSegment'; at: { x: number; z: number } }
+  /**
+   * Joins the two roads off the grid meeting at `at` back into one, with
+   * `control` as its bend. Costs nothing. Inverse: `splitSegment`.
+   */
+  | { kind: 'joinSegments'; at: { x: number; z: number }; control?: { x: number; z: number } }
+  /**
+   * Moves the end of the one road off the grid ending at `from` — a node no
+   * other road meets — to `to`, at most half a tile away on each axis, laying
+   * the road again with that end moved. What a grid drag started or ended on
+   * a curve's end does to meet it at the tile centre. Costs nothing. Inverse:
+   * the same move back.
+   */
+  | {
+      kind: 'moveSegmentEnd';
+      from: { x: number; z: number };
+      to: { x: number; z: number };
+    }
+  | {
+      kind: 'paintZone';
+      zone: ZoneType;
+      tiles: TilePoint[];
+      /**
+       * Put these zones back exactly as a command found them, without asking
+       * whether a player could paint them now: a zone can outlive the road
+       * that let it be painted. Only an undo sends it.
+       */
+      restore?: true;
+    }
+  | {
+      kind: 'placeBuilding';
+      catalogId: string;
+      x: number;
+      z: number;
+      rotation: 0 | 1 | 2 | 3;
+      /**
+       * Burials a cemetery stands with, and the exhumation charge for them
+       * handed back. Only the undo of demolishing a cemetery that held
+       * interments sends it.
+       */
+      interments?: number;
+      /**
+       * The parcel frame of a building that stood on a curved street. Only
+       * the undo of demolishing one sends it, so it stands back where it was.
+       */
+      frame?: ParcelFrame;
+      /**
+       * Stand it back exactly where it was, without asking whether a player
+       * could place it now: a building can outlive the street it stood
+       * beside. Only the undo of a demolition sends it.
+       */
+      restore?: true;
+    }
+  | { kind: 'setTaxRate'; sector: Sector; rate: number } // 0..0.3
+  | { kind: 'setServiceFunding'; service: FundingKey; funding: number } // 0..1.5
+  | { kind: 'takeLoan'; amount: number }
+  | { kind: 'repayLoan'; amount: number }
+  // landscaping: one brush stroke — smoothstep falloff kernel over the
+  // disc; tiles carrying roads or buildings are excluded from the kernel.
+  // targetHeight is 'level' mode's flatten height, sampled at drag start.
+  | {
+      kind: 'terraform';
+      mode: 'raise' | 'lower' | 'level' | 'smooth';
+      center: TilePoint;
+      radius: number; // tiles, TERRAFORM_BRUSH_MIN..TERRAFORM_BRUSH_MAX
+      strength: number; // TERRAFORM_STRENGTH_MIN..TERRAFORM_STRENGTH_MAX
+      targetHeight?: number; // meters, 'level' mode only
+    }
+  // float-exact height restore — the ack inverse of 'terraform', so
+  // undo/redo is exact to the float. `heights` is row-major w*h: local
+  // (col, row) sits at index row * w + col, i.e. world tile (x+col, z+row).
+  | { kind: 'terraformSet'; x: number; z: number; w: number; h: number; heights: Float32Array }
+  // ---- Bus transit: the worker owns the authoritative line list ----
+  // Create a new line (worker assigns the id if `line.id` is 0/omitted-ish; the
+  // ack/snapshot echoes the real id). `line.stops` are ordered TilePoints on/adjacent
+  // to roads; the sim routes stop→stop over the road graph.
+  | { kind: 'createTransitLine'; line: TransitLine }
+  // Replace an existing line's stops/color (matched by line.id).
+  | { kind: 'updateTransitLine'; line: TransitLine }
+  // Remove the line with this id.
+  | { kind: 'deleteTransitLine'; id: number }
+  // A bus stop on one side of a street tile: a sign, or a shelter (which also
+  // upgrades a sign standing there). Refused on a junction, a motorway, a ramp,
+  // rail, a tram reservation, or a side already holding that kind.
+  | { kind: 'placeStop'; stop: BusStop }
+  // Takes the stop off the tile's side and off every line that named the tile
+  // when no stop remains there.
+  | { kind: 'removeStop'; x: number; z: number; side: 0 | 1 }
+  // ---- Districts & policies ----
+  // Paint `districtId` (0 = erase back to unassigned) onto GridState.district for `tiles`.
+  | { kind: 'paintDistrict'; districtId: number; tiles: TilePoint[] }
+  // Toggle a policy for a district on/off; the sim applies its economy/traffic effect.
+  | { kind: 'setDistrictPolicy'; districtId: number; policy: Policy; on: boolean }
+  // ---- Garbage: landfill area brush ----
+  // Paint (on:true) or erase (on:false) landfill membership onto GridState.landfill
+  // for `tiles`. Collected trash piles up on these tiles; painting more expands capacity.
+  | { kind: 'paintLandfill'; tiles: TilePoint[]; on: boolean }
+  // Power: string (on) or pull down (off) a run of power line. Charged per
+  // tile that actually changes, so dragging back over a run is free.
+  // `lineKind` set means a restore (an undo): the tiles take that byte, and
+  // the run need not start at a source. A new buried cable is the one run that
+  // sets `lineKind: Cable` without `restore`, so it answers to the rules.
+  | {
+      kind: 'stringPowerLine';
+      tiles: TilePoint[];
+      on: boolean;
+      lineKind?: PowerLineKind;
+      restore?: boolean;
+    }
+  // Water: lay (on) or pull up (off) a run of pipe, which carries water and
+  // sewage. Charged per tile that actually changes, like the power line.
+  | { kind: 'layWaterPipe'; tiles: TilePoint[]; on: boolean }
+  // Sandbox mode: when on, every build item is placeable regardless of milestone.
+  | { kind: 'setSandbox'; on: boolean }
+  // Unlimited money (testing): when on, funds/cost gates are ignored so anything
+  // can be built even in the red. Cash flow is still tracked; the HUD shows ∞.
+  | { kind: 'setUnlimitedMoney'; on: boolean };
+
+/**
+ * Worker acknowledges each command batch: actual cost charged, and the
+ * inverse commands that undo the edit (used by the tools undo stack).
+ * Non-edit commands (taxes, funding, loans) return inverse: [].
+ */
+export interface CommandAck {
+  seq: number;
+  ok: boolean;
+  cost: number; // negative = refund
+  inverse: Command[];
+  reason?: string; // when ok === false: 'funds' | 'invalid' | 'locked' | ...
+}
+
+// ---------------------------------------------------------------------------
+// Simulation snapshot (worker -> render/UI), sent at SNAPSHOT_HZ.
+// Deltas only; full state arrives once after init/load as patches.
+// ---------------------------------------------------------------------------
+
+export interface DemandLevels {
+  res: number; // -1..1
+  com: number;
+  ind: number;
+}
+
+export interface CityStats {
+  tick: number;
+  funds: number;
+  monthlyIncome: number;
+  monthlyExpenses: number;
+  /** The month's transit running charge inside `monthlyExpenses`, ¢; absent before the first month settles. */
+  transitRunning?: number;
+  /** The month's bus-shelter advertising income inside `monthlyIncome`, ¢; absent before the first month settles. */
+  advertising?: number;
+  population: number;
+  jobs: number;
+  employed: number;
+  demand: DemandLevels;
+  happiness: number; // 0..100 city average
+  powerSupply: number; // MW
+  powerDemand: number;
+  waterSupply: number; // kL
+  waterDemand: number;
+  /** Sewage the drains take a day, and the sewage the buildings they reach make, kL. */
+  sewerSupply: number;
+  sewerDemand: number;
+  /** Water the intakes would make but for the fouling beside them, kL a day. */
+  waterFouled: number;
+  milestoneLevel: number; // index into MILESTONES
+  milestoneProgress: number; // 0..1 toward next
+  loanBalance: number;
+  taxRates: Record<Sector, number>;
+  serviceFunding: Record<FundingKey, number>;
+}
+
+export const BuildingState = {
+  Constructing: 0,
+  Active: 1,
+  Abandoned: 2,
+} as const;
+export type BuildingState = (typeof BuildingState)[keyof typeof BuildingState];
+
+/** Problem bit-flags on a building instance. */
+export const Problem = {
+  NoPower: 1,
+  NoWater: 2,
+  NoRoad: 4,
+  HighCrime: 8,
+  HighPollution: 16,
+  LowDemand: 32,
+  /** Beside NoPower: the network reaches it, but the supply ran out before it did. */
+  PowerShortage: 64,
+  /** Beside NoWater: the mains reach it, but the supply ran out before it did. */
+  WaterShortage: 128,
+  /** No drain reaches it: its sewage runs in the ditches. Never abandons a building on its own. */
+  NoSewer: 256,
+  /** Beside NoSewer: a drain's network reaches it, but the drains ran out before it did. */
+  SewerShortage: 512,
+  /** Land value clears level 3 and only its schooling is missing. Never abandons a building. */
+  NeedsSchool: 1024,
+} as const;
+
+/**
+ * A parcel turned to its street: a grid lot fronting north, moved and turned.
+ * Local `u` runs along the street from the front-left corner, local `v` runs
+ * into the lot from the kerb line; `toWorld` in lotframe.ts is the one
+ * transform every reader uses.
+ */
+export interface ParcelFrame {
+  /** World metres: the parcel's front-left corner on the kerb line. */
+  x: number;
+  z: number;
+  /** Radians about +Y: the road's direction at the frontage's middle; 0 is +X. */
+  heading: number;
+}
+
+/** A parcel the plat cut along a curved kerb: its frame, the ladder size it took, its rectangle in metres, the tiles it claims and the kerb it was cut on. */
+export interface FramedParcel {
+  frame: ParcelFrame;
+  lot: LotSize;
+  /** Width along the street and depth into the lot, metres. */
+  w: number;
+  d: number;
+  tiles: TilePoint[];
+  /** The road segment whose kerb the parcel fronts. */
+  seg: number;
+  /** Which kerb of it: 1 for the side local v runs to, -1 for the other. */
+  side: 1 | -1;
+  /** Arc length along that kerb where the parcel's frontage begins, metres. */
+  s: number;
+}
+
+/** Consecutive framed parcels on one kerb a wide kind takes as one lot. */
+export interface FramedRun {
+  /** The first parcel's corner, the heading at the run's middle. */
+  frame: ParcelFrame;
+  /** Indices into `Plat.framed`, in kerb order. */
+  parcels: readonly number[];
+  /** Frontage, metres: the parcels' widths summed. */
+  w: number;
+  /** The shallowest parcel's depth, metres. */
+  d: number;
+  /** The union of the parcels' claims. */
+  tiles: TilePoint[];
+}
+
+export interface BuildingInstance {
+  id: number; // stable, never reused within a session
+  catalogId: string;
+  x: number; // origin tile (min-x/min-z corner of footprint)
+  z: number;
+  rotation: 0 | 1 | 2 | 3;
+  level: number; // 1..3 for grown buildings, 1 for ploppables
+  state: BuildingState;
+  problems: number; // Problem bit-flags
+  /** Residents the building has lost and not had replaced, 0..catalog residents; absent is 0 (full). */
+  vacancies?: number;
+  /**
+   * The parcel's frame where the building stands on a curved street; absent
+   * on a grid lot. A framed building has rotation 0, and `x, z` is the min
+   * tile of the tiles its parcel claims.
+   */
+  frame?: ParcelFrame;
+}
+
+export interface BuildingDelta {
+  added: BuildingInstance[];
+  removed: number[]; // ids
+  updated: BuildingInstance[]; // state/level/problems changes
+}
+
+export interface RoadTileDelta {
+  x: number;
+  z: number;
+  tier: RoadTier;
+  mask: number; // neighbor bitmask, see GridState.roadMask
+  elevation: number; // deck height in metres above terrain, 0 = at grade
+  /** The profile id the tile carries (see GridState.roadProfile); 0 when the road was removed. */
+  profile: number;
+  /** Which way the tile runs (see GridState.roadFlow); RoadFlow.None when unset. */
+  flow: number;
+  /**
+   * The road passing over this tile, where one does; absent where none does,
+   * which is also how a lifted overpass is told to the render thread. See
+   * GridState.overTier.
+   */
+  over?: OverRoadState;
+  /** The arms of the tile held apart (see GridState.roadSeparate); absent where none are. */
+  apart?: number;
+}
+
+/** A tile and the arms of its road held apart, as mask bits (see GridState.roadSeparate). */
+export interface TileArms extends TilePoint {
+  arms: number;
+}
+
+/** The road passing over a crossing tile, as the render thread receives it. */
+export interface OverRoadState {
+  tier: RoadTier;
+  profile: number;
+  flow: number;
+  /** Deck height in metres above terrain. */
+  elevation: number;
+  /** Its neighbour mask: it joins only along its own line. */
+  mask: number;
+}
+
+export interface ZonePatch {
+  x: number;
+  z: number;
+  w: number;
+  h: number;
+  data: Uint8Array; // w*h ZoneType values, row-major
+}
+
+/**
+ * Cosmetic vehicle buffer: fixed slot pool, stride VEHICLE_STRIDE.
+ * Layout per slot: [x, z, headingRad, speed, kind]. Inactive slot: x = INACTIVE_VEHICLE_X.
+ * Slots are stable across snapshots so the render thread can interpolate.
+ */
+export const VEHICLE_STRIDE = 5;
+export const MAX_VEHICLES = 1024;
+export const INACTIVE_VEHICLE_X = -1e9;
+/**
+ * Cosmetic vehicle liveries carried in slot field [4]. Values 0..2 are stable
+ * (persisted in nothing, but read by the render vehicle kit — never reorder).
+ * Service dispatch adds Fire/Police/Ambulance: service vehicles ride the SAME
+ * vehicle buffer (SimSnapshot.vehicles) as cars/trucks/buses — no parallel
+ * buffer — distinguished only by these kind values, so the render
+ * VehicleRenderer picks the correct livery. Documented here so the sim + render
+ * sides agree.
+ */
+export const VehicleKind = {
+  Car: 0,
+  Truck: 1,
+  Bus: 2,
+  Fire: 3,
+  Police: 4,
+  Ambulance: 5,
+  Garbage: 6,
+  Recycling: 7,
+  Hearse: 8,
+} as const;
+export type VehicleKind = (typeof VehicleKind)[keyof typeof VehicleKind];
+
+export interface SimSnapshot {
+  stats: CityStats;
+  roads?: RoadTileDelta[];
+  /**
+   * Road composition: the worker's authoritative table of player-composed
+   * profiles (presets are catalogue data and never sent). Full table whenever
+   * it changes and once after init/load, so the mirror can resolve any
+   * profile id a road delta carries.
+   */
+  roadProfiles?: { id: number; profile: RoadProfile }[];
+  /**
+   * The whole road network, encoded as the save holds it, whenever it has
+   * changed and once after init/load: what the render thread reads the roads
+   * off the grid from. Applied after `roadProfiles` and before `roads`.
+   */
+  roadNet?: Uint8Array;
+  buildings?: BuildingDelta;
+  zones?: ZonePatch[];
+  vehicles?: Float32Array; // MAX_VEHICLES * VEHICLE_STRIDE
+  power?: ZonePatch[]; // powered-coverage patches (data: 0/1)
+  watered?: ZonePatch[];
+  /** Drained-coverage patches (data: 0/1), the sewer's `watered`. */
+  sewered?: ZonePatch[];
+  /** The water's fouling (data: 0..255 on water tiles), for the surface's tint. */
+  waterFoul?: ZonePatch[];
+  /** The pipe layer's changed region, like `powerLines`. */
+  waterPipes?: ZonePatch[];
+  /**
+   * terrain updates (worker -> render): regions whose heights changed —
+   * emitted after terraform strokes, after terraformSet restores (undo/redo),
+   * and after loadSave. `heights` is row-major w*h (the same layout as the
+   * terraformSet command); consumed by TerrainRenderer.markDirty.
+   */
+  heightPatches?: { x: number; z: number; w: number; h: number; heights: Float32Array }[];
+  /**
+   * Bus transit: the worker's authoritative line list plus a
+   * per-line statistical ridership figure. `ridership[i]` corresponds to
+   * `lines[i]`. Cosmetic buses ride the existing `vehicles` buffer
+   * (VehicleKind.Bus); this channel drives the transit overlay + line list.
+   * The fleet figures are optional so an older mirror ignores them.
+   */
+  transit?: { lines: TransitLine[]; ridership: number[] } & Partial<TransitFleetSnapshot>;
+  /** Every bus stop with its boardings a day and whether a shelter there is warranted; absent on an older worker. */
+  stops?: BusStopState[];
+  /**
+   * Service dispatch: currently-active incidents (cosmetic —
+   * coverage/economy unchanged). Service vehicles responding to them ride the
+   * existing `vehicles` buffer via VehicleKind.Fire/Police/Ambulance.
+   */
+  incidents?: Incident[];
+  /**
+   * Districts & policies. Mirrors how zones patch: `patches` are
+   * ZonePatch-shaped regions whose `data` bytes are per-tile district ids
+   * (0 = unassigned), row-major, exactly like SimSnapshot.zones. `defs` is the
+   * worker's authoritative district list (id/name/color) so the render overlay
+   * can tint + label and the UI can list districts. Full state arrives once
+   * after init/load; subsequent snapshots send only changed patches.
+   */
+  districts?: { patches: ZonePatch[]; defs: District[] };
+  /**
+   * Garbage & waste. `landfill` patches are ZonePatch-shaped membership regions
+   * (data bytes 0/1, row-major, exactly like SimSnapshot.zones) so the render
+   * side tints landfill tiles; `landfillFill` is the whole painted area's 0..1
+   * fill fraction (render raises every landfill tile's pile mesh ∝ this).
+   * `trash` patches carry per-tile uncollected-trash 0..255 for the 'trash'
+   * lens. `incinerators` reports each incinerator building's fill for the UI.
+   * Additive + all-optional; full state after init/load, then changed patches.
+   */
+  garbage?: {
+    landfill?: ZonePatch[];
+    landfillFill?: number;
+    trash?: ZonePatch[];
+    incinerators?: { id: number; fill: number; capacity: number }[];
+    /** Each kerbside recycling depot's homes served on the last pass against its capacity. */
+    depots?: { id: number; servedHomes: number; capacityHomes: number }[];
+    /**
+     * Each Materials Recovery Facility on the last pass: the units it sorted,
+     * the buildings its round served, the residue it holds, and whether a full
+     * residue store stopped it.
+     */
+    mrfs?: {
+      id: number;
+      sorted: number;
+      servedBuildings: number;
+      residue: number;
+      stopped: boolean;
+    }[];
+    /**
+     * Each transfer station on the last pass: the units it collected and
+     * forwarded, what its tipping floor holds, and whether a full floor
+     * stopped it collecting.
+     */
+    transfers?: {
+      id: number;
+      collected: number;
+      forwarded: number;
+      stored: number;
+      stopped: boolean;
+    }[];
+  };
+  /**
+   * Power lines — ZonePatch-shaped membership regions (data bytes 0/1,
+   * row-major, exactly like SimSnapshot.zones) so the render side can stand
+   * poles and run wire between them. Full state after init/load, then only
+   * the regions that changed.
+   */
+  powerLines?: ZonePatch[];
+  /**
+   * Who gives way at each junction of the street network — every tile where
+   * three or more arms meet, including the ones controlled by nothing. The sim
+   * is the only thing that knows — the warrant reads traffic the render thread
+   * has never seen — so the render draws what it is told rather than working
+   * out a second answer that would disagree, and the junction inspector has
+   * something to open on. `auto` is true where the player has not overridden
+   * the control, in which case `control` is the one the warrant worked out.
+   *
+   * `warranted` is what the warrant makes of the junction either way, so the
+   * inspector can say what handing it back would mean.
+   *
+   * The whole list travels whenever any of it changes, so an empty array means
+   * the street network has no junctions at all and is NOT the same as the
+   * field's absence, which means nothing has changed since the last snapshot.
+   */
+  junctions?: {
+    x: number;
+    z: number;
+    control: JunctionControl;
+    warranted: JunctionControl;
+    auto: boolean;
+    /** Turn restrictions, packed one nibble per arm (src/shared/approach.ts). */
+    turns: number;
+    /**
+     * Per-LANE restrictions: one packed value per arm, in the cardinals' own
+     * order, each holding four lanes at a nibble apiece. Zero is a lane on the
+     * set its approach derives, and so is an absent list.
+     */
+    laneTurns?: number[];
+  }[];
+  /**
+   * Every compact roundabout, by the north-west tile of its block. The whole
+   * list travels whenever any of it changes; absent means nothing has.
+   */
+  roundabouts?: TilePoint[];
+  /**
+   * How hard each service kind is being leaned on (see ServiceLoad): ten
+   * numbers, cheap at the snapshot rate, and the only thing that makes a
+   * capacity readable. Optional: a mirror that does not understand it ignores
+   * it, and it is absent until the first service pass has run.
+   */
+  serviceLoad?: Record<ServiceKind, ServiceLoad>;
+  /**
+   * The load of every park with a capacity, as the last service pass found it,
+   * in id order — what lets a worn lawn be drawn where more people use a park
+   * than it was laid out for. Rides with serviceLoad, and only when some park
+   * is capped. Optional: a mirror that does not understand it ignores it.
+   */
+  parkLoads?: { id: number; load: number }[];
+  /**
+   * Calls in flight over responders, for each kind whose facilities have a
+   * `responders` figure. Optional: a mirror that does not understand it ignores it.
+   */
+  responders?: Partial<Record<ServiceKind, ResponderLoad>>;
+  /**
+   * Open-space provision: the footprint tiles of every Active park, and those
+   * tiles per 1,000 residents — 0 at population 0, never NaN. Derived each
+   * snapshot rather than carried in CityStats, where it would go stale in a
+   * save. Optional: a mirror that does not understand it ignores it.
+   */
+  openSpace?: OpenSpace;
+  /**
+   * How many lots and buildings growth is holding back for want of power and
+   * of water, against what the grid has spare now — the Advisor's word that a
+   * full grid is what stops the city growing. Sent on every snapshot.
+   */
+  growthWaiting?: GrowthWaiting;
+  /**
+   * Empty zoned tiles the road beside them brings no power, or no water where
+   * their zone needs it — land that can never grow and has no building yet to
+   * say so. Sent on every snapshot.
+   */
+  zonedUnserved?: ZonedUnserved;
+  /** Death care: what each cemetery holds, the bodies waiting and the month's regional collection. Sent on every snapshot. */
+  deathCare?: DeathCareReport;
+}
+
+/**
+ * Death care as the Advisor and the panel read it. `facilities` is one entry
+ * per cemetery: interments `used` over `total` plots; `crematoria` is one per
+ * crematorium. `uncollected` is the
+ * bodies still where they fell, `uncollectedAt` the tile of the oldest, and
+ * `regionalThisMonth` the bodies the regional funeral service has taken since
+ * the last settlement.
+ */
+export interface DeathCareReport {
+  facilities: { id: number; used: number; total: number }[];
+  /**
+   * One entry per crematorium, which never fills: the cremations it has done
+   * and the bodies it could take this tick. Absent in a report from before
+   * the crematorium.
+   */
+  crematoria?: { id: number; cremated: number; room: number }[];
+  uncollected: number;
+  uncollectedAt?: TilePoint;
+  regionalThisMonth: number;
+}
+
+/** Lots and buildings growth would build or level up but for the supply. */
+export interface GrowthWaiting {
+  power: number;
+  water: number;
+  sewer: number;
+}
+
+/** Empty zoned tiles beside a road yet without a utility, with the first of each by tile index. */
+export interface ZonedUnserved {
+  power: number;
+  water: number;
+  sewer: number;
+  powerAt?: TilePoint;
+  waterAt?: TilePoint;
+  sewerAt?: TilePoint;
+}
+
+export interface CityNotification {
+  id: number;
+  severity: 'info' | 'warning' | 'critical';
+  title: string;
+  body: string;
+  tick: number;
+}
+
+// ---------------------------------------------------------------------------
+// Worker protocol
+// ---------------------------------------------------------------------------
+
+export type SimSpeed = 0 | 1 | 2 | 4;
+
+export type MainToWorker =
+  | { type: 'init'; seed: number; map: MapData }
+  | { type: 'commands'; seq: number; commands: Command[] }
+  | { type: 'setSpeed'; speed: SimSpeed }
+  /** Dev builds only: holds every construction countdown where it is until released. The worker ignores it in production. */
+  | { type: 'devHoldConstruction'; hold: boolean }
+  | { type: 'requestField'; field: FieldId }
+  | { type: 'requestSave' }
+  | { type: 'loadSave'; data: ArrayBuffer }
+  | { type: 'select'; buildingId: number }
+  | { type: 'clearSelect' };
+
+export type WorkerToMain =
+  | { type: 'ready' }
+  | { type: 'ack'; ack: CommandAck }
+  | { type: 'snapshot'; snap: SimSnapshot }
+  | { type: 'field'; field: FieldId; data: Uint8Array }
+  | { type: 'save'; data: ArrayBuffer }
+  | { type: 'notify'; note: CityNotification }
+  | { type: 'selection'; info: SelectionInfo | null };
+
+// ---------------------------------------------------------------------------
+// Building catalog & road specs (data-driven, src/data/*.json)
+// ---------------------------------------------------------------------------
+
+export interface ServiceSpec {
+  kind: ServiceKind;
+  strength: number; // 0..255 effect written into its field at the source
+  range: number; // road-network BFS distance in tiles
+  /**
+   * People this facility can serve. Optional, and absent means UNCAPPED — not
+   * capacity zero: nobody queues for a park, and a save written before any
+   * entry carried a figure has to keep playing as it did.
+   */
+  capacity?: number;
+  /**
+   * The incidents this facility can have in flight at once: a fire station's
+   * engine company, a police station's cars on duty. Absent means unlimited,
+   * so a kind that never carried a figure answers as it always did.
+   */
+  responders?: number;
+}
+
+/**
+ * How many of a service kind's responders are out on calls, over how many its
+ * Active facilities offer. Apart from ServiceLoad on purpose: that counts the
+ * people who depend on a service, this counts the calls it can run at once.
+ */
+export interface ResponderLoad {
+  inFlight: number;
+  total: number;
+}
+
+/**
+ * How hard a service kind is being leaned on. `load` is the city aggregate —
+ * the people in reach of its capped facilities divided by the capacity they
+ * offer — and `worst` is the highest load over any tile that holds residents.
+ * Both, because a city can sit at 95% overall with one district at 240%: the
+ * aggregate answers "have I bought enough", the worst answers "is one district
+ * starved", and neither answers the other. Tiles supplied only by uncapped
+ * facilities are in neither figure.
+ *
+ * `capped` is how many capped facilities of the kind contributed this tick,
+ * and it is what tells a zero load from no load at all: both read `load: 0`,
+ * but a stranded clinic is a mistake to fix and no clinic is a different one,
+ * so a reader that cannot tell them apart hides the first behind the second.
+ */
+export interface ServiceLoad {
+  load: number;
+  worst: number;
+  capped: number;
+}
+
+/** Park tiles the city holds, and how many it holds per 1,000 residents. */
+export interface OpenSpace {
+  tiles: number;
+  perThousand: number;
+}
+
+export interface UtilitySpec {
+  /**
+   * A substation: makes no power and limits none, but passes the supply its
+   * street or line brings on to the streets and lines that touch it.
+   */
+  substation?: boolean;
+  /** Nameplate generation, MW: what the plant is rated for. */
+  powerMW?: number;
+  /**
+   * The share of the nameplate a plant of this kind actually delivers over
+   * a year, 0..1: absent means 1. The grid counts powerMW × capacityFactor.
+   */
+  capacityFactor?: number;
+  waterKL?: number; // produced
+  /** Sewage taken a day, kL: what a drain pipe carries off. */
+  sewerKL?: number;
+  /**
+   * The share of the sewage's load that reaches the water: absent means 1,
+   * a raw outfall; a treatment works carries what its effluent still holds.
+   */
+  effluent?: number;
+}
+
+/**
+ * Garbage facility descriptor (incinerator ploppable). `collectionRange` is the
+ * road-BFS tile radius it services; `bufferCapacity` is how much trash it can
+ * hold; `burnRate` is trash burned per collection tick (0 = pure store); it
+ * emits Pollution ∝ burn. `trucks` is the cosmetic garbage-truck count.
+ * `servesHomes` marks a kerbside recycling depot: the homes it serves in all,
+ * with no buffer and no burn (both 0) — it never disposes of anything.
+ * `sortRate` marks a Materials Recovery Facility: the recycling units it sorts
+ * a pass, with `bufferCapacity` its residue store and no burn.
+ * `transferRate` marks a transfer station: the units it collects and forwards a
+ * pass, with `bufferCapacity` its tipping floor and no burn.
+ */
+export interface GarbageSpec {
+  collectionRange: number;
+  bufferCapacity: number;
+  burnRate: number;
+  trucks: number;
+  servesHomes?: number;
+  sortRate?: number;
+  transferRate?: number;
+}
+
+/**
+ * Death-care facility descriptor (cemetery, crematorium). `collectionRange` is
+ * the road-BFS tile radius it collects bodies within; a burial facility holds
+ * `plots` interments before it is full, a cremation one has `rate`
+ * cremations a tick and never fills; `hearses` is the cosmetic fleet.
+ */
+export interface DeathCareSpec {
+  mode: 'burial' | 'cremation';
+  collectionRange: number;
+  plots?: number;
+  rate?: number;
+  hearses: number;
+}
+
+// 'transit' is additive — the bus-stop ploppable's category and the Transit
+// dock category. Existing members unchanged.
+export type BuildingCategory = 'res' | 'com' | 'ind' | 'service' | 'utility' | 'park' | 'transit';
+
+/** What a farm grows, which the soil under its lot decides. */
+export type FarmKind = 'crops' | 'orchard' | 'pasture';
+
+/** The kinds of home a residential zone grows: house-scale, then blocks. */
+export type ResidentialKind =
+  | 'detached'
+  | 'duplex'
+  | 'fourplex'
+  | 'townhouse'
+  | 'multiplex'
+  | 'garden'
+  | 'midrise'
+  | 'tower'
+  | 'mixed';
+
+/** The kinds of business a commercial zone grows: shop formats, then offices and hotels. */
+export type CommercialKind =
+  'shop' | 'strip' | 'supermarket' | 'restaurant' | 'fuel' | 'office' | 'hotel';
+
+/**
+ * The kinds of works an industrial zone grows: light industry by what the
+ * building does, then the heavy plants of the Heavy Industrial zone by the
+ * industry they belong to.
+ */
+export type IndustrialKind =
+  'workshop' | 'warehouse' | 'factory' | 'flex' | 'foodplant' | 'chemical' | 'metals' | 'paper';
+
+/**
+ * What a zoned building IS. A lot draws one of its zone's kinds when it grows
+ * and keeps it through every level-up, so each kind has its own three levels.
+ */
+export type BuildingKind = FarmKind | ResidentialKind | CommercialKind | IndustrialKind;
+
+/** The parcel a detached house is platted on, set by the land's standing. */
+export type LotSize = 'half' | 'normal' | 'double' | 'estate' | 'acre';
+
+export interface BuildingCatalogEntry {
+  id: string;
+  name: string;
+  category: BuildingCategory;
+  /** Set for zone-grown buildings; undefined for ploppables. */
+  zone?: ZoneType;
+  level?: number; // 1..3, for grown buildings
+  /** Set for every zone-grown entry: which kind of building it is. */
+  kind?: BuildingKind;
+  /** A detached house's lot: its three levels share one footprint, since a lot is platted once. */
+  lot?: LotSize;
+  /** Homes in the building: residential and mixed entries, and 1 on a farm. */
+  units?: number;
+  /** The kind's weight in the lot draw among the kinds that fit, on its level-1 entry. */
+  share?: number;
+  footprint: { w: number; d: number }; // tiles
+  /**
+   * The footprint the body and its floor are sized on, for an entry that
+   * stands the kind's building on a larger lot to hold the car park its code
+   * asks for: one of the footprints growth chooses among for that kind and
+   * level, never drawn for on its own. Absent, the body is sized on `footprint`.
+   */
+  bodyFootprint?: { w: number; d: number };
+  height: number; // meters, for the box mesh
+  color: number; // hex, flat color until stage-2 facade atlases
+  residents?: number;
+  jobs?: number;
+  powerUse: number; // MW
+  waterUse: number; // kL
+  pollution?: number; // 0..255 emitted at source into Pollution field
+  noise?: number; // 0..255 emitted at source into Noise field, same pattern as pollution
+  landValueBonus?: number; // 0..255 emitted into LandValue field
+  service?: ServiceSpec;
+  utility?: UtilitySpec;
+  garbage?: GarbageSpec; // set for the incinerator, recycling depot and recovery facility ploppables
+  deathCare?: DeathCareSpec; // set for the cemetery and crematorium ploppables
+  cost: number; // 0 for grown buildings
+  upkeep: number; // per month
+  unlockMilestone: number; // MILESTONES index required
+  /**
+   * A transport tier this building's footprint must touch to be placed at all.
+   * Absent for everything that goes anywhere buildable, which is every
+   * ploppable to date — a utility "needs a road" only in the sense that the
+   * road carries its power, not as a placement gate. `'rail'` is the first real
+   * one: a station off the track is not a station, it is a shed. `'water'` is
+   * the second: an intake or an outfall stands on a shore, touching the water
+   * it draws from or empties into. `'tram'` is the third: a tram depot stands
+   * on the tram track, judged by the tier the tram graph is built from.
+   */
+  requiresAdjacent?: 'rail' | 'water' | 'tram';
+  /**
+   * Stands off the street, reached by a power line or a pipe instead. Every
+   * other placed building has to touch a street.
+   */
+  offStreet?: true;
+  /**
+   * A transit depot: the vehicles it holds, in buses or in tram or train sets,
+   * for the one mode it serves. A fifth are spares, so it fields the rest onto
+   * that mode's lines, and only while it is built, powered and touching the
+   * network the mode runs on.
+   */
+  depot?: { mode: TransitMode; fleet: number };
+  /**
+   * The clear tiles this entry keeps between its footprint and the footprint
+   * of another building of the same entry, every direction. A wind turbine
+   * keeps its rotor out of its neighbour's: three tiles, so centres stand
+   * 80 m apart against a 61 m rotor. Absent for everything that may stand
+   * wall to wall with its own kind.
+   */
+  spacing?: number;
+  /**
+   * How the ground under this entry is treated at placement. Absent or
+   * `'level'` flattens the footprint to one height, as every building needs;
+   * `'drape'` leaves the terrain as it lies, for a park whose lawn and paths
+   * follow the hillside they are laid on. Catalog data, never saved.
+   */
+  ground?: 'level' | 'drape';
+}
+
+// ---------------------------------------------------------------------------
+// Road composition: a road is a CLASS (what it is for), a PROFILE (its
+// cross-section as an ordered list of lane pieces) and its junctions. Every
+// tier in roads.json is a preset profile; the scalar fields on RoadSpec are the
+// contract the profile must reproduce, so nothing built so far changes shape.
+// ---------------------------------------------------------------------------
+
+/** Functional class — the real road hierarchy, plus the two rail carriers. */
+export type RoadClassId =
+  | 'dirt'
+  | 'alley'
+  | 'rural'
+  | 'local'
+  | 'urban'
+  | 'collector'
+  | 'arterial'
+  | 'divided'
+  | 'oneWay'
+  | 'highway'
+  | 'ramp'
+  | 'rail';
+
+/** What a lane piece is. `travel` carries cars; the transit pieces carry people. */
+export type LanePieceKind =
+  | 'travel'
+  | 'centreTurn'
+  | 'parking'
+  | 'bike'
+  | 'bus'
+  | 'tram'
+  | 'rail'
+  | 'median'
+  | 'barrier'
+  | 'shoulder'
+  | 'sidewalk'
+  | 'verge'
+  | 'soundWall';
+
+/** Which way a piece flows, relative to the tile's stored flow direction. */
+export type LaneFlow = 'fwd' | 'back' | 'both';
+
+/**
+ * How a parking lane parks its cars: along the kerb, at 60° backed in, or at
+ * 90° nose to the kerb.
+ */
+export type ParkingStyle = 'parallel' | 'angled' | 'headIn';
+
+export interface LanePiece {
+  kind: LanePieceKind;
+  /** Metres across the tile. */
+  width: number;
+  /** Travel/bus/bike/tram pieces only; omitted means `both` for a shared piece. */
+  flow?: LaneFlow;
+  /** A parking piece's style; omitted means `parallel`. */
+  parking?: ParkingStyle;
+  /** A travel lane with tram rails embedded in it, so cars and trams share the piece. */
+  tram?: boolean;
+  /** A sound wall's height, metres, from the road it stands beside. */
+  height?: number;
+  /**
+   * The turn bay a junction's approach gains. Only ever set on a cross-section
+   * derived for drawing, never on a stored profile.
+   */
+  bay?: boolean;
+}
+
+export interface RoadProfile {
+  class: RoadClassId;
+  /** Posted speed, km/h, within the class's range. Omitted = the class default. */
+  postedKmh?: number;
+  /** Kerb to kerb, in order. Sidewalks and verges are pieces too; what is left of the tile is verge. */
+  pieces: LanePiece[];
+  /** Raised kerbs on the unconnected sides. Omitted = true when the profile has a sidewalk piece. */
+  kerbs?: boolean;
+  /**
+   * On one tile of a corridor that nothing divides — a motorway, or an
+   * undivided arterial or one-way street laid across two tiles: the edge of
+   * this half, toward the low offsets or the high, where the carriageway runs
+   * on onto the other tile, and the piece that lies against it on the other
+   * tile (null where the middle of the road falls inside a piece). Only ever
+   * set on a cross-section derived for drawing, never on a stored profile.
+   */
+  seam?: { side: -1 | 1; across: LanePiece | null };
+}
+
+export interface RoadClassSpec {
+  id: RoadClassId;
+  name: string;
+  /** Posted speed range and default, km/h. The sim speed is km/h ÷ 3.6. */
+  postedKmh: { min: number; max: number; default: number };
+  /**
+   * Per-lane throughput before the calibration constant: either a share of
+   * the 1,900 veh/h/lane saturation flow (signalised or interrupted flow) or a
+   * free-flow figure in veh/h (motorway, ramp, unpaved).
+   */
+  laneFlow: { greenRatio: number } | { vehPerHour: number };
+  zonable: boolean;
+  /** Carries water/sewage along the road graph (every class but highway and ramp). */
+  carriesWater: boolean;
+  surface: 'paved' | 'gravel' | 'ballast';
+  /**
+   * Radius the kerb turns through where this class meets another, metres.
+   *
+   * A design figure, not a leftover: it is what decides how sharply a driver
+   * has to turn and how far a pedestrian has to walk round the corner, so it
+   * belongs to the class rather than to whatever tile happens to be spare
+   * beside the carriageway. Zero for a class with no kerbs to return.
+   */
+  kerbReturnM: number;
+  /** Lane pieces the class admits. */
+  admits: LanePieceKind[];
+  /** Travel-lane range, both directions summed. */
+  lanes: { min: number; max: number };
+}
+
+export interface RoadSpec {
+  tier: RoadTier;
+  name: string;
+  /** How the road is laid, in the player's words, shown on its card where present. */
+  description?: string;
+  costPerTile: number;
+  upkeepPerTile: number;
+  speed: number; // m/s along edges
+  capacity: number; // vehicles/day before congestion
+  unlockMilestone: number;
+  /** The cross-section this tier is a preset of. Its derived speed, capacity and width must reproduce the scalars above. */
+  profile?: RoadProfile;
+  // -- additive road fields (all optional; omission = default) --
+  /** Noise-field emission multiplier by tier: gravel 2×, highway 3×. Default 1. */
+  noiseMult?: number;
+  /** Directed edges — traffic and pathfinding follow the drag direction only. Default false (bidirectional). */
+  oneWay?: boolean;
+  /** road-carried utilities: carries water/sewage pipes along the road graph. Default true — highways set false (power/street lighting only). */
+  carriesWater?: boolean;
+  /** Pavement surface for render/audio treatment: unpaved gravel gets no paint or curbs. Default 'paved'. */
+  surface?: 'paved' | 'gravel';
+  /**
+   * Cars may park along this road's kerb. Default false: a through-route, a
+   * reserved lane and a railway all have better uses for their edge than
+   * storage, so a tier earns kerbside parking explicitly rather than by
+   * omission.
+   */
+  roadsideParking?: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Road network graph (built from the grid)
+// Implemented in src/world/roads.ts
+// ---------------------------------------------------------------------------
+
+/**
+ * Who has right of way where roads meet, least restrictive first. The first
+ * five are the ladder a traffic engineer climbs — no control, then yield on
+ * the minor road, then stop on the minor road, then stop on every approach,
+ * then a signal. A roundabout is not on that ladder: it is a change of
+ * geometry, chosen rather than warranted.
+ */
+export type JunctionControl = 'none' | 'yield' | 'stop' | 'allWayStop' | 'signal' | 'roundabout';
+
+/**
+ * What the player has said about one junction tile: its control override, or
+ * null where the warrant decides, its turn restrictions packed a nibble per
+ * arm, and its lanes', one packed value per arm in the cardinals' order.
+ */
+export interface RoundaboutJunction {
+  control: JunctionControl | null;
+  turns: number;
+  laneTurns: number[];
+}
+
+export interface GraphNode {
+  id: number;
+  x: number;
+  z: number;
+  edges: number[]; // edge ids
+  /**
+   * Who gives way here: the player's choice where they made one, else the
+   * warrant's. Absent on a graph whose controls have not been worked out yet,
+   * which costs and signs exactly what it always did.
+   */
+  control?: JunctionControl;
+  /**
+   * What the warrant makes of this junction, whether or not the player has
+   * overridden it — so the inspector can say what "automatic" would mean here
+   * without having to work the warrant out a second time.
+   */
+  warranted?: JunctionControl;
+  /**
+   * Turn restrictions here, packed one nibble per arm (see
+   * src/shared/approach.ts). Zero, or absent, restricts nothing.
+   */
+  turns?: number;
+  /**
+   * Per-LANE turn restrictions, four arms of four lanes, each a nibble (see
+   * src/shared/approach.ts). Absent, or all zero, leaves every lane on the set
+   * the approach derives for it.
+   */
+  laneTurns?: readonly number[];
+  /** A corner of a compact roundabout, where its ring meets its legs. */
+  ring?: boolean;
+}
+
+export interface GraphEdge {
+  id: number;
+  a: number; // node id
+  b: number;
+  tier: RoadTier;
+  tiles: TilePoint[]; // the road tiles this edge covers, in order a->b
+  /**
+   * The line a vehicle drives along the run, world metres, a->b: each grid
+   * tile's centre, and a road off the grid's centre line. Absent on a graph
+   * that does not know its roads' shape, whose runs are its tile centres.
+   */
+  route?: { x: number; z: number }[];
+  length: number; // tiles
+  volume: number; // vehicles assigned this cycle (traffic writes, decays)
+  /**
+   * Which way the run says it was drawn: true when its stored flow points from
+   * node a to node b, false when it points the other way. Absent when no tile
+   * of the run recorded a direction, which is what a road laid before there
+   * was one looks like — its reader falls back to the geometry it always used.
+   */
+  forwardAtoB?: boolean;
+  /**
+   * Travel lanes serving each direction of the run — `lanesAtoB` those going
+   * from node a to node b. Absent when the run is the same both ways, which
+   * every road was until a profile could say otherwise, and which costs the
+   * edge exactly what it always cost.
+   */
+  lanesAtoB?: number;
+  lanesBtoA?: number;
+  /**
+   * The functional class of the run. What the junction warrant reads to decide
+   * which road at a node is the minor one. Absent on a graph built before the
+   * run's cross-section could be resolved, which reads as the tier's preset.
+   */
+  classId?: RoadClassId;
+  /** Travel lanes on the run, both directions summed. */
+  lanes?: number;
+  /**
+   * Whether the run's cross-section can find the width for a turn pocket on
+   * the half that approaches each end — `pocketAtoB` for the traffic arriving
+   * at node b. Whether it actually has one there is the junction's business:
+   * a pocket is only warranted where the control holds the traffic.
+   */
+  pocketAtoB?: boolean;
+  pocketBtoA?: boolean;
+  /**
+   * The capacity of the narrower road this run drops into at each end, when it
+   * drops into one — `narrowsAtB` for the traffic heading toward node b. A
+   * pipe is only as wide as its narrowest part, so this caps what the run can
+   * carry in that direction and makes a hard four-to-one drop a chokepoint
+   * rather than a free merge. Absent at an end where the road does not narrow.
+   */
+  narrowsAtA?: number;
+  narrowsAtB?: number;
+  /**
+   * Indices into `tiles` where the run is the road passing OVER a crossing
+   * tile rather than the road on it. Absent on a run that crosses nothing.
+   */
+  overTiles?: number[];
+  /**
+   * A stretch of a compact roundabout's ring: driven one way round, on the
+   * circle, by traffic an entering driver gives way to.
+   */
+  circulating?: boolean;
+}
+
+export interface PathResult {
+  nodes: number[];
+  edges: number[];
+  /** The road tiles along the whole path, in order. */
+  points: TilePoint[];
+  /**
+   * The line a vehicle drives along the whole path, world metres: its edges'
+   * routes joined. Absent when the network does not know its roads' shape;
+   * the tiles' centres are then the line.
+   */
+  route?: { x: number; z: number }[];
+  cost: number;
+}
+
+/**
+ * The line a vehicle drives along a path, world metres: its route, or, from a
+ * network that does not know its roads' shape, its tiles' centres.
+ */
+export function pathRoute(path: PathResult): { x: number; z: number }[] {
+  return path.route ?? path.points.map((p) => ({ x: tileToWorld(p.x), z: tileToWorld(p.z) }));
+}
+
+/**
+ * The road network's public surface. Implemented by src/world/roads.ts;
+ * consumed (as an injected dependency, never a direct import) by traffic
+ * and any other system that routes over roads.
+ */
+export interface RoadNetworkApi {
+  rebuild(grid: GridState): void;
+  /** Mark a tile region dirty; implementation may rebuild lazily. */
+  invalidateRegion(minX: number, minZ: number, maxX: number, maxZ: number): void;
+  nearestNode(x: number, z: number): number | null;
+  /**
+   * `edgeCostMultiplier` (optional) scales each edge's cost on top of the
+   * network's own district/congestion cost — e.g. a small per-trip jitter so
+   * many trips over a grid spread across its equal-cost parallel routes
+   * instead of all collapsing onto one. Omitted -> no change.
+   */
+  findPath(
+    from: TilePoint,
+    to: TilePoint,
+    edgeCostMultiplier?: (edge: GraphEdge) => number,
+  ): PathResult | null;
+  addVolume(edgeIds: number[], amount: number): void;
+  decayVolumes(factor: number): void;
+  getEdges(): readonly GraphEdge[];
+  getNodes(): readonly GraphNode[];
+}
+
+// ---------------------------------------------------------------------------
+// Tools & camera (render-thread side)
+// ---------------------------------------------------------------------------
+
+export type ToolId =
+  | 'select'
+  | 'bulldoze'
+  | 'road.two'
+  | 'road.avenue'
+  | 'road.highway'
+  // Roads catalog expansion: one tool per new tier.
+  | 'road.gravel'
+  | 'road.alley'
+  | 'road.oneway'
+  | 'road.four'
+  // Roads epic R4 — dedicated rail track.
+  | 'road.rail'
+  // Roads epic wave 5 — the slip road onto a motorway.
+  | 'road.ramp'
+  // A whole motorway interchange, stamped onto a motorway already laid.
+  | 'interchange'
+  // A compact roundabout, stamped onto a street junction already laid.
+  | 'roundabout'
+  // Power: string a run of line, to reach what a road cannot.
+  | 'power.line'
+  | 'power.cable'
+  | 'zone.resLow'
+  | 'zone.resHigh'
+  | 'zone.comLow'
+  | 'zone.comHigh'
+  | 'zone.industrial'
+  | 'zone.dezone'
+  // Zoning types expansion: the three appended zone tools.
+  | 'zone.resMediumRow'
+  | 'zone.resMedium'
+  | 'zone.mixed'
+  | 'zone.agriculture'
+  | 'zone.indHeavy'
+  // Water: lay a run of pipe, which carries water and sewage where a street does not.
+  | 'water.pipe'
+  // landscaping: the four real terraform brushes.
+  // Slope is a stretch goal, deliberately not a ToolId yet.
+  | 'terraform.raise'
+  | 'terraform.lower'
+  | 'terraform.level'
+  | 'terraform.smooth'
+  // Bus transit: click stops in sequence, commit the line
+  // (emits createTransitLine). Additive.
+  | 'transit.line'
+  // Rail transit: the same gesture over the track, committing a rail-mode line.
+  | 'transit.rail'
+  // Tram transit: the same gesture over tram track, committing a tram-mode line.
+  | 'transit.tram'
+  // Districts: brush-paint the selected district id onto tiles
+  // (emits paintDistrict). Additive.
+  | 'district.paint'
+  // Garbage: brush-paint the landfill area onto tiles (emits paintLandfill). Additive.
+  | 'landfill.paint'
+  | `plop.${string}`; // ploppable by catalog id, e.g. 'plop.police-station'
+
+export interface CameraState {
+  targetX: number;
+  targetZ: number;
+  distance: number; // meters from target
+  yaw: number; // radians
+  pitch: number; // radians, clamped
+}
+
+/** A committed, undoable player edit (tools layer). */
+export interface ReversibleEdit {
+  label: string;
+  forward: Command[];
+  inverse: Command[];
+  cost: number;
+}
+
+// ---------------------------------------------------------------------------
+// Persistence
+// ---------------------------------------------------------------------------
+
+/**
+ * Version 2 added the trailing GridState.district layer; version 3 a further
+ * trailing GridState.landfill layer (MAP_SIZE² bytes, per-tile landfill
+ * membership 0/1) after it; version 4 a trailing GridState.roadElevation layer
+ * after that; version 5 widened that layer from one byte per tile to a float,
+ * so a deck can hold a height its terrain does not divide into; version 6 the
+ * two-byte GridState.roadProfile layer; version 7 the GridState.roadFlow byte;
+ * version 8 the GridState.junctionControl byte, the control a player set at a
+ * junction; version 9 GridState.junctionTurns; version 10 GridState.powerLine;
+ * version 11 GridState.junctionLaneTurns; version 12 the four over-road layers
+ * (overTier, overProfile, overFlow, overElevation) a crossing tile holds;
+ * version 13 the road network (src/world/roadnet.ts), appended after the
+ * tiles, in place of every road tile layer — tier, mask, deck, profile, flow
+ * and the four over-road layers — which are derived from it on load;
+ * version 14 GridState.waterPipe.
+ *
+ * Migration: src/world/grid.ts deserializeGrid still accepts every older
+ * buffer, defaulting each absent trailing layer to all-zero — so a pre-v4 save
+ * loads with every road at grade, a pre-v7 one with no road recording which
+ * way it was drawn, and a pre-v8 one with every junction on the control its
+ * warrant works out — and widens a v4 elevation byte into the float layer, so
+ * saved bridges keep the height they were built at. A pre-v6 save has no
+ * profile layer, so every road loads as the preset its tier names, which is
+ * what every road was. serializeGrid always writes the current version. Up to
+ * v12 no layer's byte layout or order changed, so every older buffer is the v12
+ * layout with trailing layers trimmed; v13 is the v12 layout without its road
+ * layers, and a pre-v13 save's roads convert to a network on load; v14 is v13
+ * with the pipe layer appended to the tiles, which a v13 save loads empty; v15
+ * is the v14 byte layout, the version whose landfill fill is counted in 0.25 kg
+ * trash units (older saves counted a tile as 600), rescaled on load; v16
+ * appends the middle, high and college education planes after the pipe layer,
+ * which an older save loads zero; v17 is the v16 byte layout, the version
+ * whose building registry may carry a parcel frame, which a build without
+ * frames would stand on the grid wrongly; v18 is the v16 byte layout, the
+ * version whose powerLine byte may be 2 (a line laid from a source), which a
+ * build that reads only 1 would not draw or conduct; v19 is the v16 byte
+ * layout, the version whose powerLine byte may be 3 (a buried cable), which a
+ * build that reads only 1 and 2 would not conduct.
+ */
+export const SAVE_VERSION = 19;
+/** The first save version whose landfill fill is in 0.25 kg trash units. */
+export const TRASH_UNIT_SAVE_VERSION = 15;
+
+export interface SaveHeader {
+  version: number;
+  seed: number;
+  tick: number;
+  mapName: string;
+  savedAt: number; // epoch ms, stamped by the main thread
+  /** City stats at save time, for the load-browser rows. Optional: saves
+   * written before this field existed simply omit it. */
+  population?: number;
+  funds?: number;
+}
+
+// ---------------------------------------------------------------------------
+// Selection protocol, tool options, cursor chips, infoview lenses.
+// Additive contracts only.
+// ---------------------------------------------------------------------------
+
+/**
+ * Building-selection payload for the info panel. The worker
+ * computes it in response to MainToWorker 'select' and pushes it as
+ * WorkerToMain 'selection'; while a selection is held it re-pushes whenever
+ * the values change. 'clearSelect' (or the building's demolition — the worker
+ * then sends info: null) ends the stream.
+ */
+export interface SelectionInfo {
+  building: BuildingInstance;
+  /** 0..100 — Happiness field sampled at the building's origin tile. */
+  happiness: number;
+  /**
+   * ¢/month this building contributes: occupants × tax rate × land-value
+   * factor — the same formula the economy uses. 0 for ploppables.
+   */
+  monthlyTax: number;
+  /** ¢/month — the catalog upkeep charge. 0 for grown buildings. */
+  monthlyUpkeep: number;
+  /**
+   * Category-dependent occupancy rows: residential fills
+   * residents + households (capacity = ceil(catalog residents / 4)); com/ind
+   * fill jobs; services & utilities leave all fields unset.
+   */
+  occupancy: {
+    residents?: number;
+    households?: { occupied: number; capacity: number };
+    jobs?: number;
+  };
+  /**
+   * This facility's own load — the people in its reach over the capacity it
+   * offers them. The panel's gauge is per kind; a player looking at one
+   * building wants that building's figure, and the held selection is already
+   * recomputed every snapshot, so it costs nothing when nothing is selected.
+   * Absent for anything that is not a capped facility with a reach.
+   */
+  serviceLoad?: number;
+  /**
+   * A cemetery's interments over its plots, or the cremations a crematorium
+   * has done. Absent for anything that is not a death-care facility.
+   */
+  deathCare?: { used: number; total: number } | { cremated: number };
+  /**
+   * An intake's yield as a fraction of its rating, 0..1: what the fouling of
+   * the water beside it leaves. Absent for anything but a shore intake.
+   */
+  intakeYield?: number;
+  /**
+   * The schools a building held at level 2 by its schooling still lacks, as the
+   * facility kinds that would answer it. Absent for any building not carrying
+   * `Problem.NeedsSchool`.
+   */
+  missingSchools?: ServiceKind[];
+  /**
+   * A depot's fleet: the vehicles it holds, the ones it fields (its holding
+   * less the spare fifth), and how many of those are out on a line this tick.
+   * Absent for anything that is not a depot.
+   */
+  depot?: { holds: number; fields: number; inService: number };
+}
+
+/**
+ * Live tool-behavior flags, set from the tool-options panel via
+ * the UI store and consumed by ToolManager. Rule zero: only flags that flip
+ * real behavior belong here.
+ */
+export interface ToolFlags {
+  /** `90° lock` snapping chip — restrict the road L-path to a single leg. */
+  angleLock: boolean;
+  /** `Straight` tool mode — direct single-axis segment instead of L-path. */
+  straightMode: boolean;
+  /**
+   * `Grid` tool mode — a drag lays the street grid its rectangle encloses,
+   * perimeter plus the internal streets that divide the block, instead of a
+   * single run.
+   */
+  gridMode: boolean;
+  /**
+   * `Curve` tool mode — a road off the grid laid in three clicks: its start,
+   * the bend both ends aim at, and its end. Optional so a flag set written
+   * before it existed reads as off.
+   */
+  curveMode?: boolean;
+  /**
+   * `Guide` snapping chip — a drag that is nearly in line with an existing
+   * road is pulled into line with it, so a new street continues one rather
+   * than running a tile off it.
+   */
+  guideSnap: boolean;
+  /**
+   * `Roads` snapping chip — a new road snaps onto the roads it reaches and
+   * joins them. Off, nothing snaps and a grid road is laid as a road of its
+   * own, joining nothing it only lies beside or ends against.
+   */
+  roadSnap: boolean;
+  /**
+   * `Replace` road mode — a drag lays its road over an existing run whatever
+   * that run is, instead of refusing to put a smaller road over a bigger one.
+   */
+  replaceRoad: boolean;
+}
+
+/**
+ * Payload for the DOM cursor chip stack: tools publish one per
+ * pointer move while previewing; the DOM layer renders it offset 24px right
+ * of the cursor.
+ */
+export interface CursorChip {
+  /** Live cost of the previewed edit, ¢. */
+  cost: number;
+  /** Road tools only: path tiles × TILE_METERS, or a curve's centre-line length. */
+  lengthMeters?: number;
+  /** A curve's tightest radius along its centre line, metres. */
+  radiusMeters?: number;
+  /**
+   * Orange line beneath the cost when the preview is invalid, e.g.
+   * "Overlapping items" | "Insufficient funds" | "Locked".
+   */
+  invalidReason?: string;
+  /** A plain line beneath the cost: what a pipe run joins, say. */
+  note?: string;
+}
+
+/**
+ * Infoview lens union: every scalar field plus the worker's power/watered
+ * coverage channels (SimSnapshot.power/.watered). The UI store's overlay slot
+ * is `LensId | null`.
+ *
+ * 'transit' (bus ridership overlay) and 'districts' (district tint overlay) are
+ * additive — existing members unchanged. 'soil' is the farming grade of the
+ * ground, which the render thread works out from its own mirror.
+ */
+export type LensId =
+  FieldId | 'power' | 'watered' | 'sewered' | 'transit' | 'districts' | 'trash' | 'soil';
+
+// ---------------------------------------------------------------------------
+// Landscaping & water. Additive contracts only.
+// ---------------------------------------------------------------------------
+
+/**
+ * Terrain-brush parameters, set from the tool-options panel ("Brush radius" /
+ * "Strength" rows) via the UI store and consumed by the
+ * terraform tools. radius is in tiles, TERRAFORM_BRUSH_MIN..TERRAFORM_BRUSH_MAX;
+ * strength is TERRAFORM_STRENGTH_MIN..TERRAFORM_STRENGTH_MAX.
+ */
+export interface BrushSettings {
+  radius: number;
+  strength: number;
+}
+
+// ---------------------------------------------------------------------------
+// Epic systems (transit / dispatch / districts / stats). Additive contracts
+// only. The sim/render/ui modules code against these; they live here so the
+// epics build in parallel without touching this file. Referenced above by
+// Command and SimSnapshot (TS resolves type references regardless of order).
+// ---------------------------------------------------------------------------
+
+/**
+ * Bus transit — a player-built bus line over the existing road
+ * graph. `stops` is the ordered stop list (TilePoints on/adjacent to roads);
+ * the sim routes stop→stop with the road pathfinder. `color` is a packed hex
+ * RGB (same convention as BuildingCatalogEntry.color / District.color) used for
+ * the route ribbon + line list. `id` is worker-assigned and stable per session.
+ */
+/** Which network carries a transit line: the streets, or the track. */
+export type TransitMode = 'bus' | 'rail' | 'tram';
+
+/** A bus stop: road furniture on one side of a street tile, never a building on a tile of its own. */
+export interface BusStop {
+  x: number;
+  z: number;
+  /** Which side of the tile's road axis, 0 the low side, 1 the high side (the parking lane's own convention). */
+  side: 0 | 1;
+  kind: 'sign' | 'shelter';
+}
+
+/** A stop as the snapshot reports it: the stop, its boardings a day summed over the lines calling, and the shelter warrant. */
+export interface BusStopState extends BusStop {
+  boardingsPerDay: number;
+  warranted: boolean;
+}
+
+/** Boardings a day at which a shelter is warranted and its ad panel sells. */
+export const SHELTER_WARRANT_BOARDINGS = 25;
+
+/** What a warranted shelter's ad panel earns the city a month, ¢. */
+export const SHELTER_AD_INCOME = 7;
+
+export interface TransitLine {
+  id: number;
+  /** Street tiles each holding a bus stop (bus), or stop points on the track (rail, tram). */
+  stops: TilePoint[];
+  color: number; // packed hex RGB
+  /**
+   * Absent means 'bus', so every line and command written before rail existed
+   * still means what it did. The mode picks which network routes the line and
+   * which vehicle draws it; stops, colour and id are shared.
+   */
+  mode?: TransitMode;
+  /**
+   * The vehicles the player asked the line to run. Absent means the derived
+   * default: the larger of the fleet that holds a ten-minute headway and the
+   * fleet that carries the peak hour. What the line actually runs is the
+   * depots' allocation, never this figure.
+   */
+  vehicles?: number;
+}
+
+/** What the fleet pools and the lines' service add to the transit snapshot. */
+export interface TransitFleetSnapshot {
+  /** Vehicles each line runs this tick, index-aligned with `lines`; 0 where no depot fields it. */
+  served: number[];
+  /** Vehicles each line asked for, player-set or derived. */
+  requested: number[];
+  /** Minutes between vehicles on each line; 0 where none runs. */
+  headwayMin: number[];
+  /** Each line's running charge for the month, ¢, over the vehicles it runs. */
+  runningCost: number[];
+  /** Vehicles fielded per mode by the connected depots, before allocation. */
+  pools: Record<TransitMode, number>;
+  /** The building id of the depot fielding most of each line, null where none does; absent from an older worker. */
+  depotId?: (number | null)[];
+  /**
+   * Every connected depot's fleet: what it holds and what has left it for the
+   * lines, so the renderer parks the rest on its apron. A depot not listed
+   * (unconnected, or an older worker) parks its whole catalog fleet.
+   */
+  depots?: { id: number; holds: number; inService: number }[];
+}
+
+/**
+ * Service dispatch — a transient incident a service vehicle drives
+ * to. Cosmetic: it consumes the existing crime/fire/pollution fields as spawn
+ * inputs but does not alter coverage/economy. `x`/`z` are tile coordinates;
+ * `severity` is 0..1 (drives marker size / service time). The responding
+ * vehicle rides the shared vehicle buffer via VehicleKind.Fire/Police/Ambulance.
+ */
+export interface Incident {
+  kind: 'fire' | 'crime' | 'medical';
+  x: number;
+  z: number;
+  severity: number; // 0..1
+  /**
+   * False when no station has taken the call: it has no vehicle and is waiting
+   * for one in reach to be free. Absent means answered.
+   */
+  answered?: boolean;
+}
+
+/**
+ * Districts & policies — a named region the player paints onto
+ * GridState.district (per-tile id). `id` is 1..255 (0 is reserved for
+ * "unassigned" in the tile layer); `color` is packed hex RGB for the overlay
+ * tint + boundary lines. Per-district policies are applied by the sim.
+ */
+export interface District {
+  id: number; // 1..255 (0 = unassigned in GridState.district)
+  name: string;
+  color: number; // packed hex RGB
+}
+
+/**
+ * Policy set. Each policy toggles a small, explicit sim effect for
+ * tiles in the district it is enabled on:
+ *   lowTax          — tax multiplier < 1 feeding the economy for the district
+ *   highTax         — tax multiplier > 1 feeding the economy for the district
+ *   noHeavyTraffic  — a pathfind cost bump on the district's roads (routes trucks around)
+ *   greenEnergy     — a pollution reduction on the district's tiles
+ * Additive string-union; extend by appending new members.
+ */
+export type Policy = 'lowTax' | 'highTax' | 'noHeavyTraffic' | 'greenEnergy';

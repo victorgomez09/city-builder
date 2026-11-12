@@ -1,0 +1,230 @@
+/**
+ * The city's calibrated material palette: one source of truth for what
+ * concrete, brick, plaster, roofing, asphalt, wood and vegetation actually
+ * look like, measured from the reference chart rather than picked per module.
+ *
+ * The chart's point is headroom. Albedo is what a material reflects, not how
+ * bright it appears — lighting, bloom and tone mapping add the rest — so a
+ * material authored near white leaves the renderer nothing to work with and
+ * blows out the moment a lamp touches it. The brightest thing in the chart is
+ * snow, at 140/142/144; everything else sits below 140.
+ *
+ * Values are sRGB 0..255, the units the chart is in, converted at the point of
+ * use. Vehicle paint is a deliberate exception and lives with the vehicles —
+ * saturated cars are contrast against exactly this desaturated palette.
+ */
+
+/** sRGB 0..255, the units the reference chart is measured in. */
+export type RGB255 = readonly [number, number, number];
+
+/**
+ * Nothing but snow goes above this. Materials authored past it lose the
+ * renderer's lighting headroom and clip under a street lamp.
+ */
+export const MAX_MATERIAL_CHANNEL = 140;
+
+/** Snow is the chart's single brightest material and the only one allowed past 140. */
+export const MAX_SNOW_CHANNEL = 144;
+
+/**
+ * Every measured material in the chart. Named as the chart names them so a
+ * value can be traced back to the swatch it came from.
+ */
+export const MATERIALS = {
+  snow: [140, 142, 144],
+  coal: [23, 23, 23],
+
+  stainedConcrete: [71, 68, 65],
+  cleanConcrete: [91, 91, 88],
+  whiteBrick: [123, 122, 120],
+  stoneBrick: [91, 85, 80],
+  redBrick: [70, 50, 41],
+
+  whitePlaster: [105, 104, 103],
+  bluePlaster: [43, 61, 83],
+  yellowPlaster: [97, 80, 49],
+  redPlaster: [90, 48, 45],
+  greenPlaster: [52, 79, 50],
+
+  rustedMetal: [56, 38, 31],
+  metalPlates: [72, 74, 75],
+
+  brightBitumen: [52, 52, 52],
+  darkBitumen: [34, 34, 36],
+  asbestosRoof: [57, 57, 56],
+  slateRoof: [47, 47, 46],
+  clayRoof: [70, 50, 43],
+
+  sand: [119, 102, 85],
+  mud: [47, 42, 40],
+  dirt: [67, 59, 54],
+
+  darkAsphalt: [37, 36, 36],
+  brightAsphalt: [59, 56, 54],
+
+  darkVegetation: [27, 34, 22],
+  brightVegetation: [46, 53, 33],
+  // Not a chart swatch: the chart's vegetation is foliage, and a garden laid in
+  // it read as a dark rectangle against the grass around it. A mown lawn is the
+  // terrain's fresh grass (82/148/66) at seven tenths — still grass, and still
+  // plainly somebody's.
+  mownLawn: [57, 104, 46],
+  // Not chart swatches either: farm ground. Tilled soil is the chart's dirt
+  // turned over and darkened by moisture; a growing crop is the chart's bright
+  // vegetation lifted to read as a sown field against wild grass; ripe grain
+  // is its yellow plaster warmed; grazed pasture sits between lawn and rough
+  // grass.
+  tilledSoil: [52, 41, 33],
+  cropGreen: [54, 88, 34],
+  ripeGrain: [112, 96, 56],
+  pasture: [62, 94, 42],
+
+  brightestWood: [110, 96, 75],
+  brightWood: [86, 67, 57],
+  darkWood: [56, 46, 40],
+  darkestWood: [38, 33, 31],
+
+  // The commercial kinds' bodies, each derived from a chart swatch so a kind
+  // reads as its material: brick darkened toward wood, plaster warmed to bone,
+  // EIFS as plaster in cream, tan, grey and beige, split-face block as stone
+  // brick greyed, precast as concrete in grey and buff, glass as blue plaster
+  // lifted, a membrane roof in white and grey, a feature wall near coal.
+  brownBrick: [60, 46, 38],
+  paintedMasonry: [112, 108, 100],
+  eifsCream: [128, 120, 104],
+  eifsTan: [118, 104, 84],
+  eifsGrey: [104, 104, 100],
+  eifsBeige: [122, 112, 96],
+  splitFaceGrey: [84, 84, 82],
+  canopyBronze: [48, 40, 32],
+  darkFeatureWall: [40, 40, 42],
+  whiteMembrane: [134, 134, 132],
+  greyMembrane: [88, 88, 88],
+  precastGrey: [98, 98, 96],
+  precastBuff: [118, 110, 94],
+  tintedGlass: [52, 70, 86],
+  curtainWall: [58, 84, 96],
+  spandrelDark: [36, 44, 52],
+  stoneVeneer: [96, 90, 80],
+
+  // The industrial kinds' bodies: ribbed metal panel in the makers' standard
+  // colours (polar white, light stone, ash grey, rustic red, burnished slate,
+  // evergreen, aztec blue), galvanised steel as metal plates lifted, painted
+  // tilt-up in white and grey, block as clean concrete, insulated panel and
+  // aluminium cladding near white, a dike in stained concrete, rack steel,
+  // oxide red and dark panel for the mills, a chip pile as bright wood.
+  ribbedStone: [116, 108, 92],
+  ribbedAsh: [92, 94, 96],
+  ribbedWhite: [130, 130, 128],
+  ribbedRed: [96, 40, 34],
+  ribbedSlate: [56, 58, 60],
+  ribbedGreen: [40, 72, 44],
+  ribbedBlue: [44, 62, 88],
+  galvanised: [104, 108, 110],
+  tiltUpWhite: [132, 131, 128],
+  tiltUpGrey: [108, 108, 106],
+  concreteBlock: [94, 92, 88],
+  insulatedWhite: [130, 131, 132],
+  aluminiumClad: [118, 120, 122],
+  concreteDike: [84, 82, 78],
+  rackSteel: [66, 68, 70],
+  oxideRed: [88, 42, 32],
+  darkPanel: [44, 45, 47],
+  woodChip: [112, 92, 62],
+
+  // Houses: lap siding in the five colours the trade sells most, white at
+  // the ceiling and never above it, blue as the chart's blue plaster lifted
+  // to a medium; laminated asphalt shingle in its four best-selling colours,
+  // charcoal near coal, weathered wood as dark wood greyed, pewter as metal
+  // plates, barkwood as darkest wood warmed.
+  sidingOffWhite: [132, 128, 118],
+  sidingWhite: [138, 138, 136],
+  sidingLightBrown: [112, 96, 78],
+  sidingLightGrey: [112, 112, 110],
+  sidingBlue: [58, 76, 98],
+  shingleCharcoal: [40, 40, 41],
+  shingleWeathered: [66, 58, 50],
+  shinglePewter: [74, 76, 78],
+  shingleBarkwood: [58, 48, 40],
+} as const satisfies Record<string, RGB255>;
+
+export type MaterialName = keyof typeof MATERIALS;
+
+/**
+ * The chart's saturated reference block. A painted accent — a stripe down an
+ * industrial wall, a signage band — is still a surface, so it obeys the same
+ * headroom rule; the chart shows what saturation looks like inside it, peaking
+ * at 102 rather than the 184 an eyedropper on a photo would give you.
+ */
+export const SATURATED = {
+  red: [102, 36, 36],
+  green: [36, 102, 36],
+  blue: [36, 36, 102],
+  cyan: [36, 102, 102],
+  magenta: [102, 36, 102],
+  yellow: [102, 102, 36],
+  // The kits' painted accents: a hotel's navy and green sign bands, a
+  // warehouse's tilt-up colour band in blue and red.
+  navyAccent: [30, 40, 102],
+  greenAccent: [36, 90, 48],
+  tiltBandBlue: [36, 52, 102],
+  tiltBandRed: [102, 40, 36],
+} as const satisfies Record<string, RGB255>;
+
+export type SaturatedName = keyof typeof SATURATED;
+
+export function saturatedUnit(name: SaturatedName): readonly [number, number, number] {
+  return rgb255ToUnit(SATURATED[name]);
+}
+
+/** The chart's neutral ramp, for greys that are not a named material. */
+export const MONOCHROME_RAMP: readonly number[] = [135, 105, 74, 54, 38, 23];
+
+export function material(name: MaterialName): RGB255 {
+  return MATERIALS[name];
+}
+
+export function rgb255ToHex(rgb: RGB255): number {
+  return (
+    ((Math.round(rgb[0]) & 0xff) << 16) |
+    ((Math.round(rgb[1]) & 0xff) << 8) |
+    (Math.round(rgb[2]) & 0xff)
+  );
+}
+
+export function hexToRgb255(hex: number): RGB255 {
+  return [(hex >> 16) & 0xff, (hex >> 8) & 0xff, hex & 0xff];
+}
+
+/** 0..1 floats, the units three.js materials want. */
+export function rgb255ToUnit(rgb: RGB255): readonly [number, number, number] {
+  return [rgb[0] / 255, rgb[1] / 255, rgb[2] / 255];
+}
+
+export function materialHex(name: MaterialName): number {
+  return rgb255ToHex(MATERIALS[name]);
+}
+
+export function materialUnit(name: MaterialName): readonly [number, number, number] {
+  return rgb255ToUnit(MATERIALS[name]);
+}
+
+/**
+ * Brings an over-bright colour into the calibrated range by SCALING all three
+ * channels together, never by clipping them individually. Clipping the one
+ * channel that is over drags the colour toward whichever channels were not,
+ * which shifts its hue — a warm grey clips to a cold one. Scaling keeps the
+ * ratios, so the colour is the same colour, dimmer. Already-legal colours come
+ * back untouched.
+ */
+export function calibrate(rgb: RGB255, ceiling: number = MAX_MATERIAL_CHANNEL): RGB255 {
+  const peak = Math.max(rgb[0], rgb[1], rgb[2]);
+  if (peak <= ceiling || peak <= 0) return rgb;
+  const scale = ceiling / peak;
+  return [rgb[0] * scale, rgb[1] * scale, rgb[2] * scale];
+}
+
+/** calibrate() for the packed-hex colours the renderers pass around. */
+export function calibrateHex(hex: number, ceiling: number = MAX_MATERIAL_CHANNEL): number {
+  return rgb255ToHex(calibrate(hexToRgb255(hex), ceiling));
+}

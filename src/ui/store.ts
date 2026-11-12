@@ -1,0 +1,519 @@
+/**
+ * Central UI state. Pure zustand store — no DOM/three.js here.
+ * The render/worker integration ("main") owns the actual ToolManager, the
+ * UndoStack, and the worker connection; it wires them to this store via
+ * `bindActions` and by calling the setter actions below (applySnapshotStats
+ * on each SimSnapshot, setUndoState after every push/undo/redo, etc).
+ */
+import { create } from 'zustand';
+import {
+  BRIDGE_MAX_ELEVATION,
+  DEFAULT_TAX_RATE,
+  SERVICE_FUNDING_MAX,
+  SERVICE_FUNDING_MIN,
+  START_FUNDS,
+  TICKS_PER_MONTH,
+} from '../shared/constants';
+import { RoadTier } from '../shared/types';
+import type {
+  BrushSettings,
+  BuildingInstance,
+  BusStopState,
+  CityNotification,
+  CityStats,
+  Command,
+  District,
+  FundingKey,
+  JunctionControl,
+  LensId,
+  OpenSpace,
+  RoadFlow,
+  Policy,
+  SelectionInfo,
+  ServiceKind,
+  ResponderLoad,
+  ServiceLoad,
+  SimSpeed,
+  ToolFlags,
+  ToolId,
+  TransitFleetSnapshot,
+  TransitLine,
+} from '../shared/types';
+import { DEFAULT_BRUSH_SETTINGS, type InterchangeOptions } from '../tools/tools';
+import { NO_EDITS, type ProfileEdits } from '../shared/roadprofile';
+import type { StatsSample } from './statshistory';
+import type { CityIssue } from './advisor';
+import { type GameSettings, loadSettings, saveSettings } from '../app/session';
+
+const MAX_NOTIFICATIONS = 50;
+
+/** Live cost/validity readout for the tool currently being hovered/dragged. */
+export interface PreviewInfo {
+  cost: number;
+  label: string;
+  valid: boolean;
+}
+
+/**
+ * Imperative dispatch bridge from UI event handlers into the integration
+ * layer that owns the worker connection and the UndoStack. Supplied once via
+ * `bindActions`; until then, calls through it (e.g. `setSpeed`) are no-ops.
+ */
+export interface BoundActions {
+  sendCommands: (label: string, commands: Command[]) => void;
+  undo: () => void;
+  redo: () => void;
+  setSpeed: (speed: SimSpeed) => void;
+  /** Photo mode: toggles the render-thread PhotoModeController + camera. */
+  togglePhoto: () => void;
+  /** Saves the current game (in-game menu "Save Game"); no-op with no worker. */
+  saveGame: () => void;
+  /** Applies side effects of a settings change (e.g. sandbox → worker command). Persistence itself is handled by the store. */
+  onSettings: (patch: Partial<GameSettings>) => void;
+  /** Moves the camera to a tile — the advisor's "show me" jump. Render-side only. */
+  focusTile: (x: number, z: number) => void;
+}
+
+/**
+ * Segmented "Tool Mode" control, road tools only right now:
+ * `L-path` is the existing two-leg drag; `Straight` locks to a single axis;
+ * `Grid` lays the street grid a dragged rectangle encloses; `Curve` lays a road
+ * off the grid in three clicks. Changing it also mirrors into
+ * `toolFlags.straightMode` / `gridMode` / `curveMode`, the shape ToolManager's
+ * contract (shared/types.ts `ToolFlags`) actually consumes.
+ */
+export type ToolMode = 'straight' | 'lpath' | 'grid' | 'curve';
+
+/**
+ * The junction the inspector has open: where it is, who gives way there, and
+ * whether that is the control the warrant worked out (`auto`) or the one the
+ * player set.
+ */
+export interface SelectedJunction {
+  x: number;
+  z: number;
+  control: JunctionControl;
+  /** What the warrant makes of it, so "Automatic" can say what it would mean. */
+  warranted: JunctionControl;
+  auto: boolean;
+  /** Turn restrictions, packed one nibble per arm (src/shared/approach.ts). */
+  turns: number;
+  /** The cardinals that actually carry a road here, so the panel lists only real arms. */
+  arms: RoadFlow[];
+  /**
+   * Per-LANE restrictions: one packed value per arm, in the cardinals' own
+   * order, four lanes at a nibble apiece. Zero is a lane on its derived set.
+   */
+  laneTurns?: number[];
+  /**
+   * What each arm's lanes offer BEFORE anything the player has said — the sets
+   * the approach derives, keyed by arm. The panel shows these as the baseline,
+   * so a lane nobody has touched reads as what it actually does. Absent for an
+   * arm whose approach the client cannot read, which shows its arm row alone.
+   */
+  armLaneSets?: Partial<Record<RoadFlow, number[]>>;
+  /**
+   * The compact roundabout this junction is a corner of, by its north-west
+   * tile. Its control, turns and lanes are the roundabout's, and the only
+   * thing the panel offers is taking it out.
+   */
+  roundabout?: { x: number; z: number };
+}
+
+export function createInitialToolFlags(): ToolFlags {
+  return {
+    angleLock: false,
+    straightMode: false,
+    gridMode: false,
+    guideSnap: false,
+    roadSnap: true,
+    replaceRoad: false,
+  };
+}
+
+/** The per-line fleet figures the transit snapshot carries, as the panel reads them. */
+export type TransitFleetFigures = Pick<
+  TransitFleetSnapshot,
+  'served' | 'requested' | 'headwayMin' | 'runningCost' | 'depotId'
+>;
+
+/** No fleet figures yet: every line reads as running nothing. */
+export function emptyTransitFleet(): TransitFleetFigures {
+  return { served: [], requested: [], headwayMin: [], runningCost: [], depotId: [] };
+}
+
+/** A sane, zeroed CityStats for the moment before the first worker snapshot arrives. */
+export function createInitialStats(): CityStats {
+  return {
+    tick: 0,
+    funds: START_FUNDS,
+    monthlyIncome: 0,
+    monthlyExpenses: 0,
+    population: 0,
+    jobs: 0,
+    employed: 0,
+    demand: { res: 0, com: 0, ind: 0 },
+    happiness: 0,
+    powerSupply: 0,
+    powerDemand: 0,
+    waterSupply: 0,
+    waterDemand: 0,
+    sewerSupply: 0,
+    sewerDemand: 0,
+    waterFouled: 0,
+    milestoneLevel: 0,
+    milestoneProgress: 0,
+    loanBalance: 0,
+    taxRates: { res: DEFAULT_TAX_RATE, com: DEFAULT_TAX_RATE, ind: DEFAULT_TAX_RATE },
+    serviceFunding: { police: 1, fire: 1, health: 1, education: 1, park: 1 },
+  };
+}
+
+export interface CityStoreState {
+  stats: CityStats;
+  selectedTool: ToolId;
+  /** Active infoview lens: every scalar field plus power/watered coverage. */
+  overlay: LensId | null;
+  speed: SimSpeed;
+  notifications: CityNotification[];
+  preview: PreviewInfo | null;
+  selectedBuilding: BuildingInstance | null;
+  /**
+   * The junction the player has open in the inspector: where it is, who gives
+   * way there, and whether that is the warrant's answer or theirs. Cleared by
+   * clicking off it, and refreshed from every snapshot so a control the
+   * warrant changes under the open panel is what the panel shows.
+   */
+  selectedJunction: SelectedJunction | null;
+  /** Every bus stop as the last snapshot reported it, with its boardings and warrant. */
+  stops: BusStopState[];
+  /** The side of a street tile whose stop the player has open in the inspector. */
+  selectedStop: { x: number; z: number; side: 0 | 1 } | null;
+  canUndo: boolean;
+  canRedo: boolean;
+  bound: BoundActions | null;
+
+  /** Live tool-behavior flags, consumed by ToolManager. */
+  toolFlags: ToolFlags;
+  /** The tool-options "Tool Mode" segmented control, road tools only so far. */
+  toolMode: ToolMode;
+  /**
+   * Deck height the road tool builds at, in metres. Zero follows the ground and
+   * bridges only where a drag crosses water; above zero raises a viaduct.
+   */
+  roadElevation: number;
+  /**
+   * The player's edits to the selected road's cross-section — parking, bike
+   * lanes, footways per side. `null` fields leave the preset as it is, so the
+   * default composes back to the preset exactly.
+   */
+  roadProfileEdits: ProfileEdits;
+  /** What the Interchange tool lays: its form and the road it carries over (its options row). */
+  interchange: InterchangeOptions;
+  /** Population as of the last monthly rollover — feeds the status-strip trend arrow. */
+  previousMonthPopulation: number;
+  /** Funds as of the last monthly rollover — feeds the status-strip trend arrow. */
+  previousMonthFunds: number;
+  /**
+   * Richer per-building selection payload: occupancy/tax/
+   * happiness-at-tile. Populated by the Integrate-phase worker wiring; the
+   * InfoPanel renders its enrichment rows only while this is present and
+   * matches `selectedBuilding`.
+   */
+  selectionInfo: SelectionInfo | null;
+  /** Terrain-brush radius/strength ("Brush radius"/"Strength" rows), consumed by ToolManager.setBrush. */
+  brushSettings: BrushSettings;
+
+  // --- Bus transit ---------------------------------------------------------
+  /** Worker's authoritative bus lines (from SimSnapshot.transit.lines). */
+  transitLines: TransitLine[];
+  /** Per-line ridership, aligned index-for-index with transitLines. */
+  transitRidership: number[];
+  /** Per-line fleet figures (served, requested, headway, running cost), aligned with transitLines. */
+  transitFleet: TransitFleetFigures;
+  // --- Districts & policies ------------------------------------------------
+  /** Worker's authoritative district defs (from SimSnapshot.districts.defs). */
+  districts: District[];
+  /** District id the district.paint tool stamps (1..255). */
+  selectedDistrict: number;
+  /** Optimistic per-district enabled-policy sets (worker owns the truth; not persisted). */
+  districtPolicies: Record<number, Policy[]>;
+  // --- Service capacity ----------------------------------------------------
+  /**
+   * How hard each service kind is being leaned on (from SimSnapshot.serviceLoad).
+   * Null until the first service pass has run, and for any mirror feeding this
+   * store from a snapshot that never carried the field.
+   */
+  serviceLoad: Record<ServiceKind, ServiceLoad> | null;
+  /**
+   * Calls in flight over responders for each kind that has any (from
+   * SimSnapshot.responders). Null when no station of any kind offers responders.
+   */
+  responders: Partial<Record<ServiceKind, ResponderLoad>> | null;
+  /**
+   * Park tiles per 1,000 residents (from SimSnapshot.openSpace). Null for a
+   * mirror feeding this store from a snapshot that never carried the field.
+   */
+  openSpace: OpenSpace | null;
+  // --- Stats charts + Photo mode -------------------------------------------
+  /** Live stats history samples (pushed by main.ts each snapshot). */
+  statsSamples: StatsSample[];
+  /** Whether the stats charts panel is open. */
+  statsOpen: boolean;
+  /** Whether photo mode is active (drives chrome hiding). */
+  photoMode: boolean;
+
+  // --- Advisor -------------------------------------------------------------
+  /** Ranked city problems (recomputed by main.ts on a slow snapshot cadence). */
+  advisorIssues: CityIssue[];
+  /** Whether the advisor panel is open. */
+  advisorOpen: boolean;
+
+  // --- Start menu ----------------------------------------------------------
+  /** 'menu' = start screen (no world booted); 'playing' = a game is live. */
+  screen: 'menu' | 'playing';
+  /** In-game pause overlay: the start menu shown over a paused running game. */
+  menuOpen: boolean;
+  /** Persisted user options (bloom / sandbox / audio). */
+  settings: GameSettings;
+
+  applySnapshotStats: (stats: CityStats) => void;
+  setTool: (tool: ToolId) => void;
+  setOverlay: (overlay: LensId | null) => void;
+  /** Updates the local speed readout and forwards it to the bound worker bridge. */
+  setSpeed: (speed: SimSpeed) => void;
+  pushNotification: (note: CityNotification) => void;
+  dismissNotification: (id: number) => void;
+  setSelectedBuilding: (building: BuildingInstance | null) => void;
+  setSelectedJunction: (junction: SelectedJunction | null) => void;
+  setStops: (stops: BusStopState[]) => void;
+  setSelectedStop: (stop: { x: number; z: number; side: 0 | 1 } | null) => void;
+  setUndoState: (canUndo: boolean, canRedo: boolean) => void;
+  setPreview: (preview: PreviewInfo | null) => void;
+  bindActions: (actions: BoundActions) => void;
+  /** Merges a partial patch into toolFlags (e.g. the 90° lock snapping chip). */
+  setToolFlags: (flags: Partial<ToolFlags>) => void;
+  /** Sets the Tool Mode segmented control and mirrors toolFlags.straightMode. */
+  setToolMode: (mode: ToolMode) => void;
+  /** Sets the road tool's deck height, clamped to 0..BRIDGE_MAX_ELEVATION metres. */
+  setRoadElevation: (metres: number) => void;
+  /** Merges a partial patch into the road profile edits (the Profile row's controls). */
+  setRoadProfileEdits: (edits: Partial<ProfileEdits>) => void;
+  /** Merges a partial patch into the Interchange tool's options. */
+  setInterchange: (options: Partial<InterchangeOptions>) => void;
+  setSelectionInfo: (info: SelectionInfo | null) => void;
+  /** Merges a partial patch into brushSettings (the Brush radius / Strength sliders). */
+  setBrushSettings: (settings: Partial<BrushSettings>) => void;
+  /** Replaces the transit line list, ridership and fleet figures from a snapshot. */
+  setTransit: (lines: TransitLine[], ridership: number[], fleet?: TransitFleetFigures) => void;
+  /** Deletes a bus line (emits deleteTransitLine via the bound bridge). */
+  deleteTransitLine: (id: number) => void;
+  /** Replaces the district def list from a snapshot (never shrinks selectedDistrict). */
+  setDistricts: (districts: District[]) => void;
+  /** Sets the district id the paint tool stamps. */
+  setSelectedDistrict: (id: number) => void;
+  /** Toggles a policy for a district — updates local state and emits setDistrictPolicy. */
+  toggleDistrictPolicy: (districtId: number, policy: Policy) => void;
+  /** Replaces the per-kind service load from a snapshot. */
+  setServiceLoad: (load: Record<ServiceKind, ServiceLoad> | null) => void;
+  setResponders: (responders: Partial<Record<ServiceKind, ResponderLoad>> | null) => void;
+  setOpenSpace: (openSpace: OpenSpace | null) => void;
+  /**
+   * Sets a service kind's funding — clamps to what the command accepts, emits
+   * setServiceFunding, and mirrors the new figure into the stats readout so the
+   * slider moves under the player's hand rather than on the next snapshot.
+   */
+  setServiceFunding: (service: FundingKey, funding: number) => void;
+  /** Replaces the live stats-history samples. */
+  setStatsSamples: (samples: StatsSample[]) => void;
+  /** Opens/closes the stats charts panel. */
+  setStatsOpen: (open: boolean) => void;
+  /** Sets the photo-mode active flag (chrome hiding). */
+  setPhotoMode: (active: boolean) => void;
+  /** Replaces the ranked advisor issues. */
+  setAdvisorIssues: (issues: CityIssue[]) => void;
+  /** Opens/closes the advisor panel. */
+  setAdvisorOpen: (open: boolean) => void;
+  /** Sets the top-level screen ('menu' before a game boots, 'playing' once live). */
+  setScreen: (screen: 'menu' | 'playing') => void;
+  /** Opens/closes the in-game pause menu overlay. */
+  setMenuOpen: (open: boolean) => void;
+  /** Merges a partial patch into settings and persists it to localStorage. */
+  setSettings: (settings: Partial<GameSettings>) => void;
+}
+
+export const useCityStore = create<CityStoreState>((set, get) => ({
+  stats: createInitialStats(),
+  selectedTool: 'select',
+  overlay: null,
+  speed: 1,
+  notifications: [],
+  preview: null,
+  selectedBuilding: null,
+  selectedJunction: null,
+  stops: [],
+  selectedStop: null,
+  canUndo: false,
+  canRedo: false,
+  bound: null,
+  toolFlags: createInitialToolFlags(),
+  toolMode: 'lpath',
+  roadElevation: 0,
+  roadProfileEdits: NO_EDITS,
+  interchange: { form: 'diamond', streetTier: RoadTier.TwoLane },
+  previousMonthPopulation: createInitialStats().population,
+  previousMonthFunds: createInitialStats().funds,
+  selectionInfo: null,
+  brushSettings: DEFAULT_BRUSH_SETTINGS,
+  transitLines: [],
+  transitRidership: [],
+  transitFleet: emptyTransitFleet(),
+  districts: [],
+  selectedDistrict: 1,
+  districtPolicies: {},
+  serviceLoad: null,
+  responders: null,
+  openSpace: null,
+  statsSamples: [],
+  statsOpen: false,
+  photoMode: false,
+  advisorIssues: [],
+  advisorOpen: false,
+  screen: 'menu',
+  menuOpen: false,
+  settings: loadSettings(),
+
+  applySnapshotStats: (stats) =>
+    set((state) => {
+      // Roll the trend baseline forward only when the tick advances into a
+      // new calendar month (never on a backward jump, e.g. a fresh load) —
+      // the status strip compares the live figure against this snapshot.
+      const priorMonthIndex = Math.floor(state.stats.tick / TICKS_PER_MONTH);
+      const nextMonthIndex = Math.floor(stats.tick / TICKS_PER_MONTH);
+      if (nextMonthIndex > priorMonthIndex) {
+        return {
+          stats,
+          previousMonthPopulation: state.stats.population,
+          previousMonthFunds: state.stats.funds,
+        };
+      }
+      return { stats };
+    }),
+  // Elevation drops back to ground whenever the road tool is put down. Left
+  // sticky it is invisible state: a height set for one viaduct silently turns
+  // the next short drag into a stray hump with a bridge under it.
+  setTool: (tool) =>
+    set((state) => ({
+      selectedTool: tool,
+      roadElevation: tool.startsWith('road.') ? state.roadElevation : 0,
+      // Edits are about THIS road; a fresh road starts as its preset.
+      roadProfileEdits: tool === state.selectedTool ? state.roadProfileEdits : NO_EDITS,
+    })),
+  setOverlay: (overlay) => set({ overlay }),
+  setSpeed: (speed) => {
+    set({ speed });
+    get().bound?.setSpeed(speed);
+  },
+  pushNotification: (note) =>
+    set((state) => {
+      const next = [...state.notifications, note];
+      return {
+        notifications:
+          next.length > MAX_NOTIFICATIONS ? next.slice(next.length - MAX_NOTIFICATIONS) : next,
+      };
+    }),
+  dismissNotification: (id) =>
+    set((state) => ({ notifications: state.notifications.filter((n) => n.id !== id) })),
+  setSelectedBuilding: (building) => set({ selectedBuilding: building }),
+  setSelectedJunction: (junction) => set({ selectedJunction: junction }),
+  // A stop taken away under an open inspector closes it.
+  setStops: (stops) =>
+    set((state) => ({
+      stops,
+      selectedStop:
+        state.selectedStop &&
+        stops.some(
+          (s) =>
+            s.x === state.selectedStop!.x &&
+            s.z === state.selectedStop!.z &&
+            s.side === state.selectedStop!.side,
+        )
+          ? state.selectedStop
+          : null,
+    })),
+  setSelectedStop: (stop) => set({ selectedStop: stop }),
+  setUndoState: (canUndo, canRedo) => set({ canUndo, canRedo }),
+  setPreview: (preview) => set({ preview }),
+  bindActions: (actions) => set({ bound: actions }),
+  setToolFlags: (flags) => set((state) => ({ toolFlags: { ...state.toolFlags, ...flags } })),
+  setToolMode: (mode) =>
+    set((state) => ({
+      toolMode: mode,
+      toolFlags: {
+        ...state.toolFlags,
+        straightMode: mode === 'straight',
+        gridMode: mode === 'grid',
+        curveMode: mode === 'curve',
+      },
+    })),
+  setRoadElevation: (metres) =>
+    set({ roadElevation: Math.max(0, Math.min(BRIDGE_MAX_ELEVATION, Math.round(metres))) }),
+  setRoadProfileEdits: (edits) =>
+    set((state) => ({ roadProfileEdits: { ...state.roadProfileEdits, ...edits } })),
+  setInterchange: (options) =>
+    set((state) => ({ interchange: { ...state.interchange, ...options } })),
+  setSelectionInfo: (info) => set({ selectionInfo: info }),
+  setBrushSettings: (settings) =>
+    set((state) => ({ brushSettings: { ...state.brushSettings, ...settings } })),
+  setTransit: (lines, ridership, fleet) =>
+    set({
+      transitLines: lines,
+      transitRidership: ridership,
+      transitFleet: fleet ?? emptyTransitFleet(),
+    }),
+  deleteTransitLine: (id) =>
+    get().bound?.sendCommands('Delete bus line', [{ kind: 'deleteTransitLine', id }]),
+  setDistricts: (districts) => set({ districts }),
+  setSelectedDistrict: (id) => set({ selectedDistrict: id }),
+  toggleDistrictPolicy: (districtId, policy) =>
+    set((state) => {
+      const current = state.districtPolicies[districtId] ?? [];
+      const on = !current.includes(policy);
+      const next = on ? [...current, policy] : current.filter((p) => p !== policy);
+      state.bound?.sendCommands(`${on ? 'Enable' : 'Disable'} policy`, [
+        { kind: 'setDistrictPolicy', districtId, policy, on },
+      ]);
+      return { districtPolicies: { ...state.districtPolicies, [districtId]: next } };
+    }),
+  setServiceLoad: (load) => set({ serviceLoad: load }),
+  setResponders: (responders) => set({ responders }),
+  setOpenSpace: (openSpace) => set({ openSpace }),
+  setServiceFunding: (service, funding) =>
+    set((state) => {
+      const clamped = Math.max(SERVICE_FUNDING_MIN, Math.min(SERVICE_FUNDING_MAX, funding));
+      state.bound?.sendCommands('Set service funding', [
+        { kind: 'setServiceFunding', service, funding: clamped },
+      ]);
+      return {
+        stats: {
+          ...state.stats,
+          serviceFunding: { ...state.stats.serviceFunding, [service]: clamped },
+        },
+      };
+    }),
+  setStatsSamples: (samples) => set({ statsSamples: samples }),
+  setStatsOpen: (open) => set({ statsOpen: open }),
+  setAdvisorIssues: (issues) => set({ advisorIssues: issues }),
+  setAdvisorOpen: (open) => set({ advisorOpen: open }),
+  setPhotoMode: (active) => set({ photoMode: active }),
+  setScreen: (screen) => set({ screen }),
+  setMenuOpen: (open) => set({ menuOpen: open }),
+  setSettings: (patch) => {
+    set((state) => {
+      const settings = { ...state.settings, ...patch };
+      saveSettings(settings);
+      return { settings };
+    });
+    get().bound?.onSettings(patch);
+  },
+}));

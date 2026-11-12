@@ -1,0 +1,544 @@
+/**
+ * Advisor: turns thousands of per-building problem flags plus the city's
+ * supply/demand numbers into the two or three sentences a player can act on.
+ *
+ * Toasts report EVENTS ("that build failed"). This reports STATE — what is
+ * wrong right now, worst first. Pure: a function of the mirrored building list
+ * and the stats block, with no three.js, store or worker anywhere near it, so
+ * the entire ranking is testable directly.
+ */
+import catalogData from '../data/catalog.json';
+import {
+  DEATH_CARE_MILESTONE,
+  MILESTONES,
+  SEWER_MILESTONE,
+  workforceOf,
+} from '../shared/constants';
+import { level3Schooling, type EducationRung } from '../shared/schooling';
+import {
+  BuildingState,
+  Problem,
+  type BuildingCatalogEntry,
+  type BuildingInstance,
+  type CityStats,
+  type DeathCareReport,
+  type GrowthWaiting,
+  type Incident,
+  type ZonedUnserved,
+} from '../shared/types';
+
+export type IssueSeverity = 'critical' | 'warning' | 'info';
+
+export interface CityIssue {
+  /** Stable across recomputes, so React keys and the sort never churn. */
+  id: string;
+  severity: IssueSeverity;
+  title: string;
+  /** One sentence on what to do about it. */
+  detail: string;
+  /** Buildings affected; 0 for city-wide issues that are not per-building. */
+  count: number;
+  /** Where to send the camera, when there is a specific place to look. */
+  focus?: { x: number; z: number };
+}
+
+/** Snapshots arrive ~10x/s; a list that re-ranks that fast cannot be read. */
+export const ADVISOR_REFRESH_SNAPSHOTS = 10;
+
+const SEVERITY_RANK: Record<IssueSeverity, number> = { critical: 0, warning: 1, info: 2 };
+
+/** Share of the workforce out of work, or in empty jobs, the labour market carries before it is a problem. */
+const LABOUR_MARKET_SLACK = 0.25;
+
+/**
+ * One entry per problem flag. Order here is the tie-break order within a
+ * severity, so it runs roughly "cannot function" -> "unpleasant".
+ */
+const PROBLEM_RULES: {
+  flag: number;
+  /** A building that also carries this flag is counted under that flag's rule instead. */
+  unless?: number;
+  id: string;
+  severity: IssueSeverity;
+  title: (count: number) => string;
+  detail: (stats: CityStats) => string;
+}[] = [
+  {
+    flag: Problem.NoRoad,
+    id: 'no-road',
+    severity: 'critical',
+    title: (n) => `${n} building${n === 1 ? '' : 's'} cut off from the road network`,
+    detail: () =>
+      'Nothing reaches them — connect a road to their frontage. A farm’s gate opens only onto a dirt road.',
+  },
+  {
+    flag: Problem.PowerShortage,
+    id: 'power-short',
+    severity: 'critical',
+    title: (n) => `${n} building${n === 1 ? '' : 's'} at the far end of the grid without power`,
+    detail: (s) =>
+      `Not enough power: the city needs ${amount(s.powerDemand, 'MW')} and makes ${amount(s.powerSupply, 'MW')} — build another plant.`,
+  },
+  {
+    flag: Problem.NoPower,
+    unless: Problem.PowerShortage,
+    id: 'no-power',
+    severity: 'critical',
+    title: (n) => `${n} building${n === 1 ? '' : 's'} without power`,
+    detail: () =>
+      'Power travels along paved roads and power lines from a plant — check for a gap, or string a line out along a dirt road.',
+  },
+  {
+    flag: Problem.WaterShortage,
+    id: 'water-short',
+    severity: 'critical',
+    title: (n) => `${n} building${n === 1 ? '' : 's'} at the far end of the mains without water`,
+    detail: (s) =>
+      `Not enough water: the city needs ${amount(s.waterDemand, 'kL')} and pumps ${amount(s.waterSupply, 'kL')} — add a water tower.`,
+  },
+  {
+    flag: Problem.NoWater,
+    unless: Problem.WaterShortage,
+    id: 'no-water',
+    severity: 'critical',
+    title: (n) => `${n} building${n === 1 ? '' : 's'} without water`,
+    detail: () => 'Add a water tower within reach, or connect the road that carries the supply.',
+  },
+  {
+    flag: Problem.SewerShortage,
+    id: 'sewer-short',
+    severity: 'warning',
+    title: (n) => `${n} building${n === 1 ? '' : 's'} at the far end of the sewers without a drain`,
+    detail: (s) =>
+      `Not enough drainage: the city makes ${amount(s.sewerDemand, 'kL')} of sewage and drains ${amount(s.sewerSupply, 'kL')} — build another drain pipe.`,
+  },
+  {
+    flag: Problem.NoSewer,
+    unless: Problem.SewerShortage,
+    id: 'no-sewer',
+    severity: 'warning',
+    title: (n) => `${n} building${n === 1 ? '' : 's'} with no sewer`,
+    detail: () =>
+      'Their sewage runs in the ditches and fouls the ground, and nothing new grows there. Build a drain pipe on a shore and lay pipe or road to it.',
+  },
+  {
+    flag: Problem.HighCrime,
+    id: 'high-crime',
+    severity: 'warning',
+    title: (n) => `Crime is hurting ${n} building${n === 1 ? '' : 's'}`,
+    detail: () => 'A police station nearby lowers crime and lifts land value.',
+  },
+  {
+    flag: Problem.HighPollution,
+    id: 'high-pollution',
+    severity: 'warning',
+    title: (n) => `Pollution is hurting ${n} building${n === 1 ? '' : 's'}`,
+    detail: () => 'Move heavy industry and incinerators downwind of housing, or add parks.',
+  },
+  {
+    flag: Problem.LowDemand,
+    id: 'low-demand',
+    severity: 'info',
+    title: (n) => `${n} building${n === 1 ? '' : 's'} have no one to fill them`,
+    detail: () => 'Demand for this zone type is soft — check the RCI meter before zoning more.',
+  },
+];
+
+/** A supply figure as the player reads it: whole units once it is big, two places below ten. */
+function amount(value: number, unit: string): string {
+  const shown = value >= 10 ? Math.round(value) : Math.round(value * 100) / 100;
+  return `${shown} ${unit}`;
+}
+
+const catalog = (catalogData as { buildings: BuildingCatalogEntry[] }).buildings;
+const catalogById = new Map(catalog.map((entry) => [entry.id, entry]));
+
+/** Buildings held at level 2 by schooling, gathered by the rungs their zone waits on. */
+interface SchoolingGroup {
+  rungs: readonly EducationRung[];
+  count: number;
+  focus: BuildingInstance;
+}
+
+/** "a middle school and a high school", the rungs as a player reads them. */
+function rungsText(rungs: readonly EducationRung[]): string {
+  return rungs.map((rung) => `a ${rung.school}`).join(' and ');
+}
+
+/**
+ * Buildings that clear the land value for level 3 and wait on a school, one issue
+ * per set of rungs their zone needs. Which rung of a pair is the one missing is for
+ * the building's own inspector; the Advisor says what the zone waits on, and when
+ * the town cannot yet build it, when it unlocks.
+ */
+function schoolingIssues(
+  groups: ReadonlyMap<string, SchoolingGroup>,
+  stats: CityStats,
+): CityIssue[] {
+  const issues: CityIssue[] = [];
+  for (const [id, { rungs, count, focus }] of groups) {
+    const locked = rungs
+      .map((rung) => catalog.find((e) => e.service?.kind === rung.kind))
+      .filter((e): e is BuildingCatalogEntry => e !== undefined)
+      .filter((e) => e.unlockMilestone > stats.milestoneLevel);
+    const unlock =
+      locked.length > 0
+        ? ` ${locked.map((e) => e.name).join(' and ')} unlock${locked.length === 1 ? 's' : ''} at ${MILESTONES[Math.max(...locked.map((e) => e.unlockMilestone))]!.name}.`
+        : '';
+    issues.push({
+      id,
+      severity: 'info',
+      title: `${count} building${count === 1 ? '' : 's'} held at level 2 for want of ${rungsText(rungs)}`,
+      detail: `They have the land value to level up and are waiting on schooling. Build ${rungsText(rungs)} on a street that connects to them.${unlock}`,
+      count,
+      focus: { x: focus.x, z: focus.z },
+    });
+  }
+  return issues;
+}
+
+/** Buildings still going up have not had their services judged yet. */
+function countsAsProblem(building: BuildingInstance): boolean {
+  return building.state !== BuildingState.Constructing;
+}
+
+const NOTHING_WAITING: GrowthWaiting = { power: 0, water: 0, sewer: 0 };
+const NOTHING_UNSERVED: ZonedUnserved = { power: 0, water: 0, sewer: 0 };
+const NO_DEATH_CARE: DeathCareReport = { facilities: [], uncollected: 0, regionalThisMonth: 0 };
+
+/**
+ * Ranked list of what is wrong with the city. Empty when nothing is — an
+ * advisor that invents problems to look busy teaches players to ignore it.
+ */
+export function cityIssues(
+  buildings: Iterable<BuildingInstance>,
+  stats: CityStats,
+  waiting: GrowthWaiting = NOTHING_WAITING,
+  unserved: ZonedUnserved = NOTHING_UNSERVED,
+  deathCare: DeathCareReport = NO_DEATH_CARE,
+  incidents: readonly Incident[] = [],
+  unlimitedMoney = false,
+): CityIssue[] {
+  const counts = new Map<number, number>();
+  const focus = new Map<number, BuildingInstance>();
+  const schooling = new Map<string, SchoolingGroup>();
+
+  for (const building of buildings) {
+    if (!countsAsProblem(building)) continue;
+    if ((building.problems & Problem.NeedsSchool) !== 0) {
+      const zone = catalogById.get(building.catalogId)?.zone;
+      const rungs = zone === undefined ? [] : level3Schooling(zone);
+      if (rungs.length > 0) {
+        const id = `needs-school-${rungs.map((rung) => rung.kind).join('+')}`;
+        const held = schooling.get(id);
+        if (!held) schooling.set(id, { rungs, count: 1, focus: building });
+        else {
+          held.count += 1;
+          if (building.id < held.focus.id) held.focus = building;
+        }
+      }
+    }
+    const offStreet = catalogById.get(building.catalogId)?.offStreet === true;
+    for (const rule of PROBLEM_RULES) {
+      if ((building.problems & rule.flag) === 0) continue;
+      // A turbine or a pumping station stands off the street by design.
+      if (rule.flag === Problem.NoRoad && offStreet) continue;
+      if (rule.unless !== undefined && (building.problems & rule.unless) !== 0) continue;
+      counts.set(rule.flag, (counts.get(rule.flag) ?? 0) + 1);
+      // Lowest id wins, so the same city always points at the same building
+      // however the mirror happens to be ordered.
+      const held = focus.get(rule.flag);
+      if (!held || building.id < held.id) focus.set(rule.flag, building);
+    }
+  }
+
+  const issues: CityIssue[] = [];
+
+  for (const rule of PROBLEM_RULES) {
+    const count = counts.get(rule.flag) ?? 0;
+    if (count === 0) continue;
+    const at = focus.get(rule.flag);
+    issues.push({
+      id: rule.id,
+      severity: rule.severity,
+      title: rule.title(count),
+      detail: rule.detail(stats),
+      count,
+      focus: at ? { x: at.x, z: at.z } : undefined,
+    });
+  }
+
+  issues.push(
+    ...schoolingIssues(schooling, stats),
+    ...waitingIssues(waiting),
+    ...unservedIssues(unserved),
+    ...deathCareIssues(deathCare, stats),
+    ...unansweredCallIssues(incidents),
+    ...cityWideIssues(stats, unlimitedMoney),
+  );
+
+  const order = new Map(PROBLEM_RULES.map((rule, index) => [rule.id, index]));
+  return issues.sort((a, b) => {
+    const bySeverity = SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity];
+    if (bySeverity !== 0) return bySeverity;
+    if (a.count !== b.count) return b.count - a.count; // more buildings hurt = more urgent
+    return (order.get(a.id) ?? 99) - (order.get(b.id) ?? 99);
+  });
+}
+
+/**
+ * A full grid that has stopped the city growing. Nothing may be dark yet, but
+ * the shortage is still what holds these lots and buildings back.
+ */
+function waitingIssues(waiting: GrowthWaiting): CityIssue[] {
+  const issues: CityIssue[] = [];
+  const lots = (n: number): string =>
+    `${n} new or growing building${n === 1 ? '' : 's'} ${n === 1 ? 'needs' : 'need'}`;
+  if (waiting.power > 0) {
+    issues.push({
+      id: 'power-waiting',
+      severity: 'warning',
+      title: 'Growth is waiting for power',
+      detail: `${lots(waiting.power)} more power than the grid has spare — build another plant.`,
+      count: waiting.power,
+    });
+  }
+  if (waiting.water > 0) {
+    issues.push({
+      id: 'water-waiting',
+      severity: 'warning',
+      title: 'Growth is waiting for water',
+      detail: `${lots(waiting.water)} more water than the mains have spare — add a water tower or a pumping station.`,
+      count: waiting.water,
+    });
+  }
+  if (waiting.sewer > 0) {
+    issues.push({
+      id: 'sewer-waiting',
+      severity: 'warning',
+      title: 'Growth is waiting for a drain',
+      detail: `${lots(waiting.sewer)} more drainage than the drains have spare — build another drain pipe.`,
+      count: waiting.sewer,
+    });
+  }
+  return issues;
+}
+
+/**
+ * Zoned land its own road brings no power or water. Nothing has been built
+ * there to carry a flag, so without this the lots simply never grow and
+ * nothing on screen says why.
+ */
+function unservedIssues(unserved: ZonedUnserved): CityIssue[] {
+  const issues: CityIssue[] = [];
+  const tiles = (n: number, what: string): string =>
+    `${n} zoned tile${n === 1 ? ' has' : 's have'} no ${what} from the road beside ${n === 1 ? 'it' : 'them'}`;
+  if (unserved.power > 0) {
+    issues.push({
+      id: 'zoned-no-power',
+      severity: 'warning',
+      title: tiles(unserved.power, 'power'),
+      detail:
+        'Nothing can grow there. A gravel road carries no power — string a power line along it from a power station, a substation or a live line, or join the road to a plant.',
+      count: unserved.power,
+      focus: unserved.powerAt,
+    });
+  }
+  if (unserved.water > 0) {
+    issues.push({
+      id: 'zoned-no-water',
+      severity: 'warning',
+      title: tiles(unserved.water, 'water'),
+      detail:
+        'Nothing can grow there until the road joins the mains of a water tower or a pumping station.',
+      count: unserved.water,
+      focus: unserved.waterAt,
+    });
+  }
+  if (unserved.sewer > 0) {
+    issues.push({
+      id: 'zoned-no-sewer',
+      severity: 'warning',
+      title: tiles(unserved.sewer, 'sewer'),
+      detail:
+        'Nothing can grow there until a drain pipe reaches the road — build one on a shore and lay pipe to it.',
+      count: unserved.sewer,
+      focus: unserved.sewerAt,
+    });
+  }
+  return issues;
+}
+
+/**
+ * The dead: bodies no cemetery has collected (the first one is enough, before
+ * any field has moved), a cemetery that is full with bodies still waiting, and
+ * the rung before the regional funeral service ends with no cemetery placed.
+ */
+function deathCareIssues(report: DeathCareReport, stats: CityStats): CityIssue[] {
+  const issues: CityIssue[] = [];
+  const n = report.uncollected;
+
+  if (n > 0) {
+    issues.push({
+      id: 'bodies-uncollected',
+      severity: 'warning',
+      title: `${n} ${n === 1 ? 'body lies' : 'bodies lie'} uncollected`,
+      detail:
+        'No cemetery or crematorium with room reaches by road the building where they fell, and each one costs the health of the streets around it every month. Build one on a street that connects to it.',
+      count: n,
+      focus: report.uncollectedAt,
+    });
+  }
+
+  const full = report.facilities.filter((f) => f.used >= f.total).length;
+  if (n > 0 && full > 0) {
+    issues.push({
+      id: 'cemetery-full',
+      severity: 'warning',
+      title: `${full === 1 ? 'A cemetery is' : `${full} cemeteries are`} full`,
+      detail:
+        'A full cemetery collects nothing more — build another, on ground the town can spare.',
+      count: full,
+    });
+  }
+
+  if (
+    stats.milestoneLevel === DEATH_CARE_MILESTONE - 1 &&
+    report.facilities.length === 0 &&
+    !report.crematoria?.length
+  ) {
+    const town = MILESTONES[DEATH_CARE_MILESTONE]!;
+    issues.push({
+      id: 'funeral-service-ending',
+      severity: 'info',
+      title: `The regional funeral service ends at ${town.name}`,
+      detail: `The county buries the town's dead until ${town.name} (${town.population.toLocaleString()} people). From then on a body no cemetery collects stays where it fell and fouls the health of the street, so build a cemetery on a road before then.`,
+      count: 0,
+    });
+  }
+
+  return issues;
+}
+
+const CALL_NAMES: Readonly<Record<Incident['kind'], string>> = {
+  fire: 'fire',
+  crime: 'police',
+  medical: 'medical',
+};
+
+/**
+ * Calls standing with no station on the way, named by kind: a fire, a crime or a
+ * medical emergency that no station in reach is free to answer.
+ */
+function unansweredCallIssues(incidents: readonly Incident[]): CityIssue[] {
+  const unanswered = incidents.filter((i) => i.answered === false);
+  if (unanswered.length === 0) return [];
+
+  const byKind = (Object.keys(CALL_NAMES) as Incident['kind'][])
+    .map((kind) => ({ kind, n: unanswered.filter((i) => i.kind === kind).length }))
+    .filter(({ n }) => n > 0)
+    .map(({ kind, n }) => `${n} ${CALL_NAMES[kind]}`);
+  const first = unanswered[0]!;
+  return [
+    {
+      id: 'calls-unanswered',
+      severity: 'warning',
+      title: `${unanswered.length} ${unanswered.length === 1 ? 'call stands' : 'calls stand'} unanswered: ${byKind.join(', ')}`,
+      detail:
+        'No station reaches them by road, or every station that does is out on a call. Build a station on a street that connects to them, or raise the service funding to lengthen its reach.',
+      count: unanswered.length,
+      focus: { x: first.x, z: first.z },
+    },
+  ];
+}
+
+/** The problems that live in the totals rather than on any one building. */
+function cityWideIssues(stats: CityStats, unlimitedMoney: boolean): CityIssue[] {
+  const issues: CityIssue[] = [];
+
+  // With unlimited money neither budget warning applies.
+  const warn = !unlimitedMoney;
+  if (warn && stats.funds < 0) {
+    issues.push({
+      id: 'insolvent',
+      severity: 'critical',
+      title: 'The city is in the red',
+      detail: 'Raise taxes, cut service funding, or stop building until income recovers.',
+      count: 0,
+    });
+  } else if (warn && stats.monthlyExpenses > stats.monthlyIncome) {
+    issues.push({
+      id: 'budget-deficit',
+      severity: 'warning',
+      title: 'Spending more than the city earns',
+      detail: `Losing ¢${Math.round(stats.monthlyExpenses - stats.monthlyIncome)}/month — adjust taxes or service funding.`,
+      count: 0,
+    });
+  }
+
+  // The rung before sewers are needed, with no drain yet: the one warning a
+  // player gets before every building on the mains asks for one at once.
+  if (stats.milestoneLevel === SEWER_MILESTONE - 1 && stats.sewerSupply === 0) {
+    const sewered = MILESTONES[SEWER_MILESTONE]!;
+    issues.push({
+      id: 'septic-outgrown',
+      severity: 'info',
+      title: 'The town is outgrowing its septic tanks',
+      detail: `Septic tanks serve a town this size. From ${sewered.name} (${sewered.population.toLocaleString()} people) every building on the mains needs a drain, so build a drain pipe on a shore and lay pipe or road to it before then.`,
+      count: 0,
+    });
+  }
+
+  // An intake drinking fouled water makes less than it is rated for: the
+  // city's own sewage, emptied too near it.
+  if (stats.waterFouled > 0) {
+    issues.push({
+      id: 'intake-fouled',
+      severity: 'warning',
+      title: 'A pumping station is drinking fouled water',
+      detail: `Sewage emptied near an intake costs the city ${amount(stats.waterFouled, 'kL')} of water a day. Move the drain pipe further along the shore, or treat the sewage at a works.`,
+      count: 0,
+    });
+  }
+
+  // Only meaningful once there are people: a brand-new map has no workers and
+  // no jobs, and neither is a problem yet. Both sides are measured against the
+  // workforce, since the other residents are not looking for work.
+  if (stats.population > 0) {
+    const workforce = workforceOf(stats.population);
+    const unemployed = Math.max(0, workforce - stats.employed);
+    const vacancies = Math.max(0, stats.jobs - stats.employed);
+    if (stats.jobs === 0) {
+      issues.push({
+        id: 'no-jobs',
+        severity: 'warning',
+        title: 'Nobody in the city is hiring',
+        detail: 'Zone commercial or industrial so residents have somewhere to work.',
+        count: 0,
+      });
+    } else if (unemployed > workforce * LABOUR_MARKET_SLACK) {
+      issues.push({
+        id: 'unemployment',
+        severity: 'warning',
+        title: `${Math.round((unemployed / workforce) * 100)}% of the workforce is out of work`,
+        detail: 'Zone more commercial and industrial, or connect the jobs that exist to the roads.',
+        count: 0,
+      });
+    } else if (vacancies > workforce * LABOUR_MARKET_SLACK) {
+      issues.push({
+        id: 'labour-short',
+        severity: 'warning',
+        title: 'Employers cannot find workers',
+        detail: `${vacancies} job${vacancies === 1 ? ' stands' : 's stand'} empty — zone more housing to grow the workforce.`,
+        count: 0,
+      });
+    }
+  }
+
+  return issues;
+}
+
+/** Critical issues, for the badge on an unopened panel. */
+export function criticalCount(issues: readonly CityIssue[]): number {
+  return issues.reduce((total, issue) => total + (issue.severity === 'critical' ? 1 : 0), 0);
+}

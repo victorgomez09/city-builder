@@ -1,0 +1,373 @@
+/**
+ * Persistence.
+ *
+ * Two halves live here:
+ *  1. A pure save-payload codec (encodeSave/decodeSave/stampSavedAt) shared by
+ *     the sim worker (which assembles saves without ever calling Date.now —
+ *     determinism rule) and the main thread (which stamps `savedAt` before the
+ *     bytes hit disk). Layout, all little-endian u32 length prefixes:
+ *       [u32 headerJsonLen][headerJson][u32 gridLen][gridBytes][u32 metaJsonLen][metaJson]
+ *  2. IndexedDB storage ('slimcity' db, 'saves' store) plus the autosave
+ *     cadence driver (every 2 game-months of snapshot ticks) and the
+ *     saveNow()/loadLatest() worker bridges.
+ */
+import { TICKS_PER_MONTH } from '../shared/constants';
+import type {
+  BusStop,
+  CityStats,
+  MainToWorker,
+  RoadProfile,
+  SaveHeader,
+  TransitLine,
+} from '../shared/types';
+import type { SerializedBuildingRegistry } from '../sim/buildings';
+import type { DeathCareSaveState } from '../sim/deathcare';
+import type { GarbageSaveState } from '../sim/garbage';
+
+// ---------------------------------------------------------------------------
+// Save payload codec (pure)
+// ---------------------------------------------------------------------------
+
+/** Everything a save carries besides the raw grid layers. */
+export interface SaveMeta {
+  registry: SerializedBuildingRegistry;
+  stats: CityStats;
+  /** Garbage fill: the landfill pile plus incinerator buffers. Absent in older saves. */
+  garbage?: GarbageSaveState;
+  /** The death and re-let counters. Absent in older saves, which load with all of them at zero. */
+  deathCare?: DeathCareSaveState;
+  /**
+   * Player-built transit lines, bus and rail. Absent in saves written before
+   * lines persisted, which load with none — exactly what every save did before,
+   * since loading used to discard them outright.
+   */
+  transitLines?: TransitLine[];
+  /** Bus stops on street tiles. Absent in saves written before stops existed, which load with none. */
+  busStops?: BusStop[];
+  /**
+   * Road composition: the player-composed profiles this save's roads refer
+   * to by id (presets are catalogue data). Absent in saves written before
+   * profiles existed, which load with none — every road in them is a preset.
+   */
+  roadProfiles?: { id: number; profile: RoadProfile }[];
+}
+
+export interface SavePayload {
+  header: SaveHeader;
+  /** serializeGrid() output. */
+  grid: ArrayBuffer;
+  meta: SaveMeta;
+}
+
+const U32_BYTES = 4;
+
+export function encodeSave(payload: SavePayload): ArrayBuffer {
+  const encoder = new TextEncoder();
+  const headerBytes = encoder.encode(JSON.stringify(payload.header));
+  const metaBytes = encoder.encode(JSON.stringify(payload.meta));
+  const gridBytes = new Uint8Array(payload.grid);
+
+  const total =
+    U32_BYTES + headerBytes.length + U32_BYTES + gridBytes.length + U32_BYTES + metaBytes.length;
+  const buffer = new ArrayBuffer(total);
+  const view = new DataView(buffer);
+  const out = new Uint8Array(buffer);
+
+  let offset = 0;
+  view.setUint32(offset, headerBytes.length, true);
+  offset += U32_BYTES;
+  out.set(headerBytes, offset);
+  offset += headerBytes.length;
+
+  view.setUint32(offset, gridBytes.length, true);
+  offset += U32_BYTES;
+  out.set(gridBytes, offset);
+  offset += gridBytes.length;
+
+  view.setUint32(offset, metaBytes.length, true);
+  offset += U32_BYTES;
+  out.set(metaBytes, offset);
+
+  return buffer;
+}
+
+export function decodeSave(buf: ArrayBuffer): SavePayload {
+  if (buf.byteLength < U32_BYTES * 3) {
+    throw new Error(`decodeSave: buffer too small (${buf.byteLength} bytes)`);
+  }
+  const view = new DataView(buf);
+  const bytes = new Uint8Array(buf);
+  const decoder = new TextDecoder();
+
+  let offset = 0;
+  const readSegment = (): Uint8Array => {
+    if (offset + U32_BYTES > buf.byteLength) {
+      throw new Error('decodeSave: truncated length prefix');
+    }
+    const len = view.getUint32(offset, true);
+    offset += U32_BYTES;
+    if (offset + len > buf.byteLength) {
+      throw new Error('decodeSave: truncated segment');
+    }
+    const segment = bytes.slice(offset, offset + len);
+    offset += len;
+    return segment;
+  };
+
+  const header = JSON.parse(decoder.decode(readSegment())) as SaveHeader;
+  const gridBytes = readSegment();
+  const meta = JSON.parse(decoder.decode(readSegment())) as SaveMeta;
+
+  // Copy the grid segment into a plain, independently-owned ArrayBuffer.
+  const grid = new ArrayBuffer(gridBytes.byteLength);
+  new Uint8Array(grid).set(gridBytes);
+  return { header, grid, meta };
+}
+
+/** Re-encodes `buf` with header.savedAt set (main thread stamps wall-clock time). */
+export function stampSavedAt(buf: ArrayBuffer, savedAt: number): ArrayBuffer {
+  const payload = decodeSave(buf);
+  return encodeSave({ ...payload, header: { ...payload.header, savedAt } });
+}
+
+// ---------------------------------------------------------------------------
+// Autosave cadence
+// ---------------------------------------------------------------------------
+
+export const AUTOSAVE_INTERVAL_TICKS = 2 * TICKS_PER_MONTH;
+
+/**
+ * Fires `trigger` whenever the observed snapshot tick has advanced two
+ * game-months past the last save. The first observed tick only sets the
+ * baseline (no save of a brand-new/just-loaded city).
+ */
+export class AutoSaver {
+  private lastSaveTick: number | null = null;
+
+  constructor(private readonly trigger: () => void) {}
+
+  onSnapshotTick(tick: number): void {
+    if (this.lastSaveTick === null || tick < this.lastSaveTick) {
+      this.lastSaveTick = tick;
+      return;
+    }
+    if (tick - this.lastSaveTick >= AUTOSAVE_INTERVAL_TICKS) {
+      this.lastSaveTick = tick;
+      this.trigger();
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// IndexedDB storage
+// ---------------------------------------------------------------------------
+
+const DB_NAME = 'slimcity';
+const DB_VERSION = 1;
+const SAVES_STORE = 'saves';
+const SAVED_AT_INDEX = 'savedAt';
+const MAX_STORED_SAVES = 10;
+
+interface SaveRecord {
+  id?: number;
+  savedAt: number;
+  mapName: string;
+  tick: number;
+  data: ArrayBuffer;
+}
+
+/**
+ * Whether this browser will store anything at all. A private window, a
+ * blocked site-data setting or an embedded webview can leave `indexedDB`
+ * undefined — the game still runs there, it just cannot remember.
+ */
+export function storageAvailable(): boolean {
+  return typeof indexedDB !== 'undefined' && indexedDB !== null;
+}
+
+function openDb(): Promise<IDBDatabase> {
+  // Reaching for a missing `indexedDB` throws a ReferenceError from inside the
+  // executor, which is a confusing way to be told the browser has no storage.
+  if (!storageAvailable()) {
+    return Promise.reject(new Error('This browser has nowhere to store a saved city'));
+  }
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(SAVES_STORE)) {
+        const store = db.createObjectStore(SAVES_STORE, { keyPath: 'id', autoIncrement: true });
+        store.createIndex(SAVED_AT_INDEX, 'savedAt');
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error ?? new Error('indexedDB.open failed'));
+  });
+}
+
+function requestToPromise<T>(req: IDBRequest<T>): Promise<T> {
+  return new Promise((resolve, reject) => {
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error ?? new Error('IndexedDB request failed'));
+  });
+}
+
+/**
+ * Stamps `savedAt = Date.now()` into the worker-produced save payload and
+ * stores it. Old saves beyond MAX_STORED_SAVES are pruned (oldest first).
+ * Returns the stamped header.
+ */
+export async function storeSave(data: ArrayBuffer): Promise<SaveHeader> {
+  const savedAt = Date.now();
+  const stamped = stampSavedAt(data, savedAt);
+  const header = decodeSave(stamped).header;
+
+  const db = await openDb();
+  try {
+    const tx = db.transaction(SAVES_STORE, 'readwrite');
+    const store = tx.objectStore(SAVES_STORE);
+    const record: SaveRecord = {
+      savedAt,
+      mapName: header.mapName,
+      tick: header.tick,
+      data: stamped,
+    };
+    await requestToPromise(store.add(record));
+
+    const keys = (await requestToPromise(store.getAllKeys())) as IDBValidKey[];
+    if (keys.length > MAX_STORED_SAVES) {
+      // Auto-increment keys are insertion-ordered: prune the oldest records.
+      const excess = keys.slice(0, keys.length - MAX_STORED_SAVES);
+      for (const key of excess) {
+        await requestToPromise(store.delete(key));
+      }
+    }
+    return header;
+  } finally {
+    db.close();
+  }
+}
+
+/** The most recent stored save's payload, or null when nothing is saved yet. */
+export async function loadLatestSave(): Promise<{ header: SaveHeader; data: ArrayBuffer } | null> {
+  const db = await openDb();
+  try {
+    const tx = db.transaction(SAVES_STORE, 'readonly');
+    const store = tx.objectStore(SAVES_STORE);
+    const records = (await requestToPromise(store.getAll())) as SaveRecord[];
+    if (records.length === 0) return null;
+    let latest = records[0]!;
+    for (const record of records) {
+      if (record.savedAt > latest.savedAt) latest = record;
+    }
+    return { header: decodeSave(latest.data).header, data: latest.data };
+  } finally {
+    db.close();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Multi-slot save API
+// ---------------------------------------------------------------------------
+
+/**
+ * A stored save's header plus its stable IndexedDB record key. The key is the
+ * autoIncrement 'id' the 'saves' object store assigns each record (see
+ * openDb()); it isn't part of the header JSON embedded in the save bytes, so
+ * it's stitched on here for slot-picking UI.
+ */
+export interface SaveHeaderWithId extends SaveHeader {
+  id: number;
+}
+
+/** Sorts save headers newest-first by `savedAt`. Pure — no IndexedDB involved. */
+export function sortSaveHeadersNewestFirst<T extends { savedAt: number }>(headers: T[]): T[] {
+  return [...headers].sort((a, b) => b.savedAt - a.savedAt);
+}
+
+/**
+ * Every stored save's header (with its slot id), newest first — and an empty
+ * list where the browser has no storage at all. Asking what has been saved is
+ * not an operation that should fail: the answer there is "nothing", and a menu
+ * that cannot offer a saved city should still open.
+ */
+export async function listSaves(): Promise<SaveHeaderWithId[]> {
+  if (!storageAvailable()) return [];
+  const db = await openDb();
+  try {
+    const tx = db.transaction(SAVES_STORE, 'readonly');
+    const store = tx.objectStore(SAVES_STORE);
+    const records = (await requestToPromise(store.getAll())) as SaveRecord[];
+    const headers = records.map((record) => ({
+      ...decodeSave(record.data).header,
+      id: record.id!,
+    }));
+    return sortSaveHeadersNewestFirst(headers);
+  } finally {
+    db.close();
+  }
+}
+
+/** Deletes one stored save by its slot id. No-op if the id doesn't exist. */
+export async function deleteSave(id: number): Promise<void> {
+  const db = await openDb();
+  try {
+    const tx = db.transaction(SAVES_STORE, 'readwrite');
+    const store = tx.objectStore(SAVES_STORE);
+    await requestToPromise(store.delete(id));
+  } finally {
+    db.close();
+  }
+}
+
+/** One stored save's payload by its slot id, or null when no such save exists. */
+export async function getSaveById(
+  id: number,
+): Promise<{ header: SaveHeaderWithId; data: ArrayBuffer } | null> {
+  const db = await openDb();
+  try {
+    const tx = db.transaction(SAVES_STORE, 'readonly');
+    const store = tx.objectStore(SAVES_STORE);
+    const record = (await requestToPromise(store.get(id))) as SaveRecord | undefined;
+    if (!record) return null;
+    return { header: { ...decodeSave(record.data).header, id: record.id! }, data: record.data };
+  } finally {
+    db.close();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Worker bridges
+// ---------------------------------------------------------------------------
+
+/** Asks the sim worker for a save; the resulting 'save' message should be routed to storeSave(). */
+export function saveNow(worker: Worker): void {
+  const msg: MainToWorker = { type: 'requestSave' };
+  worker.postMessage(msg);
+}
+
+/**
+ * Posts a decoded save's bytes into the sim worker as a 'loadSave' message,
+ * exactly like the historical loadLatest() body. Pure aside from the
+ * postMessage call — factored out so loadLatest()/loadSaveById() share it and
+ * so the message shape is unit-testable with a stub worker (no IndexedDB
+ * needed).
+ */
+export function postLoadSaveMessage(worker: Worker, entry: { data: ArrayBuffer } | null): boolean {
+  if (!entry) return false;
+  const msg: MainToWorker = { type: 'loadSave', data: entry.data };
+  worker.postMessage(msg, [entry.data]);
+  return true;
+}
+
+/** Loads the most recent save into the sim worker. Resolves false when no save exists. */
+export async function loadLatest(worker: Worker): Promise<boolean> {
+  const latest = await loadLatestSave();
+  return postLoadSaveMessage(worker, latest);
+}
+
+/** Loads one save slot by id into the sim worker. Resolves false when no such save exists. */
+export async function loadSaveById(worker: Worker, id: number): Promise<boolean> {
+  const entry = await getSaveById(id);
+  return postLoadSaveMessage(worker, entry);
+}

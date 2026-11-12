@@ -1,0 +1,240 @@
+# Debugging
+
+Two real tools exist for inspecting a running game: a dev-only structural
+read-back surface on `window`, and a family of Playwright scripts that
+drive the real app in a real browser. Neither is a debugger in the
+traditional sense — both exist because of the standing project rule in
+[testing.md](testing.md#screenshots-not-read-backs): **render correctness
+is judged by looking at a screenshot, not by an assertion passing.** These
+tools are how that looking happens without doing it by hand every time.
+
+## `window.__slimcity`: the dev read-back surface
+
+Wired in `src/main.ts`, gated by `import.meta.env.DEV` in two places (so it
+is entirely absent from a production build): once early, right after the
+camera rig attaches, and again later once `screenToTile` exists. It exposes
+functions a harness or a developer can call from the page (via
+`page.evaluate()` in Playwright, or the DevTools console by hand):
+
+- **Deterministic input**, bypassing screen-space picking: `cmd(label,
+commands)` sends a real `Command[]` through the same path the tools use
+  (funds/milestone/overlap all still enforced), `setTool`, `setSpeed`,
+  `setOverlay`, `setCamera(x, z, distance, yaw?, pitch?)`, `setDayT(t |
+null)` to pin lighting for a screenshot instead of waiting on the sim
+  clock, and `screenToTile(sx, sy)` for the inverse when a harness does
+  need to click somewhere specific.
+- **Structural read-backs**, each named for what it answers and each
+  commented with _why a screenshot alone can't answer that question_ —
+  this comment-per-method is itself a convention worth following if you add
+  one: `readGrid()` (per-tile road/zone/water/height/power arrays),
+  `readTransit()` (lines + ridership), `readBuildings`, `readKit`/`readKitIds`
+  (which archetype kit parts actually built — "a silhouette claim is
+  exactly the kind a screenshot cannot settle on its own"), `readHouseKit`,
+  `readHousePlan` and `readHouseCars` (what a home's lot holds and where —
+  a trampoline too small to pick out, or a car tucked behind the house),
+  `readParking` (stall occupancy — "a parked car and a moving one look alike
+  in a shot"),
+  `readJunctions`, `readApproach`, `readLampPoles`, `readPowerPoles`,
+  `readCabinets`, `readFurnitureCounts`, `readKerbAudit`, `readDrawn`, and
+  `readEmptyDraws()` — meshes that would submit a zero-vertex or
+  zero-instance draw call, which WebGPU warns about without naming the
+  culprit.
+- **Fixed reference values** a harness needs to convert tiles to world
+  units without hardcoding a figure that drifts: `tileMeters()`.
+- `audio: { engine, music }` — the live audio engine/player instances,
+  because "audio can only be judged in a real browser (jsdom has no WebAudio
+  and no playback)" (`main.ts`'s own comment), so `tools/audio-check.mjs`
+  drives real playback through this handle.
+
+**If you add a new piece of state a harness might need to verify, add a
+`read*` method here rather than inferring it from a screenshot** — that is
+the established idiom, and every existing one names precisely the thing a
+picture cannot settle on its own.
+
+## `tools/*-shots.mjs`: the visual harnesses
+
+Playwright scripts, run with `node tools/<name>-shots.mjs [url] [outDir]`
+against a running `npm run dev` server. The shared shape, from
+`tools/visual-smoke.mjs`: launch headless Chromium with WebGPU flags
+enabled, capture `console`/`pageerror` events into a log, navigate to the
+app, wait for `#viewport canvas`, drive the game via keyboard hotkeys and
+`window.__slimcity.cmd`/`setCamera`/`setDayT`, and screenshot after each
+step into `outDir`. Output lands in a matching `tools/shots-<name>/`
+directory, which is gitignored (`tools/shots-*/*.png` etc. in
+`.gitignore`) — the harness scripts are tracked, their captured images
+never are.
+
+`tools/shotcam.mjs` holds what every harness shares:
+
+- `cleanShot(page, path)` takes every frame. The game answers a refused
+  command only with a toast titled "… failed", so `cleanShot` reads the
+  toasts first and **fails the run when one says a command failed**: a frame
+  of a town that was never built proves nothing. It logs any other toast it
+  clears, and once a run prints the advisor's alerts as `alert "…"` lines.
+  A frame that is _about_ a refusal passes `{ allowRefusal: /pattern/ }`.
+- `unlimitedMoneyOption(page)`, called before the page loads, sets the saved
+  option the HUD reads. The `setUnlimitedMoney` command alone leaves the red
+  debt badge in every frame.
+- `closeUp` and `tileCamera` aim the camera; the camera floor is 40 m.
+
+A harness that exits non-zero on a refusal has a layout the game's rules
+have moved past. Fix the layout; never loosen the guard. A raw
+`page.screenshot` is kept only where two frames are compared pixel for pixel
+to find a moving vehicle.
+
+Four things the hooks do that a harness must allow for:
+
+- `setVehicles` and `setIncidents` last until the next snapshot. A command
+  sent after them clears what they stood; stand it again before the frame.
+- `setDayT` moves the light only while the sim runs, and lamps light only on
+  a powered street. A night frame needs a power source in its layout and a
+  moment of running clock.
+- A tool with no command of its own, such as the Interchange tool, is driven
+  with `setTool` and real pointer input. Never copy its layout into the
+  harness: the copy is a second source of truth, and its faults read as the
+  game's.
+- A tool locked behind a milestone does nothing on a click. The saved option
+  `sandboxUnlockAll` lifts the lock, as `unlimitedMoneyOption` lifts the debt.
+
+There is one harness per feature area — `archetype-shots.mjs`,
+`bridge-shots.mjs`, `corridor-shots.mjs`, `junction-shots.mjs`,
+`lamppower-shots.mjs`, `oneway-shots.mjs`, `powerline-shots.mjs`,
+`roadclip-shots.mjs`, `tramway-shots.mjs`, `transition-shots.mjs`, and some
+forty more — rather than one generic harness with flags, matching the
+one-system-per-file convention in `src/render/`.
+
+**Using one to debug a render issue:** run the matching harness (or write a
+new one following the pattern above if none exists for the area), open the
+resulting PNGs, and look. A harness exiting 0 with no console errors is not
+evidence the render is correct — only a look at the image is. This is the
+same rule stated from the testing side in
+[testing.md](testing.md#screenshots-not-read-backs); this document is the
+"how," that one is the "why."
+
+**Do not edit `src/` while a harness is running.** Vite hot-reloads the
+page, which drops `window.__slimcity` and the city built on it; the run
+dies partway through with a hook that is suddenly undefined, and the shots
+it did write are of a half-built map.
+
+### `tools/roadmatrix-shots.mjs`: the road geometry audit
+
+One harness is not per-feature-area but per-question, because the question
+is one every road type shares: **is a road the same road all the way along
+it?** It lays every laying tier in every topology a road goes down in —
+straight run, right-angle turn, tee, crossroads with itself, crossroads
+with a different class, and a deliberately raised viaduct — and measures
+what came out.
+
+What makes it different from the others is where it takes its numbers.
+`readApproach` and `readDrawn` both ask what the cross-section _is_;
+`readPaint` asks how wide the asphalt and the paint on it actually _came
+out_, by re-deriving the bands from the chunk's vertex buffer. Those are
+separate questions, and a band that steps in and out along a run answers
+the first one correctly the whole way down. Three things are then checked:
+every plain tile of a run lays an identical section; no band's edge moves
+more than `STEP_TOLERANCE_M` between neighbouring tiles, over the whole run
+_including_ the junction approaches and end caps that the first check has
+to excuse; and the grid and the mesh agree about what is being drawn.
+
+Two things it deliberately does not treat as defects. A run's own end tiles
+and the tiles within `JUNCTION_CLEARANCE` of a junction are excluded from
+the uniformity comparison, because a taper, a turn pocket and a turnaround
+are cross-sections the road is supposed to have for a few tiles and nowhere
+else — the continuity check is what still holds them to changing smoothly.
+And an overpass is _asked for_ and is either crossed over or refused whole
+(see [../../world-sim/overpasses.md](../../world-sim/overpasses.md)). What is
+checked there is that it is one or the other: crossed over means the
+crossing tile carries the deck on its over layer and the road beneath is
+still exactly the road that was there; refused means no tile of the deck
+stands in the air. A deck that lands half its tiles and gives up at the
+crossing would leave a road ramping into the air. Those cases are laid last,
+after every screenshot, so any refusal toasts do not stack down the middle of
+the other shots.
+
+## `tools/roadconformity-shots.mjs`: what a corner actually looks like
+
+A second road harness asks a narrower question the first one cannot: where a
+SMALL road meets a BIG one, what do the kerb, the footway and the paint do at
+the corner? It lays a handful of mixed-class junctions — a street crossing and
+tee-ing an avenue, a street crossing a four-lane road, an alley tee-ing an
+avenue, a ramp meeting a motorway, and a street crossing its own class — and
+for each one prints the bands, the cross-section, the junction's resolved
+control, and a text map of the corner, then photographs it.
+
+The map is the part that matters. `readPaint` only sees bands that run a
+tile's whole length, and a kerb return is a couple of metres of corner that
+reaches no tile edge — so the one piece of geometry most often reported wrong
+was the one piece no read-back could see, leaving only a screenshot at a
+shallow angle, which has been misread repeatedly. `readSurface` samples the
+mesh point by point and reports the topmost surface over each, which draws the
+corner as a picture made of numbers: `#` footway, `.` asphalt, `W`/`Y` paint,
+blank where the terrain shows through.
+
+It also answers the pedestrian question mechanically, which is what "the
+sidewalks don't connect" needed. `readSurface` over the junction and a tile of
+each approach gives every footway cell; flood-filling those into patches turns
+two claims into pass/fail. **Corners:** the footway arriving on one edge of that
+square must be the same patch as the footway arriving on the next, or somebody
+walking round the corner steps into the road. **Access mouths:** the pavement on
+the side an ALLEY joins must be one patch from one edge to the other, because
+the footway runs past an access rather than breaking for it.
+
+The two are deliberately different questions. A footway severed by an ordinary
+road is correct — that is what a crossing is for — so only the access mouths
+are asked about continuity, and only corners between two arms that both carry a
+footway are asked about joining. The counts are printed so a vacuous pass ("0
+corners checked") cannot be misread as a real one. That the patch labelling
+discriminates at all is visible in the output: a crossroads reports FOUR
+patches, one island per corner, where a fill that merged everything would
+report one and every pair would trivially share.
+
+Print the junction's control before reading anything into a missing marking.
+An arm that gives way carries the crossing and the stop bar and an arm running
+through carries neither, a signal holds every arm, and an uncontrolled
+crossroads is painted not at all — so "no crossing on this arm" is usually the
+rule working, not a defect.
+
+## `tools/taper-shots.mjs`: paint against a kerb that is moving
+
+The road audit above deliberately EXCLUDES a taper from its uniformity check,
+because a taper is a cross-section the road is supposed to have for a few tiles
+— so the stretch where the road is changing width is the one stretch nothing
+was measuring. That is where the edge line was found wandering between 0.06 m
+and 0.44 m of a kerb it should hold 0.5 m from, on a defect no read-back could
+have reported: `readApproach` gives the width the tile carries, and the paint
+and the kerb can both be at the right width while sitting at the wrong distance
+from each other.
+
+So the taper harness samples the surface across the road, tile by tile, and
+measures the gap. It scans a two-metre window at a centimetre rather than the
+whole road at ten, because a 0.15 m line is invisible to anything coarser — a
+first attempt at ten centimetres reported the line MISSING on half the tiles,
+which was the sampling and not the road. Only the street taper is held to a
+constant gap: a motorway's lane drop moves the paint inward and leaves the
+tarmac where it is on purpose, and the neutral area between them is the point.
+
+## `tools/audio-check.mjs`: the audio-specific case
+
+Audio cannot be judged from a screenshot at all, and cannot be tested under
+Vitest either — jsdom has no WebAudio and no real playback, which is why
+the unit tests that do exist for audio drive fakes. `audio-check.mjs`
+generates its own throwaway WAV tone, drops it where the manifest expects
+player-supplied songs, and drives the real `AudioContext` through
+`window.__slimcity.audio` in a real browser to confirm the context
+unlocks on a gesture, the ambient mix runs, mute reaches the master gain,
+and a dropped-in song is discovered and plays.
+
+## What this means for a change you're making
+
+- Touching `src/render/*` or `src/app/audio.ts`/`music.ts`: run the
+  matching harness and look at its output before calling the change done,
+  regardless of whether `npm test` is green.
+- Needing to verify sim-side state without a UI action to trigger it: reach
+  for `window.__slimcity.cmd(...)` plus the relevant `read*` method rather
+  than clicking through the UI by hand — it's deterministic and
+  scriptable.
+- Adding a new harness: follow `tools/visual-smoke.mjs`'s shape (console
+  capture, `waitForSelector('#viewport canvas')`, a `shot(name)` helper),
+  take every frame through `cleanShot`, check with a `read*` hook that the
+  subject stands before shooting it, and put its output directory under the
+  `tools/shots-*` gitignore pattern.

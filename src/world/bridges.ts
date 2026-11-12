@@ -1,0 +1,280 @@
+/**
+ * Elevation profile for a road placement: decides how high each tile of a drag
+ * sits above its terrain, so water crossings come out as a deck on piers and
+ * approaches ramp down to the ground at a grade a road can carry.
+ *
+ * Pure over GridState — no renderer, no worker state — so the whole profile is
+ * unit-testable from a hand-built grid.
+ */
+import {
+  BRIDGE_CLEARANCE_M,
+  BRIDGE_COST_PER_METER_TILE,
+  BRIDGE_MAX_ELEVATION,
+  BRIDGE_MAX_GRADE,
+  SEA_LEVEL,
+} from '../shared/constants';
+import { partnerTileOf } from '../shared/corridor';
+import { atOneLevel } from '../shared/overpass';
+import type { GridState, TilePoint } from '../shared/types';
+import { RoadFlow, RoadTier } from '../shared/types';
+
+// Indexing — parameterized by the grid's own `size`, matching the convention in
+// src/world/grid.ts and src/world/roads.ts.
+const indexOf = (size: number, x: number, z: number): number => z * size + x;
+
+const inBoundsOf = (size: number, x: number, z: number): boolean =>
+  x >= 0 && z >= 0 && x < size && z < size;
+
+/**
+ * What the solver reads of a grid: the ground, the water and the roads already
+ * built. The worker's grid and the render thread's copy of it both carry it,
+ * so a preview solves the deck the command will be laid at.
+ */
+export type DeckGround = Pick<
+  GridState,
+  'size' | 'height' | 'water' | 'roadTier' | 'roadElevation'
+>;
+
+export type ElevationProfile =
+  { ok: true; elevations: number[]; cost: number } | { ok: false; reason: 'grade' | 'height' };
+
+/** Terrain height (metres, world Y) at a tile. */
+function groundY(g: DeckGround, t: TilePoint): number {
+  if (!inBoundsOf(g.size, t.x, t.z)) return 0;
+  return g.height[indexOf(g.size, t.x, t.z)] ?? 0;
+}
+
+/**
+ * The world height a tile's deck must reach on its own account: the water
+ * surface plus BRIDGE_CLEARANCE_M over water, the ground itself on dry land —
+ * a deck never sinks below the terrain it crosses.
+ */
+function floorY(g: DeckGround, t: TilePoint): number {
+  const ground = groundY(g, t);
+  if (!inBoundsOf(g.size, t.x, t.z)) return ground;
+  if (!g.water[indexOf(g.size, t.x, t.z)]) return ground;
+  return Math.max(ground, SEA_LEVEL + BRIDGE_CLEARANCE_M);
+}
+
+/**
+ * Below this much lift, a tile is on the ground. Guards against a profile that
+ * arithmetic left a fraction of a millimetre off the terrain registering as an
+ * elevated tile — which would cost money, skip its frontage, and try to stand a
+ * bridge up under a road that is plainly lying on the dirt.
+ */
+const AT_GRADE_EPSILON_M = 0.01;
+
+const DIRS: ReadonlyArray<readonly [number, number]> = [
+  [0, -1],
+  [1, 0],
+  [0, 1],
+  [-1, 0],
+];
+
+/**
+ * Deck world heights of already-built roads orthogonally adjacent to `t` but
+ * outside the drag — tiles the new span will physically join onto, and
+ * therefore has to meet at a legal step. Plain ground is not a connection: a
+ * viaduct is allowed to pass over it.
+ *
+ * Nor is the road a drag crosses. Where `t` already holds a road, the tiles
+ * either side of it ACROSS the drag's line are that road running on, and a
+ * deck may pass over it rather than join it; whether it does is the crossing
+ * rule's decision, not the solver's. A deck left at that road's height meets
+ * it as it always has.
+ */
+function connectionHeights(
+  g: DeckGround,
+  t: TilePoint,
+  inDrag: ReadonlySet<number>,
+  acrossX: boolean | null,
+): number[] {
+  const heights: number[] = [];
+  const holdsRoad = (g.roadTier[indexOf(g.size, t.x, t.z)] ?? RoadTier.None) !== RoadTier.None;
+  for (const [dx, dz] of DIRS) {
+    if (holdsRoad && acrossX !== null && (acrossX ? dx !== 0 : dz !== 0)) continue;
+    const nx = t.x + dx;
+    const nz = t.z + dz;
+    if (!inBoundsOf(g.size, nx, nz)) continue;
+    const idx = indexOf(g.size, nx, nz);
+    if (inDrag.has(idx)) continue;
+    if ((g.roadTier[idx] ?? RoadTier.None) === RoadTier.None) continue;
+    heights.push((g.height[idx] ?? 0) + (g.roadElevation[idx] ?? 0));
+  }
+  return heights;
+}
+
+/**
+ * Solves the deck height for every tile of `tiles`, in drag order.
+ *
+ * Each tile starts at the height its own terrain demands, then two sweeps —
+ * one forward, one back — raise whatever is needed so no neighbouring pair
+ * differs by more than BRIDGE_MAX_GRADE. That yields the LOWEST profile that
+ * both clears the water and ramps legally, which is also the cheapest.
+ *
+ * A drag may lay more than one run — a corridor is two, side by side — and
+ * each run is solved on its own: the sweeps relate a tile to the one before
+ * it, and where the list steps from the end of one run to the start of the
+ * next, those two are not neighbours. Chained, the step between them read as
+ * a climb no road could make, and one run's tail was lifted onto decks to
+ * meet the other's head.
+ *
+ * Fails rather than half-building when the ends cannot reach the ground they
+ * connect to — drag from further back on the bank to give the ramp room.
+ */
+export function solveElevationProfile(
+  g: DeckGround,
+  tiles: readonly TilePoint[],
+  manual = 0,
+): ElevationProfile {
+  if (tiles.length === 0) return { ok: true, elevations: [], cost: 0 };
+
+  const inDrag = new Set(
+    tiles.filter((t) => inBoundsOf(g.size, t.x, t.z)).map((t) => indexOf(g.size, t.x, t.z)),
+  );
+  const elevations: number[] = [];
+  let cost = 0;
+  for (const run of contiguousRuns(tiles)) {
+    const solved = solveRun(g, run, inDrag, manual);
+    if (!solved.ok) return solved;
+    elevations.push(...solved.elevations);
+    cost += solved.cost;
+  }
+  return { ok: true, elevations, cost };
+}
+
+/** The drag cut wherever a tile is not orthogonally next to the one before it. */
+function contiguousRuns(tiles: readonly TilePoint[]): TilePoint[][] {
+  const runs: TilePoint[][] = [];
+  let run: TilePoint[] = [];
+  for (const t of tiles) {
+    const prev = run[run.length - 1];
+    if (prev && Math.abs(t.x - prev.x) + Math.abs(t.z - prev.z) !== 1) {
+      runs.push(run);
+      run = [];
+    }
+    run.push(t);
+  }
+  if (run.length > 0) runs.push(run);
+  return runs;
+}
+
+/**
+ * Both halves of a corridor are one road, so a station lifted on one half is
+ * lifted on the other: each pair of partners takes the higher of the two
+ * lifts, and a pair left on the ground is levelled together as one footprint.
+ * `flows` are the stored flow bytes the tiles will carry; a tile that is not
+ * a corridor half, or whose partner the drag does not lay, keeps its own.
+ */
+export function shareCorridorLifts(
+  tiles: readonly TilePoint[],
+  flows: readonly number[],
+  elevations: readonly number[],
+): number[] {
+  const at = new Map<string, number>();
+  tiles.forEach((t, i) => at.set(`${t.x},${t.z}`, i));
+  const shared = [...elevations];
+  tiles.forEach((t, i) => {
+    const partner = partnerTileOf(t.x, t.z, flows[i] ?? RoadFlow.None);
+    if (!partner) return;
+    const j = at.get(`${partner.x},${partner.z}`);
+    if (j === undefined) return;
+    const lift = Math.max(shared[i] ?? 0, shared[j] ?? 0);
+    shared[i] = lift;
+    shared[j] = lift;
+  });
+  return shared;
+}
+
+function solveRun(
+  g: DeckGround,
+  tiles: readonly TilePoint[],
+  inDrag: ReadonlySet<number>,
+  manual: number,
+): ElevationProfile {
+  const n = tiles.length;
+  // Which way the drag's line lies across each tile: x when it runs along z.
+  const acrossX = tiles.map((t, i): boolean | null => {
+    const step = tiles[i + 1] ?? tiles[i - 1];
+    if (!step) return null;
+    return step.x === t.x;
+  });
+  const joins = tiles.map((t, i) => connectionHeights(g, t, inDrag, acrossX[i]!));
+
+  // Everything below is solved in world Y, not in per-tile offsets, so the deck
+  // comes out smooth over an uneven riverbed instead of tracking the bed. The
+  // stored layer is the difference, taken at the very end.
+  const floor = tiles.map((t, i) => {
+    const joined = joins[i]!;
+    const fromJoins = joined.length > 0 ? Math.max(...joined) - BRIDGE_MAX_GRADE : -Infinity;
+    return Math.max(floorY(g, t), fromJoins);
+  });
+
+  // Ceiling for the requested height: a viaduct still has to climb from
+  // whatever each end lands on, so the manual target is capped by how far the
+  // ramp has got by tile i. An end over water lands on nothing and caps
+  // nothing — a span may simply stop out there and be capped like a dead end.
+  const endAnchor = (i: number): number | null => {
+    const t = tiles[i]!;
+    if (!inBoundsOf(g.size, t.x, t.z)) return null;
+    if (g.water[indexOf(g.size, t.x, t.z)]) return null;
+    const joined = joins[i]!;
+    return joined.length > 0 ? Math.max(...joined) : groundY(g, t);
+  };
+  const head = endAnchor(0);
+  const tail = endAnchor(n - 1);
+
+  const deckY = tiles.map((t, i) => {
+    let envelope = Infinity;
+    if (head !== null) envelope = Math.min(envelope, head + i * BRIDGE_MAX_GRADE);
+    if (tail !== null) envelope = Math.min(envelope, tail + (n - 1 - i) * BRIDGE_MAX_GRADE);
+    return Math.max(floor[i]!, Math.min(groundY(g, t) + manual, envelope));
+  });
+
+  // Continuity: raise whatever is needed so no neighbouring pair steps by more
+  // than the grade limit. Two sweeps give the lowest profile that satisfies it.
+  for (let i = 1; i < n; i++) {
+    deckY[i] = Math.max(deckY[i]!, deckY[i - 1]! - BRIDGE_MAX_GRADE);
+  }
+  for (let i = n - 2; i >= 0; i--) {
+    deckY[i] = Math.max(deckY[i]!, deckY[i + 1]! - BRIDGE_MAX_GRADE);
+  }
+
+  // The sweeps raise tiles within the drag to meet each other, but roads the
+  // span joins onto are already built and cannot be raised to suit it.
+  for (let i = 0; i < n; i++) {
+    for (const joined of joins[i]!) {
+      if (!atOneLevel(deckY[i]!, joined)) return { ok: false, reason: 'grade' };
+    }
+  }
+
+  // The stored layer is the offset from each tile's own terrain, kept exact:
+  // rounding it to whole metres would make the deck inherit the fraction of
+  // whatever it crosses, bowing a level span as the riverbed rises and falls.
+  // Only a hair above the ground counts as none, so arithmetic slack on a tile
+  // nothing actually lifted cannot make it read as a bridge.
+  const elevations = tiles.map((t, i) => {
+    const lift = deckY[i]! - groundY(g, t);
+    return lift > AT_GRADE_EPSILON_M ? lift : 0;
+  });
+  if (elevations.some((e) => e > BRIDGE_MAX_ELEVATION)) return { ok: false, reason: 'height' };
+
+  // A span has to land. An end tile still in the air over dry ground, with no
+  // built road to hand off to, means the drag did not reach far enough back
+  // onto the bank for the ramp — better to reject it than to build a road
+  // erupting out of the ground.
+  for (const end of [0, n - 1]) {
+    if (elevations[end] === 0) continue;
+    if (endAnchor(end) === null) continue; // over water: capped like any dead end
+    if (joins[end]!.length > 0) continue; // handed off to a built road
+    return { ok: false, reason: 'grade' };
+  }
+
+  const cost = Math.round(elevations.reduce((sum, e) => sum + e * BRIDGE_COST_PER_METER_TILE, 0));
+  return { ok: true, elevations, cost };
+}
+
+/** True where a road placement needs a deck at all — the render/cost fast path. */
+export function isElevated(elevations: readonly number[]): boolean {
+  return elevations.some((e) => e > 0);
+}

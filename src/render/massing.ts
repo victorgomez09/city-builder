@@ -1,0 +1,677 @@
+/**
+ * Building massing: stacked-box setbacks on grown towers ("Silhouette
+ * variety"). Two pieces:
+ *
+ *  - `computeSetbacks` is a PURE derivation (entry, buildingId) -> a stacked
+ *    list of boxes, mirroring facade.ts's "no THREE/DOM dependency"
+ *    convention: level-1 buildings (and ploppables, which have no `level`)
+ *    are a single box; level 2/3 split the SAME total height into 2/3
+ *    vertically-stacked tiers, each upper tier inset 10-20% narrower than
+ *    the tier directly below it (deterministic from buildingId).
+ *
+ *  - `BuildingInstancer` (buildings.ts) draws every tier of the stack, one
+ *    instance per tier in the entry's own facade bucket, so each tier carries
+ *    the building's windows and the stepped silhouette actually shows; the
+ *    ground floor, the entrance and the loading doors stay on the base tier.
+ *
+ *  - `MassingRenderer` instances only what is not a tier: a tower's podium,
+ *    colored with the SAME wall-color family (facade.ts's deriveFacadeParams)
+ *    and lifecycle tint as the base instancer, so it reads as part of the
+ *    same building rather than an add-on.
+ *
+ * `InstancedSlotPool` is a small generic capacity-doubling instanced-mesh
+ * slot allocator factored out here because both this file and props.ts need
+ * several independent instanced layers with the exact same
+ * allocate/free/grow bookkeeping ParkedCarRenderer already established
+ * (parked.ts) — rather than re-deriving it per layer, it is written once and
+ * reused.
+ */
+import * as THREE from 'three';
+import { MeshStandardNodeMaterial } from 'three/webgpu';
+import { uniform } from 'three/tsl';
+import {
+  BuildingCatalogEntry,
+  BuildingDelta,
+  BuildingInstance,
+  BuildingState,
+} from '../shared/types';
+import { nightTintNode } from './nightlook';
+import { MIN_INSTANCE_CAPACITY } from './groundquad';
+import { TILE_METERS } from '../shared/constants';
+import { footprintForRotation } from '../shared/footprint';
+import {
+  bodyMetresFor,
+  DEFAULT_BODY_M_PER_TILE,
+  DETACHED_BODY_MIN_M,
+  MAX_FOOTPRINT_FILL,
+  RES_LOW_BODY_M_PER_TILE,
+} from '../shared/floorarea';
+import { deriveFacadeParams, windowGrid } from './facade';
+import { materialUnit } from './palette';
+import { maxHeightUnderBody } from './footprint';
+import { findStreetFacingEdge, NO_STREETS, type StreetLookup } from './frontage';
+import { garagePlanAt, lotPlanFor, lotPointToWorld, type GaragePlan } from './lotplan';
+import { parksInGarage, PODIUM_OVERHANG_M } from '../shared/garage';
+import { isDenseLotEntry } from '../shared/parkingcode';
+import { isApartmentEntry, isFarmEntry, isHouseEntry } from './archetypes';
+import type { KerbSurroundings } from '../shared/kerblayout';
+
+// ---------------------------------------------------------------------------
+// computeSetbacks (pure)
+// ---------------------------------------------------------------------------
+
+export interface SetbackBox {
+  /** World meters, X extent. */
+  w: number;
+  /** World meters, Z extent. */
+  d: number;
+  /** World meters, vertical extent of just this tier. */
+  h: number;
+  /** World meters above ground to this tier's BOTTOM face; boxes stack with no gap/overlap. */
+  yOffset: number;
+}
+
+export interface SetbackResult {
+  /** Bottom-to-top: boxes[0] is the base tier (full footprint), boxes[last] is the roof tier. */
+  boxes: SetbackBox[];
+  /** A tower's base: a wider tier at ground, under the slab, filling the lot. */
+  podium?: SetbackBox;
+}
+
+/**
+ * How much building a lot tile carries, in METRES of body per tile of
+ * footprint.
+ *
+ * A building's proportions are real: a storey is 3.2 m and the car beside it
+ * is 4.0 m, and neither cares how the grid is cut. So the body is a size, not
+ * a share of whatever the tile happens to be — expressed as a share only at
+ * the last moment, because that is what the instancer wants. Held as a
+ * fraction instead, every building silently changes shape when the tile is
+ * resized: the heights stay honest, the plans stretch under them, and a house
+ * that was a house becomes a bungalow nobody drew.
+ */
+export {
+  RES_LOW_BODY_M_PER_TILE,
+  DETACHED_BODY_MIN_M,
+  DEFAULT_BODY_M_PER_TILE,
+  MAX_FOOTPRINT_FILL,
+  bodyMetresFor,
+};
+
+/** The share of a lot tile a body covers, given what the tile now measures. */
+const fillFor = (bodyMetres: number): number =>
+  Math.min(MAX_FOOTPRINT_FILL, bodyMetres / TILE_METERS);
+
+/** Default footprint shrink so neighboring buildings don't touch — mirrors buildings.ts so the base tier lines up with BuildingInstancer's own box edges. */
+export const MASSING_FOOTPRINT_SHRINK = fillFor(DEFAULT_BODY_M_PER_TILE);
+/** Detached single-family homes leave a visible yard; a bigger tile is a bigger yard, not a bigger house. */
+export const RES_LOW_FOOTPRINT_SHRINK = fillFor(RES_LOW_BODY_M_PER_TILE);
+
+/** The share of its lot a body covers on each axis: the body over the lot. */
+export function bodyFillFor(entry: BuildingCatalogEntry): { x: number; z: number } {
+  const body = bodyMetresFor(entry);
+  return {
+    x: body.w / (entry.footprint.w * TILE_METERS),
+    z: body.d / (entry.footprint.d * TILE_METERS),
+  };
+}
+
+/** A tower stands on a podium this many of its own floors tall that fills its lot. */
+export const PODIUM_STOREYS = 2;
+/** A mid-rise stands on a one-storey podium of the 15 ft a retail ground floor is zoned to. */
+export const MIDRISE_PODIUM_M = 4.6;
+/** A mid-rise's podium is brick under its clad storeys. */
+const MIDRISE_PODIUM_COLOR = materialUnit('redBrick');
+
+/** How tall a podium a block stands on, in metres; null for a block that stands on the ground. A tower's is two of the floors its slab is cut into, so its top is a floor line. */
+export function podiumHeightOf(entry: BuildingCatalogEntry): number | null {
+  if (entry.kind === 'tower') {
+    const { rows } = windowGrid(entry, entry.height);
+    return PODIUM_STOREYS * (entry.height / rows);
+  }
+  if (entry.kind === 'midrise') return MIDRISE_PODIUM_M;
+  return null;
+}
+
+/**
+ * How many stacked tiers a building's body is drawn as: its level, 1 to 3,
+ * for a flat-roofed grown building; one for a ploppable, which has no level,
+ * for a house, whose pitched roof has nowhere to step, for an apartment
+ * block, which is one walk-up, one plate or one slab at every level, and for
+ * a farm, whose buildings are its own kit.
+ */
+export function tierCountOf(entry: BuildingCatalogEntry): number {
+  if (isHouseEntry(entry) || isFarmEntry(entry) || isApartmentEntry(entry)) return 1;
+  return Math.min(3, Math.max(1, Math.round(entry.level ?? 1)));
+}
+
+/** The height of one tier of the body, which is what its window rows and bands are cut to. */
+export function tierHeightOf(entry: BuildingCatalogEntry): number {
+  return entry.height / tierCountOf(entry);
+}
+
+/**
+ * How far a home's front wall stands behind the sidewalk (behind the
+ * carriageway, on a road with no sidewalk): a front yard the longest car, 4.6
+ * m, stands in without blocking the footway.
+ */
+export const HOUSE_FRONT_YARD_M = 5.5;
+
+/**
+ * World-meter body adjustments on its lot: where a suburban car park laid to
+ * code (lotplan.ts) or a home's front yard moves the body, as a centre shift,
+ * and span reductions, which no rule now makes. All zero for a body centred
+ * on its lot.
+ */
+export interface FrontageSetback {
+  /** Meters removed from the body's X span (E/W frontage road). */
+  spanXM: number;
+  /** Meters removed from the body's Z span (N/S frontage road). */
+  spanZM: number;
+  /** Meters added to the body's center X (moves the body away from the road). */
+  centerXM: number;
+  /** Meters added to the body's center Z (moves the body away from the road). */
+  centerZM: number;
+}
+
+const ZERO_FRONTAGE_SETBACK: FrontageSetback = { spanXM: 0, spanZM: 0, centerXM: 0, centerZM: 0 };
+
+/**
+ * Where a building's body stands on its lot, as a shift from the lot's
+ * centre. A suburban commercial or industrial body stands where its car park,
+ * laid to code, leaves it room (lotplan.ts) — slid back or aside, never cut,
+ * so the floor it is drawn with is the floor its figures come from. A
+ * downtown block, and anything else, stands centred.
+ *
+ * A home slides to its front yard: see houseFrontShift. Pure.
+ */
+export function frontageSetbackFor(
+  entry: BuildingCatalogEntry,
+  x: number,
+  z: number,
+  roadAt: (tileX: number, tileZ: number) => boolean,
+  street: StreetLookup = NO_STREETS,
+  rotation: 0 | 1 | 2 | 3 = 0,
+  kerb: KerbSurroundings | null = null,
+): FrontageSetback {
+  if (isHouseEntry(entry)) return houseFrontShift(entry, x, z, street, rotation);
+  if (isFarmEntry(entry)) return ZERO_FRONTAGE_SETBACK;
+  const plan = lotPlanFor(entry, x, z, roadAt, rotation, kerb);
+  if (!plan) {
+    // A dense block slides to the street line and leaves the lot's rear to its garage.
+    const garage = garagePlanAt(entry, { x, z, rotation }, roadAt);
+    if (!garage) return ZERO_FRONTAGE_SETBACK;
+    const lot = footprintForRotation(entry, rotation);
+    const at = garageBodyCentre(garage);
+    return {
+      spanXM: 0,
+      spanZM: 0,
+      centerXM: at.x - (x + lot.w / 2) * TILE_METERS,
+      centerZM: at.z - (z + lot.d / 2) * TILE_METERS,
+    };
+  }
+
+  const { body } = plan.layout;
+  const centre = lotPointToWorld(plan.frame, (body.u0 + body.u1) / 2, (body.v0 + body.v1) / 2);
+  const lot = footprintForRotation(entry, rotation);
+  return {
+    spanXM: 0,
+    spanZM: 0,
+    centerXM: centre.x - (x + lot.w / 2) * TILE_METERS,
+    centerZM: centre.z - (z + lot.d / 2) * TILE_METERS,
+  };
+}
+
+/** Where a dense block's body stands on its lot, in world metres: against the street line, its garage behind it. */
+export function garageBodyCentre(plan: GaragePlan): { x: number; z: number } {
+  const { body } = plan.garage;
+  return lotPointToWorld(plan.frame, (body.u0 + body.u1) / 2, (body.v0 + body.v1) / 2);
+}
+
+/** The body's size along the map's x and z axes once the building is turned. */
+function worldBodyFor(
+  entry: BuildingCatalogEntry,
+  rotation: 0 | 1 | 2 | 3,
+): { w: number; d: number } {
+  const body = bodyMetresFor(entry);
+  return rotation % 2 === 1 ? { w: body.d, d: body.w } : body;
+}
+
+/**
+ * A home slides toward the street it fronts, whole, until its front wall
+ * stands HOUSE_FRONT_YARD_M behind the sidewalk. The verge counts toward that
+ * yard, since the home's lawn runs across it; where the verge alone is deeper,
+ * the wall stops at the lot's edge, and it never passes the lot's back either.
+ * A home fronting no street stays centred. Pure.
+ */
+function houseFrontShift(
+  entry: BuildingCatalogEntry,
+  x: number,
+  z: number,
+  street: StreetLookup,
+  rotation: 0 | 1 | 2 | 3,
+): FrontageSetback {
+  const lot = footprintForRotation(entry, rotation);
+  const edge = findStreetFacingEdge(x, z, lot.w, lot.d, street);
+  const vergeM = edge ? street(edge.roadTileX, edge.roadTileZ)?.vergeM : undefined;
+  if (!edge || vergeM === undefined) return ZERO_FRONTAGE_SETBACK;
+
+  const alongDepth = edge.side === 'N' || edge.side === 'S';
+  const lotDepthM = (alongDepth ? lot.d : lot.w) * TILE_METERS;
+  const body = worldBodyFor(entry, rotation);
+  const bodyDepthM = alongDepth ? body.d : body.w;
+  const centredFrontM = (lotDepthM - bodyDepthM) / 2;
+  const frontM = Math.min(lotDepthM - bodyDepthM, Math.max(0, HOUSE_FRONT_YARD_M - vergeM));
+  const towardStreetM = centredFrontM - frontM;
+  switch (edge.side) {
+    case 'N':
+      return { spanXM: 0, spanZM: 0, centerXM: 0, centerZM: -towardStreetM };
+    case 'S':
+      return { spanXM: 0, spanZM: 0, centerXM: 0, centerZM: towardStreetM };
+    case 'E':
+      return { spanXM: 0, spanZM: 0, centerXM: towardStreetM, centerZM: 0 };
+    default: // 'W'
+      return { spanXM: 0, spanZM: 0, centerXM: -towardStreetM, centerZM: 0 };
+  }
+}
+/** "10-20% setbacks". */
+export const MIN_SETBACK_INSET = 0.1;
+export const MAX_SETBACK_INSET = 0.2;
+
+const SETBACK_HASH_SLOT_MULTIPLIER = 4096;
+/** tierIndex (1, 2 — never 0, the base tier is never inset) is added on top of this base slot. */
+const HASH_SLOT_SETBACK_INSET_BASE = 10;
+
+/**
+ * 32-bit avalanche mix ("triple32", public domain) -> [0,1). Deterministic;
+ * never Math.random/Date.now. Each render/*.ts file keeps its own copy of
+ * this exact recipe rather than importing it (see buildings.ts's and
+ * facade.ts's identical local copies).
+ */
+function hash1(n: number): number {
+  let h = n >>> 0;
+  h = Math.imul(h ^ (h >>> 16), 0x45d9f3b) >>> 0;
+  h = Math.imul(h ^ (h >>> 16), 0x45d9f3b) >>> 0;
+  h = (h ^ (h >>> 16)) >>> 0;
+  return h / 4294967296;
+}
+
+/** Deterministic hash(buildingId, tierIndex) -> inset fraction in [MIN_SETBACK_INSET, MAX_SETBACK_INSET). */
+function setbackInsetFraction(buildingId: number, tierIndex: number): number {
+  const seed = buildingId * SETBACK_HASH_SLOT_MULTIPLIER + HASH_SLOT_SETBACK_INSET_BASE + tierIndex;
+  return MIN_SETBACK_INSET + hash1(seed) * (MAX_SETBACK_INSET - MIN_SETBACK_INSET);
+}
+
+/**
+ * Full stacked-box massing for one building instance. Pure;
+ * deterministic in (entry, buildingId). level 1 (and ploppables, whose
+ * catalog entries carry no `level` at all, and houses, whose pitched roof
+ * has nowhere to step) return a single box; level 2/3 split entry.height
+ * across 2/3 vertically-stacked tiers — the split is even (height /
+ * tierCount) except the LAST tier, which absorbs `entry.height - yOffset`
+ * exactly so the stack's total height always equals entry.height exactly (no
+ * floating-point drift from repeated addition). Each tier after the first is
+ * inset 10-20% narrower than the tier directly below it, the fraction
+ * independently re-drawn per tier from buildingId so a level-3 building's
+ * second setback isn't just a repeat of its first. An optional `frontage`
+ * setback (frontageSetbackFor) narrows the base tier by its span reductions,
+ * which no lot now makes: a body is moved, never cut.
+ */
+export function computeSetbacks(
+  entry: BuildingCatalogEntry,
+  buildingId: number,
+  frontage?: FrontageSetback,
+): SetbackResult {
+  const level = tierCountOf(entry);
+  const totalHeight = entry.height;
+  const tierHeight = tierHeightOf(entry);
+
+  const body = bodyMetresFor(entry);
+  const baseW = body.w - (frontage?.spanXM ?? 0);
+  const baseD = body.d - (frontage?.spanZM ?? 0);
+
+  const boxes: SetbackBox[] = [];
+  let w = baseW;
+  let d = baseD;
+  let yOffset = 0;
+  for (let tier = 0; tier < level; tier++) {
+    if (tier > 0) {
+      const inset = setbackInsetFraction(buildingId, tier);
+      w *= 1 - inset;
+      d *= 1 - inset;
+    }
+    const isLast = tier === level - 1;
+    const h = isLast ? totalHeight - yOffset : tierHeight;
+    boxes.push({ w, d, h, yOffset });
+    yOffset += h;
+  }
+
+  const podiumH = podiumHeightOf(entry);
+  if (podiumH === null) return { boxes };
+  // The podium fills the lot to the ceiling every body keeps, less the same
+  // frontage span the slab gives up. A block that parks in a garage or a car
+  // park on its lot keeps a podium a hand wider than its slab instead: the lot's rear is the parking's.
+  const garaged = parksInGarage(entry) || isDenseLotEntry(entry);
+  const podiumW = garaged
+    ? body.w + 2 * PODIUM_OVERHANG_M
+    : entry.footprint.w * TILE_METERS * MAX_FOOTPRINT_FILL;
+  const podiumD = garaged
+    ? body.d + 2 * PODIUM_OVERHANG_M
+    : entry.footprint.d * TILE_METERS * MAX_FOOTPRINT_FILL;
+  const podium: SetbackBox = {
+    w: podiumW - (frontage?.spanXM ?? 0),
+    d: podiumD - (frontage?.spanZM ?? 0),
+    h: Math.min(totalHeight, podiumH),
+    yOffset: 0,
+  };
+  return { boxes, podium };
+}
+
+// ---------------------------------------------------------------------------
+// Lifecycle tint (mirrors buildings.ts's private tintFor/TINT_* constants —
+// not exported there, so re-derived here identically for cross-renderer
+// visual consistency; the "same tint" requirement).
+// ---------------------------------------------------------------------------
+
+const TINT_ACTIVE: readonly [number, number, number] = [1, 1, 1];
+const TINT_CONSTRUCTING: readonly [number, number, number] = [0.55, 0.55, 0.55];
+const TINT_ABANDONED: readonly [number, number, number] = [0.25, 0.25, 0.25];
+
+/** Same per-state tint multiplier as buildings.ts's tintFor, exported for props.ts to share. */
+export function massingLifecycleTint(state: BuildingState): readonly [number, number, number] {
+  if (state === BuildingState.Constructing) return TINT_CONSTRUCTING;
+  if (state === BuildingState.Abandoned) return TINT_ABANDONED;
+  return TINT_ACTIVE;
+}
+
+/** Mirrors buildings.ts's CONSTRUCTING_HEIGHT_SCALE so overlaid tiers/props shrink in lockstep with the base box. */
+export const CONSTRUCTING_MASSING_HEIGHT_SCALE = 0.25;
+
+// ---------------------------------------------------------------------------
+// InstancedSlotPool: generic capacity-doubling instanced-mesh slot allocator.
+// Reused by MassingRenderer (below) and props.ts's several prop layers.
+// ---------------------------------------------------------------------------
+
+const HIDDEN_SCALE_MATRIX = new THREE.Matrix4().makeScale(0, 0, 0);
+
+export class InstancedSlotPool {
+  private readonly scene: THREE.Scene;
+  private readonly geometry: THREE.BufferGeometry;
+  private readonly material: THREE.Material;
+  private mesh: THREE.InstancedMesh;
+  private capacity: number;
+  private used = 0;
+  private readonly freeSlots: number[] = [];
+
+  constructor(
+    scene: THREE.Scene,
+    geometry: THREE.BufferGeometry,
+    material: THREE.Material,
+    initialCapacity: number,
+  ) {
+    this.scene = scene;
+    this.geometry = geometry;
+    this.material = material;
+    this.capacity = Math.max(MIN_INSTANCE_CAPACITY, initialCapacity);
+    this.mesh = this.buildMesh(this.capacity);
+    this.scene.add(this.mesh);
+  }
+
+  /** Always the CURRENT live mesh (growth swaps this out; never cache the return value across an allocate() call). */
+  getMesh(): THREE.InstancedMesh {
+    return this.mesh;
+  }
+
+  /** Returns a slot index ready to receive setMatrixAt/setColorAt; recycles a freed slot before growing. */
+  allocate(): number {
+    const recycled = this.freeSlots.pop();
+    if (recycled !== undefined) return recycled;
+    if (this.used >= this.capacity) this.grow();
+    return this.used++;
+  }
+
+  /** Hides the slot (zero-scale matrix) and returns it to the free list for the next allocate(). */
+  free(slot: number): void {
+    this.mesh.setMatrixAt(slot, HIDDEN_SCALE_MATRIX);
+    this.freeSlots.push(slot);
+  }
+
+  setMatrixAt(slot: number, m: THREE.Matrix4): void {
+    this.mesh.setMatrixAt(slot, m);
+  }
+
+  getMatrixAt(slot: number, out: THREE.Matrix4): void {
+    this.mesh.getMatrixAt(slot, out);
+  }
+
+  setColorAt(slot: number, c: THREE.Color): void {
+    this.mesh.setColorAt(slot, c);
+  }
+
+  getColorAt(slot: number, out: THREE.Color): void {
+    this.mesh.getColorAt(slot, out);
+  }
+
+  /** Flushes mesh.count + the dirty flags; call once per apply() batch, not per instance. */
+  commit(): void {
+    this.mesh.count = this.used;
+    // An instanced mesh with no instances still gets submitted as a draw call
+    // with a vertex count of zero, which the WebGPU backend warns about on
+    // every frame. A pool that holds nothing is simply not drawn. Nothing
+    // outside the pool owns this flag — lens toggles live on their own meshes.
+    this.mesh.visible = this.used > 0;
+    this.mesh.instanceMatrix.needsUpdate = true;
+    if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
+    // Invalidate the frustum-culling sphere: three.js's Frustum.intersectsObject
+    // computes it once (lazily, when null) and never again — a pool first
+    // culled while empty would otherwise cache an empty sphere at the world
+    // origin and every instance committed later would be culled forever.
+    this.mesh.boundingSphere = null;
+  }
+
+  instanceCount(): number {
+    return this.mesh.count;
+  }
+
+  private buildMesh(capacity: number): THREE.InstancedMesh {
+    const mesh = new THREE.InstancedMesh(this.geometry, this.material, capacity);
+    mesh.count = 0;
+    mesh.visible = false; // empty until commit() says otherwise — see commit()
+    // Shadow sweep: pooled building-massing tiers + prop/landmark/utility
+    // kits both cast and receive the sun's shadow (one instanced draw each,
+    // so the budget cost is a single extra shadow-map draw per pool).
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    mesh.instanceColor = new THREE.InstancedBufferAttribute(
+      new Float32Array(capacity * 3).fill(1),
+      3,
+    );
+    // A region-masked vehicle reads its tint through its own attribute, aliased to this buffer.
+    if (this.geometry.getAttribute('vehicleRegion')) {
+      this.geometry.setAttribute('vehicleInstanceTint', mesh.instanceColor);
+    }
+    return mesh;
+  }
+
+  private grow(): void {
+    const newCapacity = this.capacity * 2;
+    const newMesh = this.buildMesh(newCapacity);
+    newMesh.instanceMatrix.array.set(this.mesh.instanceMatrix.array);
+    if (this.mesh.instanceColor && newMesh.instanceColor) {
+      newMesh.instanceColor.array.set(this.mesh.instanceColor.array);
+    }
+    newMesh.count = this.mesh.count;
+
+    this.scene.remove(this.mesh);
+    this.mesh.dispose();
+    this.scene.add(newMesh);
+    this.mesh = newMesh;
+    this.capacity = newCapacity;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// MassingRenderer
+// ---------------------------------------------------------------------------
+
+const _matrix = new THREE.Matrix4();
+const _position = new THREE.Vector3();
+const _quaternion = new THREE.Quaternion();
+const _scale = new THREE.Vector3();
+const _color = new THREE.Color();
+const _yAxis = new THREE.Vector3(0, 1, 0);
+
+const INITIAL_MASSING_CAPACITY = 64;
+
+export class MassingRenderer {
+  private readonly heightAt: (x: number, z: number) => number;
+  /** Answers "is this grid tile a road" for the frontage parking setback; the default never finds one. */
+  private readonly roadAt: (x: number, z: number) => boolean;
+  /** The streets a home's front yard is measured from, so the tiers follow the body. */
+  private readonly street: StreetLookup;
+  private readonly catalogById: Map<string, BuildingCatalogEntry>;
+  private readonly geometry = new THREE.BoxGeometry(1, 1, 1);
+  private readonly material: MeshStandardNodeMaterial;
+  private readonly nightFactorUniform = uniform(0);
+  private readonly pool: InstancedSlotPool;
+
+  /** buildingId -> upper-tier slot indices (0, 1, or 2 slots depending on level). */
+  private readonly buildingSlots = new Map<number, number[]>();
+
+  constructor(
+    scene: THREE.Scene,
+    heightAt: (x: number, z: number) => number,
+    catalog: BuildingCatalogEntry[],
+    roadAt?: (x: number, z: number) => boolean,
+    street: StreetLookup = NO_STREETS,
+  ) {
+    this.heightAt = heightAt;
+    this.roadAt = roadAt ?? ((): boolean => false);
+    this.street = street;
+    this.catalogById = new Map(catalog.map((entry) => [entry.id, entry]));
+    this.material = this.createMaterial();
+    this.pool = new InstancedSlotPool(
+      scene,
+      this.geometry,
+      this.material,
+      INITIAL_MASSING_CAPACITY,
+    );
+  }
+
+  /** Consumes one BuildingDelta: removed ids free their upper tiers; added/updated recompute theirs. */
+  apply(delta: BuildingDelta): void {
+    for (const id of delta.removed) this.freeBuilding(id);
+    for (const building of delta.added) this.applyOne(building);
+    for (const building of delta.updated) this.applyOne(building);
+    this.pool.commit();
+  }
+
+  /** 0 (day) .. 1 (night) — mixes every upper tier's wall color toward the same dark blue-grey as the base instancer. */
+  setNightFactor(nightFactor: number): void {
+    this.nightFactorUniform.value = Math.min(1, Math.max(0, nightFactor));
+  }
+
+  nightFactor(): number {
+    return this.nightFactorUniform.value;
+  }
+
+  /** Upper-tier slot indices currently owned by a building (empty for level-1 buildings/ploppables, or an unknown building). */
+  upperBoxSlotsFor(buildingId: number): readonly number[] {
+    return this.buildingSlots.get(buildingId) ?? [];
+  }
+
+  getBoxMatrix(slot: number, out: THREE.Matrix4): void {
+    this.pool.getMatrixAt(slot, out);
+  }
+
+  getBoxColor(slot: number, out: THREE.Color): void {
+    this.pool.getColorAt(slot, out);
+  }
+
+  instanceCount(): number {
+    return this.pool.instanceCount();
+  }
+
+  private createMaterial(): MeshStandardNodeMaterial {
+    const material = new MeshStandardNodeMaterial({ roughness: 1, metalness: 0 });
+    // instanceColor (wallColor * lifecycle tint, baked per-instance in
+    // applyOne below via pool.setColorAt) is multiplied into colorNode
+    // automatically by three's own NodeMaterial instancing setup whenever
+    // mesh.instanceColor is present — this colorNode only needs to encode
+    // the night mix on top of that (see buildings.ts's identical
+    // `dayColorNode.mul(nightTint)` pattern, and NodeMaterial.js's
+    // `colorNode = instanceColor.mul(colorNode)` wrapping).
+    material.colorNode = nightTintNode(this.nightFactorUniform);
+    return material;
+  }
+
+  private applyOne(building: BuildingInstance): void {
+    this.freeBuilding(building.id);
+
+    const entry = this.catalogById.get(building.catalogId);
+    // A farm's buildings are its own kit (farms.ts), never stacked tiers.
+    if (!entry || isFarmEntry(entry)) return;
+
+    const frontage = frontageSetbackFor(
+      entry,
+      building.x,
+      building.z,
+      this.roadAt,
+      this.street,
+      building.rotation,
+    );
+    const { boxes, podium } = computeSetbacks(entry, building.id, frontage);
+    // Every tier of the stack is BuildingInstancer's, drawn with the
+    // building's own facade; only the podium is left to draw here.
+    const tiers = podium ? [podium] : [];
+    if (tiers.length === 0) return;
+    const base = boxes[0]!;
+
+    const heightScale =
+      building.state === BuildingState.Constructing ? CONSTRUCTING_MASSING_HEIGHT_SCALE : 1;
+    const tint = massingLifecycleTint(building.state);
+    const { wallColor } = deriveFacadeParams(entry, building.id);
+    const podiumColor = entry.kind === 'midrise' ? MIDRISE_PODIUM_COLOR : wallColor;
+
+    const lot = footprintForRotation(entry, building.rotation);
+    const centerX = (building.x + lot.w / 2) * TILE_METERS + frontage.centerXM;
+    const centerZ = (building.z + lot.d / 2) * TILE_METERS + frontage.centerZM;
+    // Match BuildingInstancer's seat — the highest ground under the base tier
+    // itself — so the podium stands on the same ground the body sits on.
+    const groundY = maxHeightUnderBody(
+      this.heightAt,
+      centerX,
+      centerZ,
+      base.w,
+      base.d,
+      building.rotation,
+    );
+
+    const slots: number[] = [];
+    for (const box of tiers) {
+      const slot = this.pool.allocate();
+
+      const scaledYOffset = box.yOffset * heightScale;
+      const scaledH = box.h * heightScale;
+      _position.set(centerX, groundY + scaledYOffset + scaledH / 2, centerZ);
+      _quaternion.setFromAxisAngle(_yAxis, building.rotation * (Math.PI / 2));
+      _scale.set(box.w, scaledH, box.d);
+      _matrix.compose(_position, _quaternion, _scale);
+      this.pool.setMatrixAt(slot, _matrix);
+
+      _color.setRGB(podiumColor[0] * tint[0], podiumColor[1] * tint[1], podiumColor[2] * tint[2]);
+      this.pool.setColorAt(slot, _color);
+
+      slots.push(slot);
+    }
+
+    this.buildingSlots.set(building.id, slots);
+  }
+
+  private freeBuilding(buildingId: number): void {
+    const slots = this.buildingSlots.get(buildingId);
+    if (!slots) return;
+    for (const slot of slots) this.pool.free(slot);
+    this.buildingSlots.delete(buildingId);
+  }
+}

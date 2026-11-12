@@ -1,0 +1,42 @@
+/**
+ * Shared store-reset helper for src/ui tests. Not itself a `*.test.*` file,
+ * so vitest's `include` glob never collects it as a suite — plain test
+ * utility module.
+ */
+import { DEFAULT_SETTINGS } from '../app/session';
+import { NO_EDITS } from '../shared/roadprofile';
+import { DEFAULT_BRUSH_SETTINGS } from '../tools/tools';
+import { createInitialStats, createInitialToolFlags, useCityStore } from './store';
+
+export function resetCityStore(): void {
+  useCityStore.setState({
+    stats: createInitialStats(),
+    selectedTool: 'select',
+    overlay: null,
+    speed: 1,
+    notifications: [],
+    preview: null,
+    selectedBuilding: null,
+    stops: [],
+    selectedStop: null,
+    canUndo: false,
+    canRedo: false,
+    bound: null,
+    toolFlags: createInitialToolFlags(),
+    roadProfileEdits: NO_EDITS,
+    toolMode: 'lpath',
+    roadElevation: 0,
+    previousMonthPopulation: createInitialStats().population,
+    previousMonthFunds: createInitialStats().funds,
+    selectionInfo: null,
+    brushSettings: DEFAULT_BRUSH_SETTINGS,
+    serviceLoad: null,
+    responders: null,
+    openSpace: null,
+    // Component tests assume a live game (the App chrome/HUD only renders
+    // while screen === 'playing'); menu-screen behavior gets its own tests.
+    screen: 'playing',
+    menuOpen: false,
+    settings: { ...DEFAULT_SETTINGS },
+  });
+}

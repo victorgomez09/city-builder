@@ -1,0 +1,623 @@
+/**
+ * SlimCity traffic system.
+ *
+ * Statistical trip assignment, not per-agent simulation: each tick a handful
+ * of (origin, destination) pairs are sampled and routed once over the
+ * injected road network. A successful route contributes volume to its edges
+ * (congestion/land-value feed off that elsewhere) and — purely for visual
+ * flavor — claims a slot in a fixed cosmetic-vehicle pool that is animated
+ * along the same route until it arrives.
+ *
+ * src/shared/types.ts does not export an `Rng` type, so it is declared
+ * locally below. Any concrete RNG built to that shape (e.g. a future
+ * src/core/rng.ts) is structurally assignable here without changes.
+ */
+import type { GraphEdge, PathResult, RoadNetworkApi, TilePoint } from '../shared/types';
+import {
+  INACTIVE_VEHICLE_X,
+  MAX_VEHICLES,
+  RoadTier,
+  VEHICLE_STRIDE,
+  VehicleKind,
+  pathRoute,
+} from '../shared/types';
+import {
+  CLOCK_START_OFFSET_TICKS,
+  TICKS_PER_DAY,
+  TICK_RATE,
+  TILE_METERS,
+  VISUAL_DAY_TICKS,
+} from '../shared/constants';
+
+/** Seeded random source, injected — see project rule: never Math.random/Date.now. */
+export interface Rng {
+  /** Uniform float in [0, 1). */
+  next(): number;
+  /** Uniform integer in [0, maxExclusive). */
+  int(maxExclusive: number): number;
+  /** Uniform float in [a, b). */
+  range(a: number, b: number): number;
+  /** An independent, deterministic child stream. */
+  fork(streamId: number): Rng;
+}
+
+/**
+ * Fallback trips sampled per tick when no population is supplied (test doubles
+ * that drive `tick` without a `population`). The live sim always passes a
+ * population, so it runs the people-and-work-rhythm model in `tripsForTick`.
+ */
+export const TRIPS_PER_TICK = 4;
+
+// ---------------------------------------------------------------------------
+// Trip-volume model: cosmetic traffic is tied to the city's PEOPLE and their
+// WORK RHYTHM. Trips generated per tick scale with the resident population
+// (more people -> more commuters) and ebb/flow over the visual day on a
+// rush-hour curve (morning + evening commute peaks, near-empty overnight).
+// This is the SPAWN RATE; concurrent vehicles are still bounded by
+// vehicleDensityCap -- so roads fill toward the cap at rush hour and thin out
+// to almost nothing at 3am. Every trip is a resident<->job (com/ind) commute
+// already (see the worker's origin/destination lists), so no car exists that
+// isn't a person going to or from work.
+// ---------------------------------------------------------------------------
+
+/** Baseline trips/tick (population-independent) at full activity — a lone active neighborhood still has commuters. */
+export const BASE_TRIPS_PER_TICK = 5;
+/** Extra trips/tick added as the city fills toward POP_FULL_TRAFFIC, at full activity. */
+export const POP_TRIPS_SPAN = 5;
+/** Resident population at (and above) which the population bonus saturates. */
+export const POP_FULL_TRAFFIC = 2000;
+/** Overnight activity floor (fraction of peak) so a city is never 100% dead. */
+export const NIGHT_ACTIVITY_FLOOR = 0.04;
+
+/** Visual-clock hour [0, 24) for a sim tick — same phase the render day/night uses. */
+export function dayHourFromTick(tickNo: number): number {
+  const span = VISUAL_DAY_TICKS;
+  const frac = (((tickNo + CLOCK_START_OFFSET_TICKS) % span) + span) % span;
+  return (frac / span) * 24;
+}
+
+/**
+ * Rush-hour activity in [NIGHT_ACTIVITY_FLOOR, 1] for a clock hour: two commute
+ * peaks (morning ~8:00, evening ~17:30) riding a daytime plateau, dropping to
+ * the overnight floor roughly 21:00–6:00. Pure & deterministic.
+ */
+export function rushHourActivity(hour: number): number {
+  const morning = Math.exp(-((hour - 8) ** 2) / (2 * 1.5 * 1.5));
+  const evening = Math.exp(-((hour - 17.5) ** 2) / (2 * 2 * 2));
+  const daytime = hour >= 7 && hour <= 20 ? 0.4 : 0;
+  return Math.max(NIGHT_ACTIVITY_FLOOR, morning, evening, daytime);
+}
+
+/**
+ * Deterministic integer trips to attempt this tick: a population-scaled trip
+ * ceiling times the rush-hour curve. Population only ADDS on top of a baseline,
+ * so a small-but-active town still shows daytime traffic while a metropolis at
+ * rush hour spawns markedly more. The people-gate (no homes or no jobs -> no
+ * trips) lives in sampleTrips; concurrent count is bounded by vehicleDensityCap,
+ * so a bigger road network also carries more cars.
+ */
+export function tripsForTick(population: number, tickNo: number): number {
+  const popFactor = Math.min(1, Math.max(0, population / POP_FULL_TRAFFIC));
+  const ceiling = BASE_TRIPS_PER_TICK + POP_TRIPS_SPAN * popFactor;
+  return Math.round(ceiling * rushHourActivity(dayHourFromTick(tickNo)));
+}
+
+/**
+ * Per-trip edge-cost jitter amplitude. A grid has many equal-cost routes
+ * between two points; a deterministic A* tie-breaks them the SAME way every
+ * time, so every trip funnels onto one path and the cosmetic vehicles line up
+ * nose-to-tail (the "snake"). A small per-trip cost jitter (stable within a
+ * trip, varied across trips) makes different trips prefer different parallel
+ * streets, spreading traffic across the network. The jitter seed is a pure
+ * hash of the trip's origin/destination — deterministic, and it consumes NO
+ * RNG draw so the sim's seeded RNG sequence is unchanged.
+ */
+const ROUTE_JITTER = 0.35;
+
+/** 32-bit avalanche mix of two integers (murmur3-style finalizer) -> [0,1). Pure & deterministic. */
+function hash2Unit(a: number, b: number): number {
+  let h = (a ^ 0x9e3779b9) >>> 0;
+  h = Math.imul(h ^ b, 0x85ebca6b) >>> 0;
+  h = (h ^ (h >>> 13)) >>> 0;
+  h = Math.imul(h, 0xc2b2ae35) >>> 0;
+  h = (h ^ (h >>> 16)) >>> 0;
+  return (h >>> 0) / 0xffffffff;
+}
+
+/** Deterministic per-trip seed from its origin/destination tiles (no RNG draw). */
+function tripSeed(from: TilePoint, to: TilePoint): number {
+  let h = (from.x * 73856093) >>> 0;
+  h = (h ^ Math.imul(from.z, 19349663)) >>> 0;
+  h = (h ^ Math.imul(to.x, 83492791)) >>> 0;
+  h = (h ^ Math.imul(to.z, 1266122987)) >>> 0;
+  return h >>> 0;
+}
+
+/** Fixed sim timestep in seconds (TICK_RATE ticks/sec). */
+const TICK_SECONDS = 1 / TICK_RATE;
+
+/** Cosmetic vehicle cruise speed model: tiles/second = BASE + TIER_FACTOR * avgEdgeTier. */
+const VEHICLE_BASE_SPEED_TILES = 3;
+const VEHICLE_TIER_SPEED_TILES = 1.5;
+
+/** Cosmetic vehicle-kind mix: [0, CAR_SHARE) Car, [CAR_SHARE, TRUCK_SHARE_CEILING) Truck, rest Bus. */
+const CAR_SHARE = 0.8;
+const TRUCK_SHARE_CEILING = 0.95;
+
+/** Edge-volume half-life applied once per game day. */
+const DAILY_DECAY_FACTOR = 0.5;
+
+// ---------------------------------------------------------------------------
+// Convoy breakers: identical cruise speeds + same-instant same-origin spawns
+// made cosmetic vehicles ride in lockstep "snakes", nose-to-tail. Each knob
+// below attacks one cause: per-vehicle speed variation (no lockstep), a
+// staggered start offset (no coincident spawns), one spawn per origin tile
+// per tick (no same-doorstep convoys), and a minimum headway so a faster
+// follower closes up to a gap, not into the leader's bumper.
+// ---------------------------------------------------------------------------
+
+/** Per-vehicle cruise-speed multiplier range: [MIN, MIN + SPAN). */
+export const SPEED_JITTER_MIN = 0.85;
+export const SPEED_JITTER_SPAN = 0.3;
+/** New spawns start up to this far into their first segment. */
+const SPAWN_STAGGER_MAX_M = 8;
+/** Minimum gap kept behind the nearest vehicle ahead on the same segment. */
+export const MIN_HEADWAY_M = 6;
+/** Corner arc: how far before/after a turn's corner point the arc begins/ends. */
+const TURN_ARC_RADIUS_M = 6;
+
+// ---------------------------------------------------------------------------
+// On-road guarantee: a cosmetic vehicle's animation path must stay on the
+// road, or the straight-line lerp between two points (render/vehicles.ts)
+// would visibly cut across grass/water. The real network gives a route built
+// from its roads' own shapes — grid tile centres and the centre lines of roads
+// off the grid — which is on the road by construction. RoadNetworkApi is an
+// injected dependency (see the module doc comment above), and one that gives
+// no route has its tile path defensively truncated to its longest
+// cardinally-adjacent prefix before it is animated.
+// ---------------------------------------------------------------------------
+
+/** True when `a` and `b` are exactly one cardinal (N/E/S/W) tile step apart. */
+export function isCardinallyAdjacent(a: TilePoint, b: TilePoint): boolean {
+  const dx = Math.abs(a.x - b.x);
+  const dz = Math.abs(a.z - b.z);
+  return (dx === 1 && dz === 0) || (dx === 0 && dz === 1);
+}
+
+/**
+ * The line a cosmetic vehicle drives along a path, world metres: the route the
+ * network built from its roads' own shapes, which is on the road by
+ * construction, curves and all. A network that gives no route has its tiles'
+ * centres driven instead, cut to their longest adjacent chain.
+ */
+export function routeOf(path: PathResult): WorldPoint[] {
+  if (path.route) return path.route;
+  return pathRoute({ ...path, points: truncateToAdjacentChain(path.points) });
+}
+
+/**
+ * Returns the longest prefix of `points` that forms an unbroken chain of
+ * cardinally-adjacent tiles, starting from `points[0]`. A network response
+ * that ever produces a non-adjacent seam (e.g. a bad injected
+ * RoadNetworkApi) gets its cosmetic animation dropped at that seam rather
+ * than jumping/cutting across non-road terrain.
+ */
+export function truncateToAdjacentChain(points: readonly TilePoint[]): TilePoint[] {
+  if (points.length === 0) return [];
+  const out: TilePoint[] = [points[0]!];
+  for (let i = 1; i < points.length; i += 1) {
+    const prev = points[i - 1]!;
+    const curr = points[i]!;
+    if (!isCardinallyAdjacent(prev, curr)) break;
+    out.push(curr);
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Density cap: caps concurrent COSMETIC vehicles as a function of
+// the live road network's size, so a tiny town's handful of road tiles can
+// never saturate the whole MAX_VEHICLES pool into a visual gridlock. The
+// statistical volume model (RoadNetworkApi.addVolume) is untouched by this
+// cap -- it is applied before the cap check, exactly like the pre-existing
+// "pool full" skip path, so volume keeps accruing even when the cosmetic
+// spawn itself is skipped.
+// ---------------------------------------------------------------------------
+
+/** Concurrent-vehicle cap floor, regardless of how small the road network is. */
+export const VEHICLE_DENSITY_MIN_CAP = 24;
+/** Concurrent cosmetic vehicles allowed per live road tile, before clamping. */
+export const VEHICLES_PER_ROAD_TILE = 0.35;
+
+/**
+ * Pure: the concurrent cosmetic-vehicle cap for a network with
+ * `roadTileCount` live road tiles -- proportional to network size, clamped
+ * to [VEHICLE_DENSITY_MIN_CAP, MAX_VEHICLES] so it never drops below a small
+ * town's minimum nor exceeds the fixed pool.
+ */
+export function vehicleDensityCap(roadTileCount: number): number {
+  const proportional = Math.round(roadTileCount * VEHICLES_PER_ROAD_TILE);
+  return Math.min(MAX_VEHICLES, Math.max(VEHICLE_DENSITY_MIN_CAP, proportional));
+}
+
+/** Sums each edge's tile-length -- an approximation of live road tile count. */
+function countRoadTiles(edges: readonly GraphEdge[]): number {
+  let total = 0;
+  for (const edge of edges) total += edge.length;
+  return total;
+}
+
+type VehicleKindValue = (typeof VehicleKind)[keyof typeof VehicleKind];
+
+/**
+ * Rounds every turn in a world-space polyline into a short arc so vehicles
+ * STEER around curved road corners instead of cutting straight across them
+ * (tile-center chords drive over the inside verge of a curved turn tile).
+ * Each non-collinear interior point is replaced by an entry point
+ * TURN_ARC_RADIUS_M before the corner, two quadratic-bezier samples, and an
+ * exit point after it — headings then rotate smoothly through the turn, which
+ * also keeps the render-side lane offset tracking the curve. Pure.
+ */
+export function smoothCorners(
+  points: readonly { x: number; z: number }[],
+): { x: number; z: number }[] {
+  if (points.length < 3) return [...points];
+  const out: { x: number; z: number }[] = [points[0]!];
+  for (let i = 1; i < points.length - 1; i += 1) {
+    const prev = points[i - 1]!;
+    const p = points[i]!;
+    const next = points[i + 1]!;
+    const inLen = Math.hypot(p.x - prev.x, p.z - prev.z);
+    const outLen = Math.hypot(next.x - p.x, next.z - p.z);
+    if (inLen === 0 || outLen === 0) continue;
+    const inX = (p.x - prev.x) / inLen;
+    const inZ = (p.z - prev.z) / inLen;
+    const outX = (next.x - p.x) / outLen;
+    const outZ = (next.z - p.z) / outLen;
+    if (inX * outX + inZ * outZ > 0.99) {
+      out.push(p); // straight-through: keep the point as-is
+      continue;
+    }
+    const r = Math.min(TURN_ARC_RADIUS_M, inLen / 2, outLen / 2);
+    const pin = { x: p.x - inX * r, z: p.z - inZ * r };
+    const pout = { x: p.x + outX * r, z: p.z + outZ * r };
+    out.push(pin);
+    for (const t of [1 / 3, 2 / 3]) {
+      const a = (1 - t) * (1 - t);
+      const b = 2 * (1 - t) * t;
+      const c = t * t;
+      out.push({ x: a * pin.x + b * p.x + c * pout.x, z: a * pin.z + b * p.z + c * pout.z });
+    }
+    out.push(pout);
+  }
+  out.push(points[points.length - 1]!);
+  return out;
+}
+
+interface WorldPoint {
+  readonly x: number;
+  readonly z: number;
+}
+
+/** A live cosmetic vehicle occupying one slot of the fixed pool. */
+interface ActiveVehicle {
+  readonly points: readonly WorldPoint[];
+  /** points.length - 1 precomputed Euclidean segment lengths, in meters. */
+  readonly segmentLengths: readonly number[];
+  segIndex: number;
+  /** Meters traveled into the current segment. */
+  distanceIntoSegment: number;
+  readonly speedMps: number;
+  readonly kind: VehicleKindValue;
+}
+
+export class TrafficSystem {
+  /** MAX_VEHICLES * VEHICLE_STRIDE floats, slot-stable across ticks. */
+  readonly vehicleBuffer: Float32Array;
+
+  private readonly rng: Rng;
+  private readonly network: RoadNetworkApi;
+  private readonly slots: Array<ActiveVehicle | null>;
+  /** Stack of free slot indices; push/pop gives O(1) alloc & free. */
+  private readonly freeSlots: number[] = [];
+
+  constructor(rng: Rng, network: RoadNetworkApi) {
+    this.rng = rng;
+    this.network = network;
+    this.vehicleBuffer = new Float32Array(MAX_VEHICLES * VEHICLE_STRIDE);
+    this.slots = new Array<ActiveVehicle | null>(MAX_VEHICLES).fill(null);
+
+    // All slots start inactive; push in descending order so slot 0 is
+    // allocated first (stack pop takes the last-pushed index).
+    for (let slot = MAX_VEHICLES - 1; slot >= 0; slot -= 1) {
+      this.freeSlots.push(slot);
+      this.vehicleBuffer[slot * VEHICLE_STRIDE] = INACTIVE_VEHICLE_X;
+    }
+  }
+
+  tick(input: {
+    origins: TilePoint[];
+    destinations: TilePoint[];
+    tickNo: number;
+    /** Resident population; drives the people-tied, rush-hour trip volume. Omit (test doubles) to fall back to TRIPS_PER_TICK. */
+    population?: number;
+  }): void {
+    const { origins, destinations, tickNo, population } = input;
+
+    if (tickNo % TICKS_PER_DAY === 0) {
+      this.network.decayVolumes(DAILY_DECAY_FACTOR);
+    }
+
+    this.advanceVehicles();
+    const tripBudget = population === undefined ? TRIPS_PER_TICK : tripsForTick(population, tickNo);
+    this.sampleTrips(origins, destinations, tripBudget);
+  }
+
+  private activeVehicleCount(): number {
+    return MAX_VEHICLES - this.freeSlots.length;
+  }
+
+  private sampleTrips(origins: TilePoint[], destinations: TilePoint[], tripCount: number): void {
+    if (origins.length === 0 || destinations.length === 0 || tripCount <= 0) return;
+
+    // Lazily built (and cached for the rest of this tick) only if a route
+    // that actually needs a cosmetic vehicle is found.
+    let edgeTiers: Map<number, RoadTier> | null = null;
+    // Also lazy: getEdges() is only worth calling once we know a spawn is
+    // actually being considered this tick.
+    let densityCap: number | null = null;
+
+    for (let i = 0; i < tripCount; i += 1) {
+      const origin = origins[this.rng.int(origins.length)];
+      const dest = destinations[this.rng.int(destinations.length)];
+      if (origin === undefined || dest === undefined) continue;
+
+      // Alternate trip direction so roads carry BOTH flows (home->work and
+      // work->home), not a one-way stream.
+      const reverse = i % 2 === 1;
+      const from = reverse ? dest : origin;
+      const to = reverse ? origin : dest;
+
+      // Per-trip cost jitter (stable within this trip via its OD-hash seed) so
+      // this trip picks its own route among the grid's equal-cost alternatives.
+      const seed = tripSeed(from, to);
+      const path = this.network.findPath(
+        from,
+        to,
+        (edge) => 1 + ROUTE_JITTER * hash2Unit(edge.id, seed),
+      );
+      if (path === null) continue;
+
+      this.network.addVolume(path.edges, 1);
+
+      const animPoints = routeOf(path);
+      if (animPoints.length < 2) continue; // nothing to animate (degenerate, or the chain broke immediately)
+
+      if (densityCap === null) {
+        densityCap = vehicleDensityCap(countRoadTiles(this.network.getEdges()));
+      }
+      if (this.activeVehicleCount() >= densityCap) continue; // density cap reached; volume already counted above
+
+      if (edgeTiers === null) {
+        edgeTiers = new Map();
+        for (const edge of this.network.getEdges()) edgeTiers.set(edge.id, edge.tier);
+      }
+      this.spawnVehicle(animPoints, path.edges, edgeTiers);
+    }
+  }
+
+  private spawnVehicle(
+    animPoints: readonly WorldPoint[],
+    edgeIds: number[],
+    edgeTiers: Map<number, RoadTier>,
+  ): void {
+    const slot = this.freeSlots.pop();
+    if (slot === undefined) return; // pool full: volume already counted, skip cosmetic spawn
+
+    // Round every turn into a short arc so the vehicle steers around curved
+    // corners instead of cutting the chord across the inside of the turn.
+    const points: WorldPoint[] = smoothCorners(animPoints);
+
+    const segmentLengths: number[] = [];
+    for (let i = 0; i < points.length - 1; i += 1) {
+      const a = points[i]!;
+      const b = points[i + 1]!;
+      segmentLengths.push(Math.hypot(b.x - a.x, b.z - a.z));
+    }
+
+    // Per-vehicle cruise-speed jitter: no two vehicles ride in exact lockstep.
+    const speedMps =
+      this.averageTierSpeedMps(edgeIds, edgeTiers) *
+      (SPEED_JITTER_MIN + SPEED_JITTER_SPAN * this.rng.next());
+
+    const kindRoll = this.rng.next();
+    const kind: VehicleKindValue =
+      kindRoll < CAR_SHARE
+        ? VehicleKind.Car
+        : kindRoll < TRUCK_SHARE_CEILING
+          ? VehicleKind.Truck
+          : VehicleKind.Bus;
+
+    // Staggered start: begin partway into the first segment so vehicles that
+    // do share a departure point never materialize at the same spot.
+    const firstSegLen = segmentLengths[0] ?? 0;
+    const startOffset = this.rng.next() * Math.min(SPAWN_STAGGER_MAX_M, firstSegLen * 0.9);
+
+    // Never materialize on a leader's bumper: if any active vehicle occupies
+    // this route's first segment within MIN_HEADWAY_M of the start offset,
+    // skip the cosmetic spawn entirely (its volume is already counted).
+    const a0 = points[0]!;
+    const b0 = points[1]!;
+    for (const other of this.slots) {
+      if (!other || other.segIndex >= other.segmentLengths.length) continue;
+      const oa = other.points[other.segIndex]!;
+      const ob = other.points[other.segIndex + 1]!;
+      if (
+        oa.x === a0.x &&
+        oa.z === a0.z &&
+        ob.x === b0.x &&
+        ob.z === b0.z &&
+        Math.abs(other.distanceIntoSegment - startOffset) < MIN_HEADWAY_M
+      ) {
+        this.freeSlots.push(slot);
+        return;
+      }
+    }
+
+    const vehicle: ActiveVehicle = {
+      points,
+      segmentLengths,
+      segIndex: 0,
+      distanceIntoSegment: startOffset,
+      speedMps,
+      kind,
+    };
+    this.slots[slot] = vehicle;
+    this.writeSlot(slot, vehicle);
+  }
+
+  /** tiles/second = BASE + TIER_FACTOR * avgEdgeTier, converted to m/s via TILE_METERS. */
+  private averageTierSpeedMps(edgeIds: number[], edgeTiers: Map<number, RoadTier>): number {
+    let tierSum = 0;
+    let tierCount = 0;
+    for (const edgeId of edgeIds) {
+      const tier = edgeTiers.get(edgeId);
+      if (tier !== undefined) {
+        tierSum += tier;
+        tierCount += 1;
+      }
+    }
+    const avgTier = tierCount > 0 ? tierSum / tierCount : RoadTier.TwoLane;
+    const tilesPerSecond = VEHICLE_BASE_SPEED_TILES + VEHICLE_TIER_SPEED_TILES * avgTier;
+    return tilesPerSecond * TILE_METERS;
+  }
+
+  /** Key identifying the exact directed segment a vehicle currently occupies. */
+  private static segmentKey(vehicle: ActiveVehicle): string {
+    const a = vehicle.points[vehicle.segIndex]!;
+    const b = vehicle.points[vehicle.segIndex + 1]!;
+    return `${a.x},${a.z},${b.x},${b.z}`;
+  }
+
+  private advanceVehicles(): void {
+    // Pre-advance headway snapshot: which vehicles share the same directed
+    // segment, and how far along it each one sits. Snapshotting BEFORE any
+    // movement keeps the clamp independent of slot iteration order.
+    const segOccupancy = new Map<string, { slot: number; dist: number }[]>();
+    for (let slot = 0; slot < MAX_VEHICLES; slot += 1) {
+      const vehicle = this.slots[slot];
+      if (!vehicle || vehicle.segIndex >= vehicle.segmentLengths.length) continue;
+      const key = TrafficSystem.segmentKey(vehicle);
+      const entry = { slot, dist: vehicle.distanceIntoSegment };
+      const list = segOccupancy.get(key);
+      if (list) list.push(entry);
+      else segOccupancy.set(key, [entry]);
+    }
+
+    for (let slot = 0; slot < MAX_VEHICLES; slot += 1) {
+      const vehicle = this.slots[slot];
+      if (!vehicle) continue;
+
+      let remaining = vehicle.speedMps * TICK_SECONDS;
+      const segCount = vehicle.segmentLengths.length;
+
+      // Headway: never advance to within MIN_HEADWAY_M of the nearest vehicle
+      // ahead on the same segment (ties broken by slot so coincident legacy
+      // vehicles unstack instead of deadlocking). Followers wait for the gap.
+      if (vehicle.segIndex < segCount) {
+        const sharing = segOccupancy.get(TrafficSystem.segmentKey(vehicle));
+        if (sharing && sharing.length > 1) {
+          const myDist = vehicle.distanceIntoSegment;
+          let leaderDist = Infinity;
+          for (const other of sharing) {
+            if (other.slot === slot) continue;
+            const isAhead = other.dist > myDist || (other.dist === myDist && other.slot < slot);
+            if (isAhead) leaderDist = Math.min(leaderDist, other.dist);
+          }
+          if (leaderDist !== Infinity) {
+            remaining = Math.max(0, Math.min(remaining, leaderDist - MIN_HEADWAY_M - myDist));
+          }
+        }
+      }
+
+      // Each iteration either fully consumes a segment (segIndex++, bounded
+      // by segCount) or zeroes `remaining` — so this always terminates.
+      while (remaining > 0 && vehicle.segIndex < segCount) {
+        const segLen = vehicle.segmentLengths[vehicle.segIndex]!;
+        const distLeft = segLen - vehicle.distanceIntoSegment;
+        if (remaining >= distLeft) {
+          // About to cross into the next segment: don't enter closer than
+          // MIN_HEADWAY_M behind any vehicle already occupying it (per the
+          // pre-advance snapshot) — entering unguarded is how a follower
+          // could otherwise land on a slow leader's bumper.
+          const nextIndex = vehicle.segIndex + 1;
+          if (nextIndex < segCount) {
+            const a = vehicle.points[nextIndex]!;
+            const b = vehicle.points[nextIndex + 1]!;
+            const occupants = segOccupancy.get(`${a.x},${a.z},${b.x},${b.z}`);
+            if (occupants) {
+              let minAhead = Infinity;
+              for (const other of occupants) {
+                if (other.slot !== slot) minAhead = Math.min(minAhead, other.dist);
+              }
+              if (minAhead !== Infinity) {
+                const allowedOvershoot = minAhead - MIN_HEADWAY_M;
+                if (remaining - distLeft > allowedOvershoot) {
+                  remaining = Math.max(0, distLeft + allowedOvershoot);
+                  if (remaining < distLeft) {
+                    // Held short of the boundary this tick; settle here.
+                    vehicle.distanceIntoSegment += remaining;
+                    break;
+                  }
+                }
+              }
+            }
+          }
+          remaining -= distLeft;
+          vehicle.segIndex += 1;
+          vehicle.distanceIntoSegment = 0;
+        } else {
+          vehicle.distanceIntoSegment += remaining;
+          remaining = 0;
+        }
+      }
+
+      if (vehicle.segIndex >= segCount) {
+        this.freeSlot(slot);
+      } else {
+        this.writeSlot(slot, vehicle);
+      }
+    }
+  }
+
+  private writeSlot(slot: number, vehicle: ActiveVehicle): void {
+    const a = vehicle.points[vehicle.segIndex]!;
+    const b = vehicle.points[vehicle.segIndex + 1]!;
+    const segLen = vehicle.segmentLengths[vehicle.segIndex] ?? 0;
+    const t = segLen > 0 ? vehicle.distanceIntoSegment / segLen : 0;
+    const dx = b.x - a.x;
+    const dz = b.z - a.z;
+
+    const base = slot * VEHICLE_STRIDE;
+    this.vehicleBuffer[base] = a.x + dx * t;
+    this.vehicleBuffer[base + 1] = a.z + dz * t;
+    // Stored heading is a Y-axis yaw applied to a +Z-nosed vehicle mesh
+    // (render/vehicles.ts): rotationY(yaw) maps local +Z to world (sin yaw,
+    // cos yaw), i.e. the (dx, dz) travel direction, so yaw = atan2(dx, dz)
+    // -- NOT atan2(dz, dx), which is 90 degrees off.
+    this.vehicleBuffer[base + 2] = Math.atan2(dx, dz);
+    this.vehicleBuffer[base + 3] = vehicle.speedMps;
+    this.vehicleBuffer[base + 4] = vehicle.kind;
+  }
+
+  private freeSlot(slot: number): void {
+    this.slots[slot] = null;
+    const base = slot * VEHICLE_STRIDE;
+    this.vehicleBuffer[base] = INACTIVE_VEHICLE_X;
+    this.vehicleBuffer[base + 1] = 0;
+    this.vehicleBuffer[base + 2] = 0;
+    this.vehicleBuffer[base + 3] = 0;
+    this.vehicleBuffer[base + 4] = 0;
+    this.freeSlots.push(slot);
+  }
+}

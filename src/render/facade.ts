@@ -1,0 +1,791 @@
+/**
+ * Procedural facade parameters (building on the night-window system). PURE
+ * derivation from a catalog entry + building id —
+ * no three.js/DOM dependency, mirroring cameramath.ts's "plain-number math,
+ * unit-testable without a GPU/DOM" convention. buildings.ts wires these
+ * values (and mirrors the hash formulas below as TSL shader nodes, the same
+ * way it already mirrors windowHash's CPU formula with the TSL `hash()`
+ * node) into the existing per-archetype instanced material; this module
+ * never touches THREE itself.
+ *
+ * Determinism: every export here is a pure function of its arguments. No
+ * Math.random, no Date.now — variation across buildings/windows comes only
+ * from hashing the buildingId (and, for windows, the window index), per the
+ * project's determinism rule.
+ */
+import {
+  BuildingCatalogEntry,
+  BuildingKind,
+  CommercialKind,
+  IndustrialKind,
+  ZoneType,
+} from '../shared/types';
+import { TILE_METERS } from '../shared/constants';
+import { bodyMetresFor, FLOOR_HEIGHT_METERS } from '../shared/floorarea';
+import { isHouseKind } from '../shared/buildingkind';
+import { MaterialName, materialUnit, saturatedUnit } from './palette';
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+export type FacadeFamily = 'glass' | 'masonry' | 'concrete' | 'plaster';
+
+/** Normalized (0..1 per channel) RGB, matching the codebase's existing color-tuple convention (buildings.ts's tintFor, roadsmesh.ts's tier colors). */
+export type RGB = readonly [number, number, number];
+
+export interface FacadeParams {
+  /** Story count: height / FLOOR_HEIGHT_METERS, rounded, minimum 1. */
+  floors: number;
+  /** Structural bay count across the footprint's width, minimum 1. */
+  bays: number;
+  /** Archetype family, decided from category + zone + level. */
+  family: FacadeFamily;
+  /** Hue-jittered wall base color for this specific building instance: a kind's chart material, the industrial palette, or the desaturated catalog colour. */
+  wallColor: RGB;
+  /** The kind's own roof material, the fixed industrial grey, or the white/grey/tan rotation kept distinct from wallColor. */
+  roofColor: RGB;
+  /** Punched (inset) window openings vs. flush curtain-wall glazing. */
+  windowInset: boolean;
+  /** Visible horizontal spandrel bands every floor (masonry only). */
+  spandrel: boolean;
+  /** The industrial accent stripe at 2/3 height: the sheds keep it; a kind whose colour band is a kit part does not. */
+  accentStripe: boolean;
+}
+
+interface HSL {
+  h: number;
+  s: number;
+  l: number;
+}
+
+// ---------------------------------------------------------------------------
+// Facade constants
+// ---------------------------------------------------------------------------
+
+/** "floors = height/3.2m"; also the window-row floor height. */
+export { FLOOR_HEIGHT_METERS };
+/** A residential tower's floor to floor, inside the 3.3–3.9 m a flat-plate slab is built to. */
+export const TOWER_FLOOR_M = 3.6;
+
+/** The floor to floor a kind's body is cut into rows by: a tower's own, every other body's storey. */
+export function floorToFloorOf(kind: BuildingKind | undefined): number {
+  return kind === 'tower' ? TOWER_FLOOR_M : FLOOR_HEIGHT_METERS;
+}
+/** "bays from footprint" — a ~2.6m structural bay width. */
+export const BAY_WIDTH_METERS = 2.6;
+/** Each punched window leaves this share of its grid cell as wall on every side. */
+export const MULLION_MARGIN_PUNCHED = 0.22;
+
+/** Upper-floor mullion/frame colour: the wall colour darkened, which is most of what a wall shows. */
+export const FRAME_DARKEN = 0.55;
+
+/**
+ * Per-building seed multiplier for combining (buildingId, windowIndex) into
+ * one window hash seed; its last slot is reserved for the building's own lit
+ * fraction, so a tier's cells (cols × rows) must stay below it. A power of
+ * two keeps `buildingId * WINDOW_SEED_SLOTS` exactly representable in the
+ * shader's float32 up to buildingId ~131,072.
+ */
+export const WINDOW_SEED_SLOTS = 128;
+const MIN_WINDOW_COLS = 2;
+const MAX_WINDOW_COLS = 8;
+const MIN_WINDOW_ROWS = 1;
+const MAX_WINDOW_ROWS = 15; // MAX_WINDOW_COLS * MAX_WINDOW_ROWS stays under the window seed's fraction slot
+
+/** The most rows a tower may carry over `cols` columns: its floors are its own pitch, so it takes every cell the seed slot leaves below the fraction slot. */
+function towerMaxRows(cols: number): number {
+  return Math.floor((WINDOW_SEED_SLOTS - 1) / cols);
+}
+const WINDOW_COLS_PER_TILE = 2;
+/**
+ * Row-house massing: a terrace's narrow attached footprints are one stretched
+ * box like any other archetype, and the general per-tile density would read as
+ * one big building with a sparse, over-wide window grid. A tighter density
+ * gives each unit its own narrow bay so the rhythm reads as separate houses.
+ */
+const ROW_HOUSE_WINDOW_COLS_PER_TILE = 3;
+
+/** Is this the attached-row-house archetype? Keyed off the catalog's own `kind`, never the footprint's shape. */
+export function isRowHouseArchetype(entry: BuildingCatalogEntry): boolean {
+  return entry.kind === 'townhouse';
+}
+
+/** A house's window is a sash about 1 m wide and 1.5 m tall, one to a bay of HOUSE_BAY_M along the wall. */
+export const HOUSE_PANE_WIDTH_M = 1.0;
+export const HOUSE_PANE_HEIGHT_M = 1.5;
+export const HOUSE_BAY_M = 2.4;
+/** The most of a cell a house's margins may take on each side, so a cramped cell still shows a pane. */
+const HOUSE_MARGIN_MAX = 0.42;
+
+/** The inset of a pane from its grid cell's edge, as a fraction of the cell, across and up. */
+export interface PaneMargins {
+  x: number;
+  y: number;
+}
+
+/**
+ * A house's panes are window-sized in metres rather than a share of the
+ * cell: the margins that leave HOUSE_PANE_WIDTH_M x HOUSE_PANE_HEIGHT_M in
+ * the cell the grid cuts for this entry. Null for every other family, whose
+ * panes are the mullion-margin share of the cell. Pure.
+ */
+export function housePaneMargins(
+  entry: BuildingCatalogEntry,
+  tierHeight: number,
+): PaneMargins | null {
+  if (!isHouseKind(entry.kind)) return null;
+  const { cols, rows } = windowGrid(entry, tierHeight);
+  const body = bodyMetresFor(entry);
+  const cellW = (body.w + body.d) / 2 / cols;
+  const cellH = tierHeight / rows;
+  const inset = (cell: number, pane: number): number =>
+    Math.min(HOUSE_MARGIN_MAX, Math.max(0, (cell - pane) / 2 / cell));
+  return { x: inset(cellW, HOUSE_PANE_WIDTH_M), y: inset(cellH, HOUSE_PANE_HEIGHT_M) };
+}
+
+/** A storefront's glazing is cut into bays this wide by dark mullions. */
+export const STOREFRONT_BAY_M = 1.5;
+/** The dark mullion between two storefront bays. */
+export const STOREFRONT_MULLION_M = 0.12;
+/** The dark bulkhead the storefront glazing stands on. */
+export const STOREFRONT_BULKHEAD_M = 0.6;
+/** The dark head over the glazing, under the sign band. */
+export const STOREFRONT_HEAD_M = 0.3;
+
+/** How a commercial ground floor's glazing is cut: bays across the face, and the pane's sill and head as fractions of the tier. */
+export interface StorefrontCut {
+  bays: number;
+  /** The mullion's half, as a fraction of a bay, on each side of its pane. */
+  marginX: number;
+  sillFraction: number;
+  headFraction: number;
+}
+
+/**
+ * The storefront cut for a commercial entry — bays of about STOREFRONT_BAY_M
+ * over the bulkhead, under the head — so a lit shopfront reads as a row of
+ * windows under its sign band, never one slab. Null for any other category. Pure.
+ */
+export function storefrontCut(
+  entry: BuildingCatalogEntry,
+  tierHeight: number,
+): StorefrontCut | null {
+  if (entry.category !== 'com' || !(tierHeight > 0)) return null;
+  const body = bodyMetresFor(entry);
+  const faceM = (body.w + body.d) / 2;
+  const bays = Math.max(1, Math.round(faceM / STOREFRONT_BAY_M));
+  const bayM = faceM / bays;
+  const bandM = Math.min(tierHeight, GROUND_FLOOR_METERS);
+  return {
+    bays,
+    marginX: Math.min(0.4, STOREFRONT_MULLION_M / 2 / bayM),
+    sillFraction: STOREFRONT_BULKHEAD_M / tierHeight,
+    headFraction: Math.max(STOREFRONT_BULKHEAD_M, bandM - STOREFRONT_HEAD_M) / tierHeight,
+  };
+}
+
+/** How many window bays a house's body carries along an average face. */
+function houseBayCount(entry: BuildingCatalogEntry): number {
+  const body = bodyMetresFor(entry);
+  return (body.w + body.d) / 2 / HOUSE_BAY_M;
+}
+
+/**
+ * The window grid every face of a building's body is cut into (columns across
+ * a face, rows up one tier of `tierHeight` metres). The facade material draws
+ * exactly this grid, and the house kit's shutters stand on it.
+ */
+export function windowGrid(
+  entry: BuildingCatalogEntry,
+  tierHeight: number,
+): { cols: number; rows: number } {
+  const avgFootprintTiles = (entry.footprint.w + entry.footprint.d) / 2;
+  const colsPerTile = isRowHouseArchetype(entry)
+    ? ROW_HOUSE_WINDOW_COLS_PER_TILE
+    : WINDOW_COLS_PER_TILE;
+  // A detached house, a duplex or a fourplex has a bay every HOUSE_BAY_M of
+  // its body; a terrace keeps its per-unit rhythm above.
+  const wanted =
+    isHouseKind(entry.kind) && !isRowHouseArchetype(entry)
+      ? houseBayCount(entry)
+      : avgFootprintTiles * colsPerTile;
+  const cols = Math.min(MAX_WINDOW_COLS, Math.max(MIN_WINDOW_COLS, Math.round(wanted)));
+  const maxRows = entry.kind === 'tower' ? towerMaxRows(cols) : MAX_WINDOW_ROWS;
+  const rows = Math.min(
+    maxRows,
+    Math.max(MIN_WINDOW_ROWS, Math.round(tierHeight / floorToFloorOf(entry.kind))),
+  );
+  return { cols, rows };
+}
+
+/** First 3.2m band gets storefront treatment. */
+export const GROUND_FLOOR_METERS = FLOOR_HEIGHT_METERS;
+/** Top 0.4m darker band. */
+export const PARAPET_METERS = 0.4;
+
+/** Palette preset: "clamp saturation low" for every wall, family hue aside. */
+export const MAX_WALL_SATURATION = 0.18;
+/** Keeps even dark catalog colors off pure black — industrial stays a "rare dark accent", not ink. */
+export const MIN_WALL_LIGHTNESS = 0.32;
+/** Keeps pale catalog colors off blown-out white. */
+export const MAX_WALL_LIGHTNESS = 0.92;
+/** Deterministic per-instance hue jitter ±4% from building id. */
+export const HUE_JITTER_FRACTION = 0.04;
+
+/** Roof plate tinted distinctly from walls (pale/dark/warm rotation by id hash). */
+export const ROOF_PALETTE: readonly RGB[] = [
+  materialUnit('whiteBrick'), // pale
+  materialUnit('brightBitumen'), // dark
+  materialUnit('clayRoof'), // warm
+];
+/** Minimum RGB distance a roof color must clear from the wall color ("distinct from walls"). */
+export const MIN_ROOF_WALL_DISTANCE = 0.12;
+
+/** Palette for an industrial entry of no industrial kind (a farm, a kindless works): steel blue / sheet metal / pale brick walls. */
+export const INDUSTRIAL_WALL_PALETTE: readonly RGB[] = [
+  materialUnit('bluePlaster'), // steel blue
+  materialUnit('metalPlates'), // sheet metal
+  materialUnit('whiteBrick'), // pale
+];
+/** Grey roof plates for the same kindless entry — fixed, not rotated. */
+export const INDUSTRIAL_ROOF_COLOR: RGB = materialUnit('metalPlates');
+/** One accent stripe band (red or blue by id hash), at the chart's saturation. */
+export const ACCENT_RED: RGB = saturatedUnit('red');
+export const ACCENT_BLUE: RGB = saturatedUnit('blue');
+/** Accent stripe sits at 2/3 height. */
+export const INDUSTRIAL_ACCENT_HEIGHT_FRACTION = 2 / 3;
+
+// ---------------------------------------------------------------------------
+// The commercial and industrial kinds' bodies: a body takes one chart
+// material of its kind's short list by id hash, never the catalog entry's
+// colour, under the kind's own roof. The lists are the art table's; every
+// name is a chart entry, so a pick needs no saturation clamp. Houses and a
+// kindless industrial entry keep their own paths.
+// ---------------------------------------------------------------------------
+
+/** The office level that stands as a 16-storey tower: a curtain wall, where the lower levels are precast bands. */
+export const OFFICE_TOWER_LEVEL = 3;
+
+const COMMERCIAL_BODY_PALETTES: Readonly<Record<CommercialKind, readonly MaterialName[]>> = {
+  shop: ['redBrick', 'brownBrick', 'paintedMasonry'],
+  strip: ['eifsCream', 'eifsTan'],
+  supermarket: ['eifsTan', 'eifsGrey'],
+  restaurant: ['eifsBeige', 'paintedMasonry'],
+  fuel: ['paintedMasonry', 'whiteBrick'],
+  office: ['precastGrey', 'precastBuff'],
+  hotel: ['eifsBeige'],
+};
+const OFFICE_TOWER_BODY_PALETTE: readonly MaterialName[] = ['curtainWall'];
+
+const COMMERCIAL_ROOF_PALETTES: Readonly<Record<CommercialKind, readonly MaterialName[]>> = {
+  shop: ['brightBitumen'],
+  strip: ['brightBitumen'],
+  supermarket: ['whiteMembrane'],
+  restaurant: ['brightBitumen'],
+  fuel: ['whiteMembrane'],
+  office: ['greyMembrane'],
+  hotel: ['greyMembrane'],
+};
+
+/** An office's ribbons are tinted glass; the tower's cells are its curtain wall's vision glass. */
+const OFFICE_GLASS: MaterialName = 'tintedGlass';
+const OFFICE_TOWER_GLASS: MaterialName = 'curtainWall';
+
+/** The metal-building two-tone of a shed: a workshop's, and the flex building's behind its glass front. */
+const SHED_BODY_PALETTE: readonly MaterialName[] = ['ribbedStone', 'ribbedAsh', 'ribbedWhite'];
+
+const INDUSTRIAL_BODY_PALETTES: Readonly<Record<IndustrialKind, readonly MaterialName[]>> = {
+  workshop: SHED_BODY_PALETTE,
+  flex: SHED_BODY_PALETTE,
+  warehouse: ['tiltUpWhite', 'tiltUpGrey'],
+  factory: ['ribbedBlue', 'concreteBlock'],
+  foodplant: ['insulatedWhite'],
+  chemical: ['insulatedWhite', 'concreteBlock'],
+  metals: ['oxideRed', 'darkPanel'],
+  paper: ['ribbedAsh', 'insulatedWhite'],
+};
+
+const INDUSTRIAL_ROOF_PALETTES: Readonly<Record<IndustrialKind, readonly MaterialName[]>> = {
+  workshop: ['galvanised'],
+  flex: ['galvanised'],
+  warehouse: ['whiteMembrane'],
+  factory: ['greyMembrane'],
+  foodplant: ['whiteMembrane'],
+  chemical: ['greyMembrane'],
+  metals: ['darkPanel'],
+  paper: ['greyMembrane'],
+};
+
+// ---------------------------------------------------------------------------
+// The residential kinds' bodies: a house takes a cladding by the share of
+// new US houses built in it and a siding its colour by the share sold; each
+// apartment block takes one of its own short list. Every share is a constant
+// with its source beside it; the pick is by id hash under HASH_SLOT_KIND_WALL
+// as a commercial body's is, and every name is a chart entry, so it is never
+// clamped.
+// ---------------------------------------------------------------------------
+
+/** A chart material and the share of a kind's bodies drawn in it. */
+export interface MaterialShare {
+  readonly material: MaterialName;
+  readonly share: number;
+}
+
+/** Principal exterior wall of 2024 single-family starts (NAHB on the Census Survey of Construction): vinyl 26%, stucco 25%, fibre cement 23%, brick 16%, wood 6%. */
+const VINYL_SIDING_SHARE = 0.26;
+const STUCCO_SHARE = 0.25;
+const FIBRE_CEMENT_SIDING_SHARE = 0.23;
+const BRICK_SHARE = 0.16;
+const WOOD_SHARE = 0.06;
+/** Vinyl and fibre cement both read as lap siding at 40 m. */
+const LAP_SIDING_SHARE = VINYL_SIDING_SHARE + FIBRE_CEMENT_SIDING_SHARE;
+/** What the five claddings leave (stone, block and the rest), drawn as the chart's coloured plasters in equal parts. */
+const OTHER_CLADDING_SHARE = 1 - LAP_SIDING_SHARE - STUCCO_SHARE - BRICK_SHARE - WOOD_SHARE;
+const OTHER_CLADDING_MATERIALS: readonly MaterialName[] = ['yellowPlaster', 'greenPlaster'];
+
+/** Siding colours sold (Alside's 2025 survey): off-white 18%, white 16%, light brown 13%, light grey 11%, medium blue 8%, normalised over the lap siding share. */
+const SIDING_COLOUR_WEIGHTS: readonly MaterialShare[] = [
+  { material: 'sidingOffWhite', share: 18 },
+  { material: 'sidingWhite', share: 16 },
+  { material: 'sidingLightBrown', share: 13 },
+  { material: 'sidingLightGrey', share: 11 },
+  { material: 'sidingBlue', share: 8 },
+];
+
+/** `weights` scaled so they sum to `total`. */
+function scaledToShare(weights: readonly MaterialShare[], total: number): readonly MaterialShare[] {
+  const sum = weights.reduce((acc, w) => acc + w.share, 0);
+  return weights.map((w) => ({ material: w.material, share: (total * w.share) / sum }));
+}
+
+/** `materials` in equal shares summing to one. */
+function evenShares(materials: readonly MaterialName[]): readonly MaterialShare[] {
+  return materials.map((material) => ({ material, share: 1 / materials.length }));
+}
+
+/** A house's body: lap siding by colour, stucco, brick, wood and the rest. The duplex, fourplex, townhouse and multiplex are a house's form and take the same. */
+export const HOUSE_BODY_SHARES: readonly MaterialShare[] = [
+  ...scaledToShare(SIDING_COLOUR_WEIGHTS, LAP_SIDING_SHARE),
+  { material: 'whitePlaster', share: STUCCO_SHARE },
+  { material: 'redBrick', share: BRICK_SHARE },
+  { material: 'brightWood', share: WOOD_SHARE },
+  ...scaledToShare(evenShares(OTHER_CLADDING_MATERIALS), OTHER_CLADDING_SHARE),
+];
+/** A garden walk-up is fibre cement and brick colour-blocked: the body in one, its alternate stacks in the other. */
+export const GARDEN_BODY_SHARES: readonly MaterialShare[] = evenShares([
+  'sidingLightGrey',
+  'redBrick',
+]);
+/** A 5-over-1's storeys are fibre cement panels over the brick podium. */
+export const MIDRISE_BODY_SHARES: readonly MaterialShare[] = evenShares([
+  'sidingLightGrey',
+  'sidingOffWhite',
+]);
+/** A tower is a curtain wall. */
+export const TOWER_BODY_SHARES: readonly MaterialShare[] = evenShares(['curtainWall']);
+
+/** The shares a residential kind's body is drawn by, or null for anything that is not one. */
+export function residentialBodyShares(
+  kind: BuildingKind | undefined,
+): readonly MaterialShare[] | null {
+  switch (kind) {
+    case 'garden':
+      return GARDEN_BODY_SHARES;
+    case 'midrise':
+      return MIDRISE_BODY_SHARES;
+    case 'tower':
+      return TOWER_BODY_SHARES;
+    default:
+      return kind === 'multiplex' || isHouseKind(kind) ? HOUSE_BODY_SHARES : null;
+  }
+}
+
+/** A material and the top of its run of the cumulative shares: a draw `u` below `upTo` (and above the previous entry's) lands on it. */
+export interface ShareThreshold {
+  readonly material: MaterialName;
+  readonly upTo: number;
+}
+
+/** The cumulative runs of `shares`, in order, which the CPU pick and the shader's select cascade both walk. */
+export function shareThresholds(shares: readonly MaterialShare[]): readonly ShareThreshold[] {
+  let acc = 0;
+  return shares.map((s) => {
+    acc += s.share;
+    return { material: s.material, upTo: acc };
+  });
+}
+
+/** The material whose run of the cumulative shares `u` in [0, 1) lands in; the last one past any rounding. */
+export function pickByShare(shares: readonly MaterialShare[], u: number): MaterialName {
+  const thresholds = shareThresholds(shares);
+  for (const t of thresholds) if (u < t.upTo) return t.material;
+  return thresholds[thresholds.length - 1]!.material;
+}
+
+/** A residential kind's body material by id hash, or null for any other kind. */
+export function residentialBodyMaterial(
+  kind: BuildingKind | undefined,
+  buildingId: number,
+): MaterialName | null {
+  const shares = residentialBodyShares(kind);
+  return shares ? pickByShare(shares, facadeHash(buildingId, HASH_SLOT_KIND_WALL)) : null;
+}
+
+/** A residential kind's wall base: its body material's chart colour, before hue jitter; null for any other kind. */
+export function residentialWallBase(
+  kind: BuildingKind | undefined,
+  buildingId: number,
+): RGB | null {
+  const material = residentialBodyMaterial(kind, buildingId);
+  return material ? materialUnit(material) : null;
+}
+
+/**
+ * Which industrial kinds keep the facade's accent stripe at 2/3 height: the
+ * sheds. A warehouse's colour band is the kit's tilt-up band, and the heavy
+ * plants carry none, so the stripe would double up or lie on them.
+ */
+const INDUSTRIAL_ACCENT_STRIPE: Readonly<Record<IndustrialKind, boolean>> = {
+  workshop: true,
+  flex: true,
+  factory: true,
+  warehouse: false,
+  foodplant: false,
+  chemical: false,
+  metals: false,
+  paper: false,
+};
+
+/** The industrial kinds whose body is a flat insulated panel with no window at all. */
+const INDUSTRIAL_WINDOWLESS: Readonly<Record<IndustrialKind, boolean>> = {
+  workshop: false,
+  flex: false,
+  factory: false,
+  warehouse: false,
+  foodplant: true,
+  chemical: false,
+  metals: false,
+  paper: false,
+};
+
+function commercialKindOf(kind: BuildingKind | undefined): CommercialKind | null {
+  return kind !== undefined && kind in COMMERCIAL_BODY_PALETTES ? (kind as CommercialKind) : null;
+}
+
+function industrialKindOf(kind: BuildingKind | undefined): IndustrialKind | null {
+  return kind !== undefined && kind in INDUSTRIAL_BODY_PALETTES ? (kind as IndustrialKind) : null;
+}
+
+/** The chart materials a commercial or industrial kind's body rotates among evenly, or null for a kind that keeps its own path (the residential kinds, which draw by share; farms; no kind). */
+export function bodyPaletteFor(
+  kind: BuildingKind | undefined,
+  level: number = 1,
+): readonly MaterialName[] | null {
+  const commercial = commercialKindOf(kind);
+  if (commercial !== null) {
+    if (commercial === 'office' && level >= OFFICE_TOWER_LEVEL) return OFFICE_TOWER_BODY_PALETTE;
+    return COMMERCIAL_BODY_PALETTES[commercial];
+  }
+  const industrial = industrialKindOf(kind);
+  return industrial === null ? null : INDUSTRIAL_BODY_PALETTES[industrial];
+}
+
+/** The chart materials a kind's flat roof is drawn from, or null for the white/grey/tan rotation (or the kindless industrial grey). */
+export function roofPaletteFor(kind: BuildingKind | undefined): readonly MaterialName[] | null {
+  const commercial = commercialKindOf(kind);
+  if (commercial !== null) return COMMERCIAL_ROOF_PALETTES[commercial];
+  const industrial = industrialKindOf(kind);
+  return industrial === null ? null : INDUSTRIAL_ROOF_PALETTES[industrial];
+}
+
+/** Does this industrial entry carry the facade's accent stripe? The sheds and a kindless works do; a kind whose band is a kit part does not. Never on another category. */
+export function industrialAccentStripe(entry: BuildingCatalogEntry): boolean {
+  if (entry.category !== 'ind') return false;
+  const industrial = industrialKindOf(entry.kind);
+  return industrial === null ? true : INDUSTRIAL_ACCENT_STRIPE[industrial];
+}
+
+/** Does this entry's body show no window at all? The material drops every pane; the grid itself still cuts the kit's storeys and bays. */
+export function windowlessBody(entry: BuildingCatalogEntry): boolean {
+  const industrial = industrialKindOf(entry.kind);
+  return industrial !== null && INDUSTRIAL_WINDOWLESS[industrial];
+}
+
+/** The chart glass a kind's window cells tint with, or null for the family's default pane. */
+export function glassTintFor(kind: BuildingKind | undefined, level: number = 1): RGB | null {
+  if (kind !== 'office') return null;
+  return materialUnit(level >= OFFICE_TOWER_LEVEL ? OFFICE_TOWER_GLASS : OFFICE_GLASS);
+}
+
+/** Chart names to the 0..1 tuples a palette pick and the shader's select cascade read. */
+export function paletteUnits(names: readonly MaterialName[]): readonly RGB[] {
+  return names.map((name) => materialUnit(name));
+}
+
+/**
+ * Seed-slot scheme for combining (buildingId, drawSlot) into one hash input,
+ * mirroring buildings.ts's existing WINDOW_SEED_SLOTS convention so every
+ * per-instance draw here (hue jitter, roof rotation, industrial wall/accent
+ * picks) is decorrelated from the others and from the window hash.
+ * buildings.ts's TSL shader mirrors this same seed formula with its own
+ * hash node, exactly like it already mirrors windowHash's CPU formula.
+ */
+export const FACADE_HASH_SLOT_MULTIPLIER = 4096;
+export const HASH_SLOT_HUE_JITTER = 1;
+export const HASH_SLOT_ROOF_ROTATION = 2;
+export const HASH_SLOT_INDUSTRIAL_WALL = 3;
+export const HASH_SLOT_INDUSTRIAL_ACCENT = 4;
+export const HASH_SLOT_KIND_WALL = 5;
+
+// ---------------------------------------------------------------------------
+// Deterministic hashing (32-bit avalanche mix, "triple32", public domain —
+// the same recipe buildings.ts uses for windowHash). Never Math.random.
+// ---------------------------------------------------------------------------
+
+function hash1(n: number): number {
+  let h = n >>> 0;
+  h = Math.imul(h ^ (h >>> 16), 0x45d9f3b) >>> 0;
+  h = Math.imul(h ^ (h >>> 16), 0x45d9f3b) >>> 0;
+  h = (h ^ (h >>> 16)) >>> 0;
+  return h / 4294967296;
+}
+
+/** hash(buildingId, slot) -> [0,1), decorrelated per named HASH_SLOT_*. */
+function facadeHash(buildingId: number, slot: number): number {
+  return hash1(buildingId * FACADE_HASH_SLOT_MULTIPLIER + slot);
+}
+
+// ---------------------------------------------------------------------------
+// RGB <-> HSL (standard CSS-Color-3 formulas), exported as small reusable
+// pure helpers — buildings.ts's shader mirrors the *effect* of these using
+// three's own TSL `hue`/`saturation` color-adjustment nodes (see buildings.ts),
+// not these functions directly (shaders can't call arbitrary JS).
+// ---------------------------------------------------------------------------
+
+export function rgbToHsl(r: number, g: number, b: number): HSL {
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  if (max === min) return { h: 0, s: 0, l };
+
+  const d = max - min;
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  let h: number;
+  if (max === r) h = (g - b) / d + (g < b ? 6 : 0);
+  else if (max === g) h = (b - r) / d + 2;
+  else h = (r - g) / d + 4;
+  h /= 6;
+  return { h, s, l };
+}
+
+function hue2rgb(p: number, q: number, t: number): number {
+  let tt = t;
+  if (tt < 0) tt += 1;
+  if (tt > 1) tt -= 1;
+  if (tt < 1 / 6) return p + (q - p) * 6 * tt;
+  if (tt < 1 / 2) return q;
+  if (tt < 2 / 3) return p + (q - p) * (2 / 3 - tt) * 6;
+  return p;
+}
+
+export function hslToRgb(h: number, s: number, l: number): RGB {
+  if (s === 0) return [l, l, l];
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+  const p = 2 * l - q;
+  return [hue2rgb(p, q, h + 1 / 3), hue2rgb(p, q, h), hue2rgb(p, q, h - 1 / 3)];
+}
+
+const clamp = (v: number, min: number, max: number): number => Math.min(max, Math.max(min, v));
+const wrap01 = (v: number): number => ((v % 1) + 1) % 1;
+
+function hexToRgb01(hex: number): RGB {
+  return [((hex >> 16) & 0xff) / 255, ((hex >> 8) & 0xff) / 255, (hex & 0xff) / 255];
+}
+
+function rgbDistance(a: RGB, b: RGB): number {
+  return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+}
+
+/** Guarded fixed-palette lookup — throws rather than silently wrapping (mirrors buildings.ts's slotId idiom for "should never happen but noUncheckedIndexedAccess needs proof"). */
+function paletteAt(palette: readonly RGB[], index: number): RGB {
+  const color = palette[index];
+  if (!color)
+    throw new RangeError(`facade: palette index ${index} out of range 0..${palette.length - 1}`);
+  return color;
+}
+
+// ---------------------------------------------------------------------------
+// Family (from category + zone + level)
+// ---------------------------------------------------------------------------
+
+const FAMILY_FLAGS: Record<FacadeFamily, { windowInset: boolean; spandrel: boolean }> = {
+  // Curtain wall: glazing dominates, flush with the frame, no spandrel reveal.
+  glass: { windowInset: false, spandrel: false },
+  // Brick/masonry: punched openings, visible spandrel band under every floor.
+  masonry: { windowInset: true, spandrel: true },
+  // Precast concrete panel: punched, narrow windows, no spandrel banding.
+  concrete: { windowInset: true, spandrel: false },
+  // Beige plaster (low-density res): simple punched openings.
+  plaster: { windowInset: true, spandrel: false },
+};
+
+/**
+ * Real-world-inspired, deterministic family assignment: low-density
+ * residential is plaster; everything else graduates toward
+ * glass curtain-wall as density/level rises (res-high level 3 towers,
+ * com-high office blocks), with masonry as the mid-rise/low-com step.
+ * Industrial and civic/utility/park ploppables share the utilitarian
+ * concrete base — buildings.ts layers the industrial-specific palette
+ * and wall treatment on top of that, keyed off entry.category directly.
+ */
+function deriveFamily(entry: BuildingCatalogEntry): FacadeFamily {
+  if (entry.category === 'res') {
+    if (entry.zone === ZoneType.ResLow) return 'plaster';
+    return (entry.level ?? 1) >= 3 ? 'glass' : 'masonry';
+  }
+  if (entry.category === 'com') {
+    return entry.zone === ZoneType.ComHigh ? 'glass' : 'masonry';
+  }
+  return 'concrete';
+}
+
+// ---------------------------------------------------------------------------
+// Wall / roof color derivation
+// ---------------------------------------------------------------------------
+
+/** A kindless industrial entry's wall base: a deterministic rotation among the steel-blue/light-grey/off-white palette, before hue jitter. */
+export function industrialWallBase(buildingId: number): RGB {
+  const index = Math.floor(
+    facadeHash(buildingId, HASH_SLOT_INDUSTRIAL_WALL) * INDUSTRIAL_WALL_PALETTE.length,
+  );
+  return paletteAt(INDUSTRIAL_WALL_PALETTE, Math.min(index, INDUSTRIAL_WALL_PALETTE.length - 1));
+}
+
+/** A kind's wall base, before hue jitter: a residential kind's by share, a commercial or industrial kind's one of its chart materials by id hash; null where the kind has no palette of its own. */
+export function kindWallBase(entry: BuildingCatalogEntry, buildingId: number): RGB | null {
+  const residential = residentialWallBase(entry.kind, buildingId);
+  if (residential) return residential;
+  const palette = bodyPaletteFor(entry.kind, entry.level);
+  if (!palette) return null;
+  const units = paletteUnits(palette);
+  const index = Math.floor(facadeHash(buildingId, HASH_SLOT_KIND_WALL) * units.length);
+  return paletteAt(units, Math.min(index, units.length - 1));
+}
+
+/** The pre-jitter HSL base for a wall: the kinds with a palette and a kindless industrial entry draw a chart material unclamped; everything else desaturates+lightness-clamps the catalog color. */
+function baseWallHsl(entry: BuildingCatalogEntry, buildingId: number): HSL {
+  const kindBase = kindWallBase(entry, buildingId);
+  if (kindBase) {
+    const [r, g, b] = kindBase;
+    return rgbToHsl(r, g, b);
+  }
+  if (entry.category === 'ind') {
+    const [r, g, b] = industrialWallBase(buildingId);
+    return rgbToHsl(r, g, b);
+  }
+  const [r, g, b] = hexToRgb01(entry.color);
+  const hsl = rgbToHsl(r, g, b);
+  return {
+    h: hsl.h,
+    s: Math.min(hsl.s, MAX_WALL_SATURATION),
+    l: clamp(hsl.l, MIN_WALL_LIGHTNESS, MAX_WALL_LIGHTNESS),
+  };
+}
+
+function deriveWallColor(entry: BuildingCatalogEntry, buildingId: number): RGB {
+  const { h, s, l } = baseWallHsl(entry, buildingId);
+  const jitter = (facadeHash(buildingId, HASH_SLOT_HUE_JITTER) * 2 - 1) * HUE_JITTER_FRACTION;
+  return hslToRgb(wrap01(h + jitter), s, l);
+}
+
+/**
+ * White/grey/tan rotation by id hash, cycled forward until it clears
+ * MIN_ROOF_WALL_DISTANCE from the wall color ("distinct from walls").
+ * The palette's own entries sit well over 0.2 apart pairwise, so this
+ * converges within the palette's size; the final fallback (all attempts
+ * too close) keeps the original hash pick rather than looping forever.
+ */
+function rotateRoofColor(buildingId: number, wallColor: RGB): RGB {
+  const baseIndex = Math.floor(
+    facadeHash(buildingId, HASH_SLOT_ROOF_ROTATION) * ROOF_PALETTE.length,
+  );
+  for (let attempt = 0; attempt < ROOF_PALETTE.length; attempt++) {
+    const candidate = paletteAt(ROOF_PALETTE, (baseIndex + attempt) % ROOF_PALETTE.length);
+    if (rgbDistance(candidate, wallColor) >= MIN_ROOF_WALL_DISTANCE) return candidate;
+  }
+  return paletteAt(ROOF_PALETTE, baseIndex % ROOF_PALETTE.length);
+}
+
+/** A kind's roof: one of its chart materials by id hash, chosen by the kind rather than by distance from the wall; null where the kind has no roof palette. */
+export function kindRoofColor(entry: BuildingCatalogEntry, buildingId: number): RGB | null {
+  const palette = roofPaletteFor(entry.kind);
+  if (!palette) return null;
+  const units = paletteUnits(palette);
+  const index = Math.floor(facadeHash(buildingId, HASH_SLOT_ROOF_ROTATION) * units.length);
+  return paletteAt(units, Math.min(index, units.length - 1));
+}
+
+function deriveRoofColor(entry: BuildingCatalogEntry, buildingId: number, wallColor: RGB): RGB {
+  const kindRoof = kindRoofColor(entry, buildingId);
+  if (kindRoof) return kindRoof;
+  if (entry.category === 'ind') return INDUSTRIAL_ROOF_COLOR;
+  return rotateRoofColor(buildingId, wallColor);
+}
+
+// ---------------------------------------------------------------------------
+// Industrial accent stripe
+// ---------------------------------------------------------------------------
+
+/** One accent stripe band (red or blue by id hash). */
+export function industrialAccentColor(buildingId: number): RGB {
+  return facadeHash(buildingId, HASH_SLOT_INDUSTRIAL_ACCENT) < 0.5 ? ACCENT_RED : ACCENT_BLUE;
+}
+
+// ---------------------------------------------------------------------------
+// Floors / bays
+// ---------------------------------------------------------------------------
+
+function deriveFloors(height: number): number {
+  return Math.max(1, Math.round(height / FLOOR_HEIGHT_METERS));
+}
+
+function deriveBays(entry: BuildingCatalogEntry): number {
+  const widthMeters = entry.footprint.w * TILE_METERS;
+  return Math.max(1, Math.round(widthMeters / BAY_WIDTH_METERS));
+}
+
+// ---------------------------------------------------------------------------
+// Public entry point
+// ---------------------------------------------------------------------------
+
+/** Full facade parameter set for one building instance. Pure; deterministic in (entry, buildingId). */
+export function deriveFacadeParams(entry: BuildingCatalogEntry, buildingId: number): FacadeParams {
+  const family = deriveFamily(entry);
+  const { windowInset, spandrel } = FAMILY_FLAGS[family];
+  const wallColor = deriveWallColor(entry, buildingId);
+  const roofColor = deriveRoofColor(entry, buildingId, wallColor);
+
+  return {
+    floors: deriveFloors(entry.height),
+    bays: deriveBays(entry),
+    family,
+    wallColor,
+    roofColor,
+    windowInset,
+    spandrel,
+    accentStripe: industrialAccentStripe(entry),
+  };
+}
+
+/** First FLOOR_HEIGHT_METERS band gets the storefront treatment. Returns the band thickness as a fraction of total height (1 = the whole face, for buildings shorter than the band itself). */
+export function groundFloorBand(height: number): number {
+  if (!(height > 0)) return 1;
+  return Math.min(1, GROUND_FLOOR_METERS / height);
+}
+
+/** Top PARAPET_METERS gets a darker band. Same "fraction of total height" convention as groundFloorBand. */
+export function parapetBand(height: number): number {
+  if (!(height > 0)) return 1;
+  return Math.min(1, PARAPET_METERS / height);
+}

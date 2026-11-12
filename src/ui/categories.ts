@@ -1,0 +1,458 @@
+/**
+ * Main-dock category -> asset-drawer data. Pure data derivation from the
+ * catalog/road-spec JSON — no React here, so the sub-tab/lock/pricing logic
+ * is unit-testable without rendering anything.
+ */
+import catalogData from '../data/catalog.json';
+import roadsData from '../data/roads.json';
+import type { BuildingCatalogEntry, RoadSpec, RoadTier, ToolId } from '../shared/types';
+import { EDUCATION_KINDS } from '../shared/schooling';
+import { RoadTier as RoadTierValue } from '../shared/types';
+import {
+  LANDFILL_PAINT_COST_PER_TILE,
+  POWER_CABLE_COST_PER_TILE,
+  POWER_LINE_COST_PER_TILE,
+  WATER_PIPE_COST_PER_TILE,
+} from '../shared/constants';
+import type { IconName } from './icons';
+
+const catalog = (catalogData as { buildings: BuildingCatalogEntry[] }).buildings;
+const roadSpecs = (roadsData as { specs: RoadSpec[] }).specs;
+const catalogById = new Map(catalog.map((entry) => [entry.id, entry]));
+
+/** The main-dock center-cluster categories, in display order. */
+export type DockCategory =
+  | 'zoning'
+  | 'roads'
+  | 'electricity'
+  | 'water'
+  | 'garbage'
+  | 'health'
+  | 'fire'
+  | 'police'
+  | 'education'
+  | 'parks'
+  | 'transit'
+  | 'districts'
+  | 'bulldoze'
+  | 'landscaping';
+
+export const CATEGORY_DEFS: ReadonlyArray<{ id: DockCategory; label: string; icon: IconName }> = [
+  { id: 'zoning', label: 'Zoning', icon: 'zoning' },
+  { id: 'roads', label: 'Roads', icon: 'roads' },
+  { id: 'electricity', label: 'Electricity', icon: 'electricity' },
+  { id: 'water', label: 'Water', icon: 'water' },
+  { id: 'garbage', label: 'Garbage', icon: 'garbage' },
+  { id: 'health', label: 'Health', icon: 'health' },
+  { id: 'fire', label: 'Fire', icon: 'fire' },
+  { id: 'police', label: 'Police', icon: 'police' },
+  { id: 'education', label: 'Education', icon: 'education' },
+  { id: 'parks', label: 'Parks', icon: 'parks' },
+  // Transit + Districts dock categories.
+  { id: 'transit', label: 'Transit', icon: 'transit' },
+  { id: 'districts', label: 'Districts', icon: 'districts' },
+  { id: 'bulldoze', label: 'Bulldoze', icon: 'bulldoze' },
+  { id: 'landscaping', label: 'Landscaping', icon: 'landscaping' },
+];
+
+export interface AssetCard {
+  id: ToolId;
+  name: string;
+  /** How it is laid, in the player's words, where the card has more to say than its name. */
+  description?: string;
+  cost: number;
+  unlockMilestone: number;
+}
+
+export interface AssetSubTab {
+  id: string;
+  label: string;
+  cards: AssetCard[];
+}
+
+function roadToolId(tier: RoadTier): ToolId | null {
+  switch (tier) {
+    case RoadTierValue.TwoLane:
+      return 'road.two';
+    case RoadTierValue.Avenue:
+      return 'road.avenue';
+    case RoadTierValue.Highway:
+      return 'road.highway';
+    case RoadTierValue.Gravel:
+      return 'road.gravel';
+    case RoadTierValue.Alley:
+      return 'road.alley';
+    case RoadTierValue.OneWay:
+      return 'road.oneway';
+    case RoadTierValue.FourLane:
+      return 'road.four';
+    // A bus lane, a bike lane and a tramway are not roads of their own — they
+    // are things a road of any size can be given, from the Profile row. Their
+    // tiers stay in the catalog so saves that hold them still load.
+    case RoadTierValue.RailTrack:
+      return 'road.rail';
+    case RoadTierValue.Ramp:
+      return 'road.ramp';
+    default:
+      return null;
+  }
+}
+
+function roadCard(tier: RoadTier): AssetCard[] {
+  const spec = roadSpecs.find((s) => s.tier === tier);
+  const id = spec ? roadToolId(spec.tier) : null;
+  return spec && id
+    ? [
+        {
+          id,
+          name: spec.name,
+          ...(spec.description !== undefined ? { description: spec.description } : {}),
+          cost: spec.costPerTile,
+          unlockMilestone: spec.unlockMilestone,
+        },
+      ]
+    : [];
+}
+
+/**
+ * The Interchange tool: a whole interchange laid on a motorway, so it unlocks
+ * with the motorway. It has no price of its own, since it costs the roads it
+ * lays, and the cursor quotes that total before the click.
+ */
+function interchangeCard(): AssetCard[] {
+  const highway = roadSpecs.find((s) => s.tier === RoadTierValue.Highway);
+  return highway
+    ? [
+        {
+          id: 'interchange',
+          name: 'Interchange',
+          cost: 0,
+          unlockMilestone: highway.unlockMilestone,
+        },
+      ]
+    : [];
+}
+
+/**
+ * The Roundabout tool: a compact roundabout laid on a street junction, so it
+ * unlocks with the streets it serves. Like the interchange it costs only the
+ * road it lays, which the cursor quotes before the click.
+ */
+function roundaboutCard(): AssetCard[] {
+  const street = roadSpecs.find((s) => s.tier === RoadTierValue.TwoLane);
+  return street
+    ? [{ id: 'roundabout', name: 'Roundabout', cost: 0, unlockMilestone: street.unlockMilestone }]
+    : [];
+}
+
+function catalogCards(predicate: (entry: BuildingCatalogEntry) => boolean): AssetCard[] {
+  return catalog.filter(predicate).map((entry) => ({
+    id: `plop.${entry.id}` as ToolId,
+    name: entry.name,
+    cost: entry.cost,
+    unlockMilestone: entry.unlockMilestone,
+  }));
+}
+
+/**
+ * The zone set, milestone-gated to city size. High-density Residential and
+ * Commercial unlock at M4 (large towers/malls arrive at Small City, not day
+ * one). Costs stay 0 like every zone tool — zoning is free, growth pays
+ * through the catalog.
+ */
+const ZONE_CARDS = {
+  resLow: { id: 'zone.resLow', name: 'Residential (Low)', cost: 0, unlockMilestone: 0 },
+  resMediumRow: {
+    id: 'zone.resMediumRow',
+    name: 'Residential (Medium Row)',
+    cost: 0,
+    unlockMilestone: 1,
+  },
+  resMedium: { id: 'zone.resMedium', name: 'Residential (Medium)', cost: 0, unlockMilestone: 2 },
+  resHigh: { id: 'zone.resHigh', name: 'Residential (High)', cost: 0, unlockMilestone: 4 },
+  comLow: { id: 'zone.comLow', name: 'Commercial (Low)', cost: 0, unlockMilestone: 0 },
+  comHigh: { id: 'zone.comHigh', name: 'Commercial (High)', cost: 0, unlockMilestone: 4 },
+  industrial: { id: 'zone.industrial', name: 'Industrial', cost: 0, unlockMilestone: 0 },
+  // Heavy industry waits for a township whose workforce can staff a plant.
+  indHeavy: { id: 'zone.indHeavy', name: 'Industrial (Heavy)', cost: 0, unlockMilestone: 2 },
+  agriculture: { id: 'zone.agriculture', name: 'Agriculture', cost: 0, unlockMilestone: 0 },
+  mixed: { id: 'zone.mixed', name: 'Mixed-Use', cost: 0, unlockMilestone: 3 },
+  dezone: { id: 'zone.dezone', name: 'De-zone', cost: 0, unlockMilestone: 0 },
+} satisfies Record<string, AssetCard>;
+
+const BULLDOZE_CARD: AssetCard = { id: 'bulldoze', name: 'Bulldoze', cost: 0, unlockMilestone: 0 };
+
+/**
+ * The bus-line drawing tool card (bus stops come from the catalog via the
+ * 'transit' building category). Unlocks with the bus stop (M1).
+ */
+const TRANSIT_LINE_CARD: AssetCard = {
+  id: 'transit.line',
+  name: 'Bus Line',
+  cost: 0,
+  unlockMilestone: 1,
+};
+
+/**
+ * The rail-line drawing tool card. Same gesture as the bus line, committed
+ * against the track instead of the streets; unlocks with the station.
+ */
+const RAIL_LINE_CARD: AssetCard = {
+  id: 'transit.rail',
+  name: 'Rail Line',
+  cost: 0,
+  unlockMilestone: 3,
+};
+
+/**
+ * The tram-line drawing tool card. Same gesture again, committed against the
+ * tram track; unlocks with the track itself, since a tram needs no station.
+ */
+const TRAM_LINE_CARD: AssetCard = {
+  id: 'transit.tram',
+  name: 'Tram Line',
+  cost: 0,
+  unlockMilestone: 3,
+};
+
+/**
+ * The district paint-brush tool card. Zero cost, always available — districts
+ * are administrative regions, painted onto any tile.
+ */
+const DISTRICT_PAINT_CARD: AssetCard = {
+  id: 'district.paint',
+  name: 'Paint District',
+  cost: 0,
+  unlockMilestone: 0,
+};
+
+/**
+ * Power line (strings GridState.powerLine); cost is per tile of run, shown
+ * live on the cursor chip since a drag charges only for what it changes.
+ */
+const POWER_LINE_CARD: AssetCard = {
+  id: 'power.line',
+  name: 'Power Line',
+  cost: POWER_LINE_COST_PER_TILE,
+  unlockMilestone: 0,
+};
+
+/**
+ * Buried cable (strings the same layer as the line, as a cable); cost is per
+ * tile of run, shown live on the cursor chip like the line's.
+ */
+const POWER_CABLE_CARD: AssetCard = {
+  id: 'power.cable',
+  name: 'Buried Cable',
+  cost: POWER_CABLE_COST_PER_TILE,
+  unlockMilestone: 0,
+};
+
+/**
+ * Water pipe (lays GridState.waterPipe); one pipe carries water out and
+ * sewage back. Cost is per tile of run, shown live on the cursor chip like the
+ * power line's.
+ */
+const WATER_PIPE_CARD: AssetCard = {
+  id: 'water.pipe',
+  name: 'Water Pipe',
+  cost: WATER_PIPE_COST_PER_TILE,
+  unlockMilestone: 0,
+};
+
+/** Landfill area brush (paints GridState.landfill); cost is per painted tile. */
+const LANDFILL_PAINT_CARD: AssetCard = {
+  id: 'landfill.paint',
+  name: 'Landfill',
+  cost: LANDFILL_PAINT_COST_PER_TILE,
+  unlockMilestone: 1,
+};
+
+/**
+ * The four real terraform brushes. Zero cost/unlockMilestone, same reasoning
+ * as zone cards — a terraform stroke's real charge depends on the volume
+ * actually edited, so
+ * it has no flat catalog price and is shown live via the cursor chip
+ * instead (fed by the ToolManager's running-cost preview).
+ */
+const TERRAFORM_CARDS: AssetCard[] = [
+  { id: 'terraform.raise', name: 'Raise', cost: 0, unlockMilestone: 0 },
+  { id: 'terraform.lower', name: 'Lower', cost: 0, unlockMilestone: 0 },
+  { id: 'terraform.level', name: 'Level', cost: 0, unlockMilestone: 0 },
+  { id: 'terraform.smooth', name: 'Smooth', cost: 0, unlockMilestone: 0 },
+];
+
+/**
+ * Every category's theoretical sub-tab groups, including ones that currently
+ * have zero real items (e.g. Roads' "Maintenance" — no maintenance tool
+ * exists yet). `subTabsFor` filters those out, rendering only sub-tabs that
+ * have >=1 real item.
+ */
+const RAW_GROUPS: Record<DockCategory, AssetSubTab[]> = {
+  zoning: [
+    // City-size progression order — Low / Medium Row / Medium / High.
+    {
+      id: 'residential',
+      label: 'Residential',
+      cards: [ZONE_CARDS.resLow, ZONE_CARDS.resMediumRow, ZONE_CARDS.resMedium, ZONE_CARDS.resHigh],
+    },
+    { id: 'commercial', label: 'Commercial', cards: [ZONE_CARDS.comLow, ZONE_CARDS.comHigh] },
+    { id: 'industrial', label: 'Industrial', cards: [ZONE_CARDS.industrial, ZONE_CARDS.indHeavy] },
+    // Farmland: the basic industry of a small town, laid off its dirt roads.
+    { id: 'agriculture', label: 'Agriculture', cards: [ZONE_CARDS.agriculture] },
+    // Mixed Housing gets its own sub-tab (carries both residents+jobs).
+    { id: 'mixed', label: 'Mixed-Use', cards: [ZONE_CARDS.mixed] },
+    { id: 'dezone', label: 'De-zone', cards: [ZONE_CARDS.dezone] },
+  ],
+  roads: [
+    // Grouped by the family a road belongs to, which is also the family that
+    // decides how many lanes it is offered: a track is two lanes and stays
+    // two, a neighbourhood street goes to four, a town street to six, and a
+    // motorway to eight.
+    {
+      id: 'small',
+      label: 'Small',
+      cards: [
+        ...roadCard(RoadTierValue.Gravel),
+        ...roadCard(RoadTierValue.Alley),
+        ...roadCard(RoadTierValue.TwoLane),
+        ...roadCard(RoadTierValue.OneWay),
+        // A compact roundabout takes streets of one lane each way, which are these.
+        ...roundaboutCard(),
+      ],
+    },
+    {
+      id: 'medium',
+      label: 'Medium',
+      cards: [...roadCard(RoadTierValue.FourLane), ...roadCard(RoadTierValue.Avenue)],
+    },
+    {
+      id: 'highway',
+      label: 'Highway',
+      // The ramp sits beside the motorway it serves: on its own it is a slip
+      // road to nowhere, and it is the only way onto one.
+      cards: [
+        ...roadCard(RoadTierValue.Highway),
+        ...roadCard(RoadTierValue.Ramp),
+        ...interchangeCard(),
+      ],
+    },
+    {
+      id: 'rail',
+      label: 'Rail',
+      // Rail is the one transit mode that is genuinely its own network rather
+      // than a lane of a road: it sits outside the road ranking and only
+      // crosses a street at grade. Buses, bikes and trams are lanes, and are
+      // added to a road of any size from the Profile row instead.
+      cards: [...roadCard(RoadTierValue.RailTrack)],
+    },
+  ],
+  electricity: [
+    {
+      id: 'all',
+      label: 'Electricity',
+      cards: [
+        ...catalogCards((e) => e.category === 'utility' && e.utility?.powerMW !== undefined),
+        // The wire that carries what the generators make, listed with them.
+        POWER_LINE_CARD,
+        POWER_CABLE_CARD,
+        // Where a line may start that is not a power station.
+        ...catalogCards((e) => e.utility?.substation === true),
+      ],
+    },
+  ],
+  water: [
+    {
+      id: 'all',
+      label: 'Water',
+      cards: [
+        // What makes the water, what takes the sewage back, and the pipe that
+        // carries both where the streets do not.
+        ...catalogCards(
+          (e) =>
+            e.category === 'utility' &&
+            (e.utility?.waterKL !== undefined || e.utility?.sewerKL !== undefined),
+        ),
+        WATER_PIPE_CARD,
+      ],
+    },
+  ],
+  // Garbage: the landfill-area brush + garbage-processing ploppables (incinerator).
+  garbage: [
+    {
+      id: 'all',
+      label: 'Garbage',
+      cards: [LANDFILL_PAINT_CARD, ...catalogCards((e) => !!e.garbage)],
+    },
+  ],
+  health: [
+    {
+      id: 'all',
+      label: 'Health',
+      // Death care rides the health department: its burial ground is listed beside the clinic.
+      cards: catalogCards(
+        (e) => e.category === 'service' && (e.service?.kind === 'health' || !!e.deathCare),
+      ),
+    },
+  ],
+  fire: [
+    {
+      id: 'all',
+      label: 'Fire',
+      cards: catalogCards((e) => e.category === 'service' && e.service?.kind === 'fire'),
+    },
+  ],
+  police: [
+    {
+      id: 'all',
+      label: 'Police',
+      cards: catalogCards((e) => e.category === 'service' && e.service?.kind === 'police'),
+    },
+  ],
+  education: [
+    {
+      id: 'all',
+      label: 'Education',
+      // The four schools and the library, which the Education department funds.
+      cards: catalogCards(
+        (e) =>
+          e.category === 'service' &&
+          e.service !== undefined &&
+          EDUCATION_KINDS.has(e.service.kind),
+      ),
+    },
+  ],
+  parks: [{ id: 'all', label: 'Parks', cards: catalogCards((e) => e.category === 'park') }],
+  // Transit: the stop/station ploppables from the catalog + one line tool per mode.
+  transit: [
+    {
+      id: 'all',
+      label: 'Transit',
+      cards: [
+        ...catalogCards((e) => e.category === 'transit'),
+        TRANSIT_LINE_CARD,
+        RAIL_LINE_CARD,
+        TRAM_LINE_CARD,
+      ],
+    },
+  ],
+  // Districts: the paint tool (district selection + policies live in the DistrictPanel).
+  districts: [{ id: 'all', label: 'Districts', cards: [DISTRICT_PAINT_CARD] }],
+  bulldoze: [{ id: 'all', label: 'Bulldoze', cards: [BULLDOZE_CARD] }],
+  landscaping: [{ id: 'all', label: 'Landscaping', cards: [...TERRAFORM_CARDS] }],
+};
+
+/** Non-empty sub-tab groups for a category. Length <= 1 means "no tab row — one flat grid". */
+export function subTabsFor(category: DockCategory): AssetSubTab[] {
+  return RAW_GROUPS[category].filter((group) => group.cards.length > 0);
+}
+
+/** All cards in a category, flattened across its sub-tabs (tabbed or not). */
+export function allCardsFor(category: DockCategory): AssetCard[] {
+  return subTabsFor(category).flatMap((group) => group.cards);
+}
+
+/** Resolves a `plop.<id>` tool back to its catalog entry; undefined for non-catalog tools. */
+export function catalogEntryForTool(id: ToolId): BuildingCatalogEntry | undefined {
+  return id.startsWith('plop.') ? catalogById.get(id.slice('plop.'.length)) : undefined;
+}

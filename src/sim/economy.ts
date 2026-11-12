@@ -1,0 +1,416 @@
+/**
+ * Economy & progression.
+ *
+ * Every tick: population/jobs/employed are aggregated from Active building
+ * instances. On month boundaries, tax income and upkeep/loan expenses are
+ * settled against funds, and budget notifications fire when funds run low.
+ * Milestones level up as soon as population crosses the next threshold,
+ * independent of the month cycle. Loan take/repay are exposed as pure
+ * stats-transform helpers for the command layer to call.
+ */
+
+import type {
+  BuildingCatalogEntry,
+  BuildingInstance,
+  BusStopState,
+  CityNotification,
+  CityStats,
+  GridState,
+  RoadProfile,
+  RoadSpec,
+} from '../shared/types';
+import {
+  BuildingState,
+  FieldId,
+  PowerLineKind,
+  RoadTier,
+  SHELTER_AD_INCOME,
+  fundingKeyOf,
+} from '../shared/types';
+import { tierIsSealedStreet } from './network';
+import { occupiedResidents } from '../shared/occupancy';
+import { isPresetProfileId, roadPriceOf } from '../shared/roadprofile';
+import {
+  LANDFILL_UPKEEP_PER_TILE,
+  POWER_CABLE_UPKEEP_PER_TILE,
+  POWER_LINE_UPKEEP_PER_TILE,
+  WATER_PIPE_UPKEEP_PER_TILE,
+  LOAN_MONTHLY_INTEREST,
+  MAP_TILES,
+  MAX_LOAN,
+  MILESTONES,
+  MONTHS_PER_YEAR,
+  RECYCLING_CREDIT_PER_UNIT,
+  REGIONAL_FUNERAL_FEE,
+  TICKS_PER_MONTH,
+  workforceOf,
+} from '../shared/constants';
+
+const LAND_VALUE_FACTOR_BASE = 0.75;
+const LAND_VALUE_FACTOR_SPAN = 0.5;
+const FUNDS_WARNING_THRESHOLD = 2000;
+
+export interface EconomyTickInput {
+  g: GridState;
+  buildings: BuildingInstance[];
+  stats: CityStats;
+  tickNo: number;
+  /**
+   * Optional per-building district tax multiplier (lowTax/highTax
+   * policies). Returns 1 for tiles in no policied district, so with no policy
+   * set — and for every caller that omits it — monthly income is byte-for-byte
+   * unchanged. The correction is applied on top of the existing aggregate
+   * income so the un-policied result never shifts.
+   */
+  taxMultiplier?: (x: number, z: number) => number;
+  /**
+   * The cross-section a road profile id stands for, so upkeep can be charged
+   * for what a road actually carries. A reserved bus lane or a tramway costs
+   * more to keep than the street without it, and the stored tier byte — the
+   * road's SIZE — cannot tell the two apart. Omitted, every road is charged
+   * its size's upkeep, which is what happened before profiles existed.
+   */
+  profileOf?: (id: number) => RoadProfile | null;
+  /**
+   * Hands over the recycling units recovered since the last month boundary,
+   * clearing the tally. Called once, at the month boundary only, so each
+   * month's recovery is credited exactly once. Omitted, nothing is credited.
+   */
+  takeRecoveredUnits?: () => number;
+  /**
+   * Hands over the bodies the regional funeral service has collected since the
+   * last month boundary, clearing the tally; each is billed REGIONAL_FUNERAL_FEE
+   * as an expense. Called once, at the month boundary only. Omitted, nothing is billed.
+   */
+  takeRegionalBodies?: () => number;
+  /**
+   * The month's running charge for every transit vehicle in service, ¢, as
+   * the transit tick last summed it over the lines. Charged at the month
+   * boundary beside building upkeep. Omitted, nothing runs and nothing is billed.
+   */
+  transitRunning?: number;
+  /**
+   * The bus stops standing: every shelter is charged the shelter's catalog
+   * upkeep, and each warranted one earns SHELTER_AD_INCOME. A sign costs and
+   * earns nothing. Omitted, no stop exists.
+   */
+  stops?: readonly BusStopState[];
+  /** Unlimited money is on: the budget warnings stay quiet. */
+  unlimitedMoney?: boolean;
+}
+
+export interface EconomyTickResult {
+  statsPatch: Partial<CityStats>;
+  notifications: CityNotification[];
+  /** This tick's occupancy — what demand weighs the town's basic and local economies by. */
+  occupancy: Occupancy;
+}
+
+/** Jobs in commercial (the local economy) and industrial (the basic one) buildings. */
+export interface JobsBySector {
+  com: number;
+  ind: number;
+}
+
+/** Who lives and works in the city's Active buildings, and the jobs still going up. */
+export interface Occupancy {
+  population: number;
+  jobs: JobsBySector;
+  /** Jobs in buildings under construction: supply a developer can already see. */
+  pipeline: JobsBySector;
+}
+
+/**
+ * Monthly tax a single building contributes (SelectionInfo.monthlyTax):
+ * occupants × sector tax rate × 12 × land-value factor — the
+ * same per-occupant formula the monthly settlement in {@link EconomySystem}
+ * uses, instantiated with the land value at the building's own tile (the
+ * city-wide settlement uses the average over all occupied tiles).
+ * 0 for ploppables (service/utility/park) and for non-Active buildings,
+ * mirroring how the settlement only counts Active res/com/ind occupants.
+ */
+export function buildingMonthlyTax(
+  entry: BuildingCatalogEntry,
+  inst: Pick<BuildingInstance, 'state' | 'vacancies'>,
+  taxRates: Record<'res' | 'com' | 'ind', number>,
+  landValueByte: number,
+): number {
+  if (inst.state !== BuildingState.Active) return 0;
+  let occupants: number;
+  let rate: number;
+  if (entry.category === 'res') {
+    occupants = occupiedResidents(entry, inst);
+    rate = taxRates.res;
+  } else if (entry.category === 'com') {
+    occupants = entry.jobs ?? 0;
+    rate = taxRates.com;
+  } else if (entry.category === 'ind') {
+    occupants = entry.jobs ?? 0;
+    rate = taxRates.ind;
+  } else {
+    return 0;
+  }
+  const clamped = Math.max(0, Math.min(255, landValueByte));
+  const landValueFactor = LAND_VALUE_FACTOR_BASE + (clamped / 255) * LAND_VALUE_FACTOR_SPAN;
+  return occupants * rate * MONTHS_PER_YEAR * landValueFactor;
+}
+
+function computeMilestoneProgress(level: number, population: number): number {
+  const current = MILESTONES[level];
+  const next = MILESTONES[level + 1];
+  if (!current || !next) return 1;
+  const span = next.population - current.population;
+  if (span <= 0) return 1;
+  const progress = (population - current.population) / span;
+  return Math.max(0, Math.min(1, progress));
+}
+
+export class EconomySystem {
+  private readonly catalog: Map<string, BuildingCatalogEntry>;
+  private readonly roadSpecs: Map<number, RoadSpec>;
+
+  constructor(catalog: BuildingCatalogEntry[], roadSpecs: RoadSpec[]) {
+    this.catalog = new Map(catalog.map((c) => [c.id, c] as const));
+    this.roadSpecs = new Map<number, RoadSpec>(roadSpecs.map((r) => [r.tier, r]));
+  }
+
+  /**
+   * Population and jobs by sector over the Active buildings — what the tick
+   * and demand both read — and the jobs in buildings still under construction.
+   */
+  occupancy(buildings: readonly BuildingInstance[]): Occupancy {
+    let population = 0;
+    const jobs: JobsBySector = { com: 0, ind: 0 };
+    const pipeline: JobsBySector = { com: 0, ind: 0 };
+    for (const b of buildings) {
+      if (b.state === BuildingState.Abandoned) continue;
+      const spec = this.catalog.get(b.catalogId);
+      if (!spec) continue;
+      const open = b.state === BuildingState.Active;
+      const tally = open ? jobs : pipeline;
+      // Whoever lives in it, whatever it is: a farm's family live on the farm.
+      population += occupiedResidents(spec, b);
+      if (spec.category === 'res') {
+        // Mixed housing: a res-category building may carry
+        // commercial ground-floor jobs. Count those into commercial jobs so
+        // they reach CityStats.jobs / employed / commercial tax income. Pure
+        // residential entries have no `jobs` field, so `?? 0` is a no-op there.
+        tally.com += spec.jobs ?? 0;
+      } else if (spec.category === 'com') tally.com += spec.jobs ?? 0;
+      else if (spec.category === 'ind') tally.ind += spec.jobs ?? 0;
+    }
+    return { population, jobs, pipeline };
+  }
+
+  tick(input: EconomyTickInput): EconomyTickResult {
+    const { g, buildings, stats, tickNo } = input;
+    const notifications: CityNotification[] = [];
+    let notificationSlot = 0;
+    const nextId = (): number => tickNo * 1000 + notificationSlot++;
+
+    // --- 1. population / jobs / employed, every tick, Active only ---------
+    const occupancy = this.occupancy(buildings);
+    const { population } = occupancy;
+    const { com: jobsCom, ind: jobsInd } = occupancy.jobs;
+    const jobs = jobsCom + jobsInd;
+    const employed = Math.min(workforceOf(population), jobs);
+
+    // --- 2. milestones, every tick (independent of the month cycle) -------
+    let funds = stats.funds;
+    let milestoneLevel = stats.milestoneLevel;
+    while (milestoneLevel + 1 < MILESTONES.length) {
+      const next = MILESTONES[milestoneLevel + 1]!;
+      if (population < next.population) break;
+      milestoneLevel += 1;
+      funds += next.reward;
+      notifications.push({
+        id: nextId(),
+        severity: 'info',
+        title: 'Milestone reached',
+        body: `${next.name} — population ${next.population}+`,
+        tick: tickNo,
+      });
+    }
+    const milestoneProgress = computeMilestoneProgress(milestoneLevel, population);
+
+    const statsPatch: Partial<CityStats> = {
+      population,
+      jobs,
+      employed,
+      milestoneLevel,
+      milestoneProgress,
+    };
+
+    // --- 3. monthly income / expenses --------------------------------------
+    if (tickNo !== 0 && tickNo % TICKS_PER_MONTH === 0) {
+      const landValueField = g.fields[FieldId.LandValue]!;
+      let landValueSum = 0;
+      let occupiedCount = 0;
+      for (let i = 0; i < MAP_TILES; i++) {
+        if (g.buildingId[i]! !== 0) {
+          landValueSum += landValueField[i]!;
+          occupiedCount += 1;
+        }
+      }
+      const avgLandValue = occupiedCount > 0 ? landValueSum / occupiedCount : 0;
+      const landValueFactor =
+        LAND_VALUE_FACTOR_BASE + (avgLandValue / 255) * LAND_VALUE_FACTOR_SPAN;
+
+      const rawIncome =
+        population * stats.taxRates.res * MONTHS_PER_YEAR +
+        jobsCom * stats.taxRates.com * MONTHS_PER_YEAR +
+        jobsInd * stats.taxRates.ind * MONTHS_PER_YEAR;
+      // lowTax/highTax correction: additive per-building delta so the
+      // un-policied income (taxMultiplier absent or returning 1) is unchanged.
+      let taxCorrection = 0;
+      if (input.taxMultiplier) {
+        for (const b of buildings) {
+          if (b.state !== BuildingState.Active) continue;
+          const spec = this.catalog.get(b.catalogId);
+          if (!spec) continue;
+          let occupants: number;
+          let rate: number;
+          if (spec.category === 'res') {
+            occupants = occupiedResidents(spec, b);
+            rate = stats.taxRates.res;
+          } else if (spec.category === 'com') {
+            occupants = spec.jobs ?? 0;
+            rate = stats.taxRates.com;
+          } else if (spec.category === 'ind') {
+            occupants = spec.jobs ?? 0;
+            rate = stats.taxRates.ind;
+          } else {
+            continue;
+          }
+          const mult = input.taxMultiplier(b.x, b.z);
+          if (mult !== 1) {
+            taxCorrection += occupants * rate * MONTHS_PER_YEAR * landValueFactor * (mult - 1);
+          }
+        }
+      }
+      const recyclingCredit = (input.takeRecoveredUnits?.() ?? 0) * RECYCLING_CREDIT_PER_UNIT;
+      let shelters = 0;
+      let warranted = 0;
+      for (const stop of input.stops ?? []) {
+        if (stop.kind !== 'shelter') continue;
+        shelters += 1;
+        if (stop.warranted) warranted += 1;
+      }
+      const advertising = warranted * SHELTER_AD_INCOME;
+      const income = rawIncome * landValueFactor + taxCorrection + recyclingCredit + advertising;
+
+      let buildingUpkeep = (this.catalog.get('bus-stop')?.upkeep ?? 0) * shelters;
+      for (const b of buildings) {
+        if (b.state !== BuildingState.Active) continue;
+        const spec = this.catalog.get(b.catalogId);
+        if (!spec) continue;
+        let upkeep = spec.upkeep;
+        if (spec.service) upkeep *= stats.serviceFunding[fundingKeyOf(spec.service.kind)];
+        buildingUpkeep += upkeep;
+      }
+
+      // Counted by (size, cross-section) rather than by size alone, so a
+      // street with a bus lane down it is not billed as the plain street.
+      const tileCounts = new Map<
+        string,
+        { tier: number; profileId: number; count: number; buried: number }
+      >();
+      for (let i = 0; i < MAP_TILES; i++) {
+        const tier = g.roadTier[i]!;
+        if (tier === RoadTier.None) continue;
+        const profileId = g.roadProfile[i] ?? tier;
+        const key = `${tier}:${profileId}`;
+        // A cable under a sealed street is that street's own supply, underground.
+        const buried = g.powerLine[i] === PowerLineKind.Cable && tierIsSealedStreet(tier) ? 1 : 0;
+        const seen = tileCounts.get(key);
+        if (seen) {
+          seen.count++;
+          seen.buried += buried;
+        } else tileCounts.set(key, { tier, profileId, count: 1, buried });
+      }
+      let roadUpkeep = 0;
+      for (const { tier, profileId, count, buried } of tileCounts.values()) {
+        const spec = this.roadSpecs.get(tier);
+        if (!spec) continue;
+        const profile = input.profileOf?.(profileId) ?? null;
+        // A preset is charged its own upkeep, whatever it carries: the transit
+        // roads that used to stand alone keep the price they were built at.
+        const perTile =
+          profile && !isPresetProfileId(profileId)
+            ? roadPriceOf(spec, profile).upkeepPerTile
+            : (this.roadSpecs.get(profileId)?.upkeepPerTile ?? spec.upkeepPerTile);
+        roadUpkeep += perTile * count - Math.min(perTile, POWER_CABLE_UPKEEP_PER_TILE) * buried;
+      }
+
+      // Landfill: monthly upkeep scales with the painted area.
+      let landfillUpkeep = 0;
+      // Power lines and water pipes: the utility owns them, the city pays to keep them up.
+      let powerLineUpkeep = 0;
+      let waterPipeUpkeep = 0;
+      for (let i = 0; i < MAP_TILES; i++) {
+        if (g.landfill[i] === 1) landfillUpkeep += LANDFILL_UPKEEP_PER_TILE;
+        const line = g.powerLine[i]!;
+        if (line === PowerLineKind.Cable) {
+          // Under a sealed street the cable's upkeep is the street's saving above.
+          if (!tierIsSealedStreet(g.roadTier[i]!)) powerLineUpkeep += POWER_CABLE_UPKEEP_PER_TILE;
+        } else if (line !== 0) powerLineUpkeep += POWER_LINE_UPKEEP_PER_TILE;
+        if (g.waterPipe[i] === 1) waterPipeUpkeep += WATER_PIPE_UPKEEP_PER_TILE;
+      }
+
+      const loanInterest = stats.loanBalance * LOAN_MONTHLY_INTEREST;
+      const funeralFees = (input.takeRegionalBodies?.() ?? 0) * REGIONAL_FUNERAL_FEE;
+      // The fleet's own bill, apart from its depots' upkeep above: capacity
+      // costs the building line, service the vehicle line.
+      const transitRunning = input.transitRunning ?? 0;
+      const expenses =
+        buildingUpkeep +
+        roadUpkeep +
+        landfillUpkeep +
+        powerLineUpkeep +
+        waterPipeUpkeep +
+        funeralFees +
+        transitRunning +
+        loanInterest;
+
+      funds += income - expenses;
+      statsPatch.monthlyIncome = income;
+      statsPatch.monthlyExpenses = expenses;
+      statsPatch.transitRunning = transitRunning;
+      statsPatch.advertising = advertising;
+
+      // With unlimited money the cash flow is still tracked, but it raises no warning.
+      const warn = !input.unlimitedMoney;
+      if (warn && funds < 0) {
+        notifications.push({
+          id: nextId(),
+          severity: 'critical',
+          title: 'Budget critical',
+          body: 'City funds are negative. Bankruptcy risk.',
+          tick: tickNo,
+        });
+      } else if (warn && funds < FUNDS_WARNING_THRESHOLD) {
+        notifications.push({
+          id: nextId(),
+          severity: 'warning',
+          title: 'Budget low',
+          body: 'City funds are running low.',
+          tick: tickNo,
+        });
+      }
+    }
+
+    statsPatch.funds = funds;
+
+    return { statsPatch, notifications, occupancy };
+  }
+
+  applyLoan(stats: CityStats, amount: number): Partial<CityStats> {
+    const delta = Math.max(0, Math.min(amount, MAX_LOAN - stats.loanBalance));
+    return { loanBalance: stats.loanBalance + delta, funds: stats.funds + delta };
+  }
+
+  applyRepay(stats: CityStats, amount: number): Partial<CityStats> {
+    const delta = Math.max(0, Math.min(amount, stats.funds, stats.loanBalance));
+    return { loanBalance: stats.loanBalance - delta, funds: stats.funds - delta };
+  }
+}
