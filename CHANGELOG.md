@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.85.0](https://github.com/victorgomez09/city-builder/compare/slimcity-v1.84.0...slimcity-v1.85.0) (2026-11-12)
+
+
+### Features
+
+* add terrain and road generation ([1c89da3](https://github.com/victorgomez09/city-builder/commit/1c89da36944eb3305f2385a67e4017d7412877e1))
+
 ## [1.84.0](https://github.com/rbenzing/SlimCityGame/compare/slimcity-v1.83.0...slimcity-v1.84.0) (2026-11-11)
 
 
