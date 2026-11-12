@@ -32,9 +32,9 @@ export default function BrandLogo({ className }: { className?: string }) {
         letterSpacing="0.5"
         fill="currentColor"
       >
-        Slim
+        City
         <tspan fontWeight={800} fill="var(--color-accent, #38b6e3)">
-          City
+          VI
         </tspan>
       </text>
     </svg>
