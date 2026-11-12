@@ -16,14 +16,17 @@ import {
   fract,
   hash,
   hue,
+  length,
+  min,
   mix,
+  mod,
   normalGeometry,
   normalLocal,
   saturation,
   select,
-  sin,
   uniform,
   uv,
+  vec2,
   vec3,
 } from 'three/tsl';
 import {
@@ -54,6 +57,12 @@ import { BARN_EAVE_SHARE, planFarm, type FarmRect } from './farmlot';
 import {
   ACCENT_BLUE,
   ACCENT_RED,
+  BRICK_HEIGHT_M,
+  BRICK_JOINT_HALF_M,
+  BRICK_WIDTH_M,
+  CONCRETE_JOINT_HALF_M,
+  CONCRETE_PANEL_HEIGHT_M,
+  CONCRETE_PANEL_WIDTH_M,
   FACADE_HASH_SLOT_MULTIPLIER,
   HASH_SLOT_HUE_JITTER,
   HASH_SLOT_INDUSTRIAL_ACCENT,
@@ -66,6 +75,8 @@ import {
   INDUSTRIAL_WALL_PALETTE,
   FRAME_DARKEN,
   housePaneMargins,
+  PLASTER_PLINTH_HEIGHT_M,
+  STANDING_SEAM_SPACING_M,
   storefrontCut,
   MAX_WALL_SATURATION,
   MIN_ROOF_WALL_DISTANCE,
@@ -254,10 +265,6 @@ const SPANDREL_BAND_FRACTION = 0.14; // fraction of one floor's height, at each 
 
 const PARAPET_DARKEN = 0.6; // non-industrial parapet: a darkened wall color
 const ROOF_CAP_DARKEN = 0.85; // industrial "roof cap band": a darkened roof color
-
-const CORRUGATION_FREQUENCY = 40 * Math.PI * 2; // ~40 fine vertical ribs across the facade width
-const CORRUGATION_MIN = 0.9;
-const CORRUGATION_MAX = 1.1;
 const INDUSTRIAL_ACCENT_HALF_THICKNESS = 0.035; // fraction of total height
 
 /**
@@ -696,12 +703,65 @@ export class BuildingInstancer {
     const isParapet = uvNode.y.greaterThan(1 - parapetThreshold);
 
     // Solid wall base (the frame/mullion color where there is no pane):
-    // industrial gets a fine corrugated stripe ripple; masonry gets
-    // a darker spandrel band at every floor edge.
+    // procedural facade vector joints, precast panels, brick bond, and standing seams.
+    const yMetres = uvNode.y.mul(tierHeight);
+    const xMetres = uvNode.x.mul(cols * 2.6);
+
     let solidWall: Node<'vec3'> = wallColorNode;
+
+    if (family === 'concrete') {
+      const panelRow = floor(yMetres.div(CONCRETE_PANEL_HEIGHT_M));
+      const rowOffset = mod(panelRow, 2).mul(0.5);
+      const panelQx = xMetres.div(CONCRETE_PANEL_WIDTH_M).add(rowOffset);
+      const fx = fract(panelQx);
+      const fy = fract(yMetres.div(CONCRETE_PANEL_HEIGHT_M));
+      const ex = min(fx, float(1).sub(fx)).mul(CONCRETE_PANEL_WIDTH_M);
+      const ey = min(fy, float(1).sub(fy)).mul(CONCRETE_PANEL_HEIGHT_M);
+      const isJoint = ex.lessThan(CONCRETE_JOINT_HALF_M).or(ey.lessThan(CONCRETE_JOINT_HALF_M));
+
+      const tieDistX = abs(
+        fx.mul(CONCRETE_PANEL_WIDTH_M).sub(select(fx.lessThan(0.5), float(0.3), float(1.2))),
+      );
+      const tieDistY = abs(
+        fy.mul(CONCRETE_PANEL_HEIGHT_M).sub(select(fy.lessThan(0.5), float(0.3), float(0.7))),
+      );
+      const isFormTie = length(vec2(tieDistX, tieDistY)).lessThan(0.025);
+
+      const panelSeed = floor(panelQx)
+        .mul(17.0)
+        .add(panelRow.mul(31.0))
+        .add(buildingIdAttr.mul(13.0));
+      const panelTone = mix(0.97, 1.03, hash(panelSeed));
+      solidWall = solidWall.mul(panelTone);
+      solidWall = select(isFormTie, solidWall.mul(0.85), solidWall);
+      solidWall = select(isJoint, solidWall.mul(0.82), solidWall);
+    } else if (family === 'masonry') {
+      const brickRow = floor(yMetres.div(BRICK_HEIGHT_M));
+      const brickRowOffset = mod(brickRow, 2).mul(0.5);
+      const brickQx = xMetres.div(BRICK_WIDTH_M).add(brickRowOffset);
+      const bfx = fract(brickQx);
+      const bfy = fract(yMetres.div(BRICK_HEIGHT_M));
+      const bex = min(bfx, float(1).sub(bfx)).mul(BRICK_WIDTH_M);
+      const bey = min(bfy, float(1).sub(bfy)).mul(BRICK_HEIGHT_M);
+      const isMortar = bex.lessThan(BRICK_JOINT_HALF_M).or(bey.lessThan(BRICK_JOINT_HALF_M));
+
+      const brickSeed = floor(brickQx).mul(37.0).add(brickRow.mul(19.0)).add(buildingIdAttr.mul(7.0));
+      const brickTone = mix(0.93, 1.07, hash(brickSeed));
+      solidWall = select(isMortar, solidWall.mul(0.84), solidWall.mul(brickTone));
+    } else if (family === 'plaster') {
+      const isPlinth = yMetres.lessThan(PLASTER_PLINTH_HEIGHT_M).and(isBaseTier);
+      solidWall = select(isPlinth, solidWall.mul(0.88), solidWall);
+    }
+
     if (isIndustrial) {
-      const corrugation = sin(uvNode.x.mul(CORRUGATION_FREQUENCY)).mul(0.5).add(0.5);
-      solidWall = wallColorNode.mul(mix(CORRUGATION_MIN, CORRUGATION_MAX, corrugation));
+      const ribU = fract(xMetres.div(STANDING_SEAM_SPACING_M)).mul(STANDING_SEAM_SPACING_M);
+      const isLitRib = ribU.lessThan(0.025);
+      const isShadedRib = ribU.greaterThan(0.025).and(ribU.lessThan(0.05));
+      solidWall = select(
+        isLitRib,
+        solidWall.mul(1.08),
+        select(isShadedRib, solidWall.mul(0.88), solidWall),
+      );
     }
     if (spandrel) {
       const rowFrac = fract(uvNode.y.mul(rows));

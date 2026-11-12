@@ -121,6 +121,7 @@ import {
 import { LotRenderer } from './render/lots';
 import { GarageRenderer } from './render/garages';
 import { BuildingKitRenderer } from './render/buildingkit';
+import { ConstructionRenderer } from './render/construction';
 import { LandmarkRenderer } from './render/landmarks';
 import { chunksOver, RoadMeshRenderer } from './render/roadsmesh';
 import { FreeRoadRenderer, freeRoadLampStands, freeRoadPoleLay } from './render/freeroadmesh';
@@ -508,6 +509,15 @@ async function startGame(session: Extract<AppSession, { screen: 'playing' }>): P
   // and a shopfront read as different things rather than as boxes of different
   // heights — docks and doors, a monitor roof, a roof array, a canopy and a sign.
   const buildingKit = new BuildingKitRenderer(
+    world.scene,
+    heightAt,
+    catalog,
+    roadAt,
+    kerb,
+    kerbCreditOf,
+  );
+  // Construction staging: tower cranes and scaffolding curtains on actively constructing lots.
+  const construction = new ConstructionRenderer(
     world.scene,
     heightAt,
     catalog,
@@ -2400,6 +2410,7 @@ async function startGame(session: Extract<AppSession, { screen: 'playing' }>): P
     landmarks.setNightFactor(nightFactor);
     utilityKits.setNightFactor(nightFactor);
     buildingKit.setNightFactor(nightFactor);
+    construction.setNightFactor(nightFactor);
     tramStations.setNightFactor(nightFactor);
     farms.setNightFactor(nightFactor);
     farms.setDayFraction(dayT); // the farm truck works sunrise to sunset
@@ -2542,6 +2553,7 @@ async function startGame(session: Extract<AppSession, { screen: 'playing' }>): P
       massing.apply(faced);
       roofProps.apply(faced);
       buildingKit.apply(faced);
+      construction.apply(faced);
       houseRoofs.apply(snap.buildings);
       garages.apply(snap.buildings);
       parkedCars.apply(snap.buildings);
@@ -2627,6 +2639,7 @@ async function startGame(session: Extract<AppSession, { screen: 'playing' }>): P
         massing.apply(relaidFaced);
         roofProps.apply(relaidFaced);
         buildingKit.apply(relaidFaced);
+        construction.apply(relaidFaced);
         houseRoofs.apply(relaid);
         garages.apply(relaid);
         parkedCars.apply(relaid);

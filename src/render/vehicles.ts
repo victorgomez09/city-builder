@@ -270,8 +270,8 @@ function hexToRGB(hex: number): readonly [number, number, number] {
 }
 
 const WHITE = hexToRGB(0xffffff);
-const CABIN_COLOR = hexToRGB(0x1a1f26);
-const WHEEL_COLOR = hexToRGB(0x0d0e10);
+const CABIN_COLOR = hexToRGB(0x28323e);
+const WHEEL_COLOR = hexToRGB(0x242830);
 const HEADLIGHT_BASE_COLOR = hexToRGB(0xd9d3bf);
 const TAILLIGHT_BASE_COLOR = hexToRGB(0x4d1414);
 const HEADLIGHT_EMISSIVE_COLOR = hexToRGB(0xffd9a0); // matches the warm window emissive
@@ -281,9 +281,8 @@ const TAILLIGHT_EMISSIVE_COLOR = hexToRGB(0xff2a20);
 export const VEHICLE_NIGHT_LIGHT_THRESHOLD = 0.4;
 
 // ---------------------------------------------------------------------------
-// Saturated ~10-color palette (red, blue, teal, green, magenta, pink,
-// yellow, orange, white, charcoal) -- deliberately saturated against the
-// desaturated city palette.
+// Warm retro-toy ~10-color palette (coral, retro blue, soft teal, sage green,
+// dusty lavender, terracotta, mustard, slate, cream, soft charcoal).
 // ---------------------------------------------------------------------------
 
 /**
@@ -298,16 +297,16 @@ export const VEHICLE_NIGHT_LIGHT_THRESHOLD = 0.4;
  * row's, and the one on a house's driveway — and all three had drifted.
  */
 export const VEHICLE_PALETTE_HEX: readonly number[] = [
-  0xd9362c, // red
-  0x2f6fd6, // blue
-  0x1aa39c, // teal
-  0x3fae55, // green
-  0xb03bab, // magenta
-  0xf06fa0, // pink
-  0xf2c230, // yellow -- reads as taxi, no livery system needed
-  0xe8792b, // orange
-  0xe9edf0, // white
-  0x2b2e33, // charcoal
+  0xd65345, // coral red
+  0x4a88c7, // retro blue
+  0x389e94, // soft teal
+  0x5ea866, // sage green
+  0x8e76a3, // dusty lavender
+  0xdc783e, // warm terracotta
+  0xdfaa32, // mustard yellow
+  0x6b7b8c, // slate blue
+  0xf3eee3, // warm cream white
+  0x3f4650, // soft charcoal
 ];
 
 export const VEHICLE_PALETTE: readonly (readonly [number, number, number])[] =
@@ -465,22 +464,22 @@ interface KindLayout {
 // is drawn from one of them (archetypeForKind).
 const ARCHETYPE_LAYOUT: Record<number, KindLayout> = {
   [VehicleKind.Car]: {
-    bodySize: [0.94, 0.56, 0.92],
-    bodyCenter: [0, -0.22, 0],
-    cabinSize: [0.7, 0.32, 0.5],
-    cabinCenter: [0, 0.22, 0.02], // centered, slightly rear -- sedan-like greenhouse
+    bodySize: [0.92, 0.52, 0.94],
+    bodyCenter: [0, -0.24, 0],
+    cabinSize: [0.72, 0.36, 0.54],
+    cabinCenter: [0, 0.2, 0.02], // centered, slightly rear -- clean toy greenhouse
   },
   [VehicleKind.Truck]: {
-    bodySize: [0.92, 0.5, 0.95],
-    bodyCenter: [0, -0.25, 0],
-    cabinSize: [0.82, 0.4, 0.22],
-    cabinCenter: [0, 0.2, 0.37], // small front cab, leaving a long bare cargo body behind
+    bodySize: [0.92, 0.52, 0.95],
+    bodyCenter: [0, -0.24, 0],
+    cabinSize: [0.82, 0.42, 0.26],
+    cabinCenter: [0, 0.22, 0.35], // small front cab, leaving a long bare cargo body behind
   },
   [VehicleKind.Bus]: {
-    bodySize: [0.94, 0.6, 0.97],
-    bodyCenter: [0, -0.2, 0],
-    cabinSize: [0.86, 0.34, 0.86],
-    cabinCenter: [0, 0.27, 0], // near-full-length window band
+    bodySize: [0.94, 0.62, 0.97],
+    bodyCenter: [0, -0.19, 0],
+    cabinSize: [0.86, 0.36, 0.86],
+    cabinCenter: [0, 0.28, 0], // near-full-length window band
   },
 };
 

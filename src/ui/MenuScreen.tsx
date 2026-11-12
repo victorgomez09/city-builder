@@ -134,7 +134,7 @@ export function MenuScreen(): JSX.Element | null {
     <StartMenu
       hasActiveGame={screen === 'playing'}
       hasSaves={saves.length > 0}
-      logoSlot={<BrandLogo className="text-white" />}
+      logoSlot={<BrandLogo className="text-white self-center text-center" />}
       onResume={resumeGame}
       onNewGame={startNewGame}
       onSaveGame={() => useCityStore.getState().bound?.saveGame()}

@@ -34,41 +34,37 @@ export const MATERIALS = {
   snow: [140, 142, 144],
   coal: [23, 23, 23],
 
-  stainedConcrete: [71, 68, 65],
-  cleanConcrete: [91, 91, 88],
-  whiteBrick: [123, 122, 120],
-  stoneBrick: [91, 85, 80],
-  redBrick: [70, 50, 41],
+  stainedConcrete: [105, 102, 96],
+  cleanConcrete: [125, 122, 116],
+  whiteBrick: [128, 126, 122],
+  stoneBrick: [125, 120, 111],
+  redBrick: [115, 65, 50],
 
-  whitePlaster: [105, 104, 103],
-  bluePlaster: [43, 61, 83],
-  yellowPlaster: [97, 80, 49],
-  redPlaster: [90, 48, 45],
-  greenPlaster: [52, 79, 50],
+  whitePlaster: [136, 129, 114],
+  bluePlaster: [108, 115, 120],
+  yellowPlaster: [132, 119, 100],
+  redPlaster: [128, 108, 99],
+  greenPlaster: [114, 120, 103],
 
-  rustedMetal: [56, 38, 31],
-  metalPlates: [72, 74, 75],
+  rustedMetal: [75, 50, 42],
+  metalPlates: [88, 92, 95],
 
-  brightBitumen: [52, 52, 52],
-  darkBitumen: [34, 34, 36],
-  asbestosRoof: [57, 57, 56],
-  slateRoof: [47, 47, 46],
-  clayRoof: [70, 50, 43],
+  brightBitumen: [65, 65, 65],
+  darkBitumen: [42, 42, 44],
+  asbestosRoof: [72, 72, 70],
+  slateRoof: [58, 62, 68],
+  clayRoof: [110, 65, 50],
 
-  sand: [119, 102, 85],
-  mud: [47, 42, 40],
-  dirt: [67, 59, 54],
+  sand: [130, 119, 95],
+  mud: [58, 52, 48],
+  dirt: [115, 96, 72],
 
-  darkAsphalt: [37, 36, 36],
-  brightAsphalt: [59, 56, 54],
+  darkAsphalt: [94, 89, 85],
+  brightAsphalt: [111, 106, 102],
 
-  darkVegetation: [27, 34, 22],
-  brightVegetation: [46, 53, 33],
-  // Not a chart swatch: the chart's vegetation is foliage, and a garden laid in
-  // it read as a dark rectangle against the grass around it. A mown lawn is the
-  // terrain's fresh grass (82/148/66) at seven tenths — still grass, and still
-  // plainly somebody's.
-  mownLawn: [57, 104, 46],
+  darkVegetation: [56, 75, 42],
+  brightVegetation: [91, 105, 64],
+  mownLawn: [94, 110, 73],
   // Not chart swatches either: farm ground. Tilled soil is the chart's dirt
   // turned over and darkened by moisture; a growing crop is the chart's bright
   // vegetation lifted to read as a sown field against wild grass; ripe grain
@@ -141,11 +137,11 @@ export const MATERIALS = {
   sidingWhite: [138, 138, 136],
   sidingLightBrown: [112, 96, 78],
   sidingLightGrey: [112, 112, 110],
-  sidingBlue: [58, 76, 98],
-  shingleCharcoal: [40, 40, 41],
-  shingleWeathered: [66, 58, 50],
-  shinglePewter: [74, 76, 78],
-  shingleBarkwood: [58, 48, 40],
+  sidingBlue: [64, 82, 104],
+  shingleCharcoal: [50, 52, 56],
+  shingleWeathered: [72, 64, 54],
+  shinglePewter: [80, 82, 84],
+  shingleBarkwood: [66, 54, 44],
 } as const satisfies Record<string, RGB255>;
 
 export type MaterialName = keyof typeof MATERIALS;

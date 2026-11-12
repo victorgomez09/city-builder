@@ -153,6 +153,21 @@ export const STOREFRONT_BULKHEAD_M = 0.6;
 /** The dark head over the glazing, under the sign band. */
 export const STOREFRONT_HEAD_M = 0.3;
 
+/** Precast concrete facade panel dimensions in metres. */
+export const CONCRETE_PANEL_WIDTH_M = 1.5;
+export const CONCRETE_PANEL_HEIGHT_M = 1.0;
+/** Half-width of recessed joint groove between concrete panels (2 cm full width). */
+export const CONCRETE_JOINT_HALF_M = 0.01;
+/** Metric running bond brick dimensions in metres. */
+export const BRICK_WIDTH_M = 0.26;
+export const BRICK_HEIGHT_M = 0.078;
+/** Half-width of mortar joint between bricks (12 mm full width). */
+export const BRICK_JOINT_HALF_M = 0.006;
+/** Standing seam metal rib pitch in metres. */
+export const STANDING_SEAM_SPACING_M = 0.3;
+/** Low-density plaster painted plinth height in metres. */
+export const PLASTER_PLINTH_HEIGHT_M = 0.8;
+
 /** How a commercial ground floor's glazing is cut: bays across the face, and the pane's sill and head as fractions of the tier. */
 export interface StorefrontCut {
   bays: number;

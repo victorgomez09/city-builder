@@ -40,8 +40,8 @@ const ROCK_COLOR: readonly [number, number, number] = [0.45, 0.43, 0.4];
 // SURFACE itself (translucent plane, waves, glint) is water.ts's; this is
 // only the terrain color read through/around it.
 const SEABED_SHALLOW_COLOR: readonly [number, number, number] = [0.55, 0.52, 0.38]; // sandy seabed just under the surface
-const SEABED_DEEP_COLOR: readonly [number, number, number] = [0.02, 0.1, 0.15]; // deep blue-green, fully tinted at MAX_WATER_DEPTH_VIS
-const FOAM_COLOR: readonly [number, number, number] = [0.93, 0.91, 0.84]; // shoreline sand/foam highlight
+const SEABED_DEEP_COLOR: readonly [number, number, number] = [0.24, 0.38, 0.48]; // deep cerulean stone, fully tinted at MAX_WATER_DEPTH_VIS
+const FOAM_COLOR: readonly [number, number, number] = [0.9, 0.93, 0.96]; // shoreline sand/foam highlight
 
 // Ground cover — grass hue variants, dry patches, mown band.
 const GRASS_HUE_FRESH: readonly [number, number, number] = [0.32, 0.58, 0.26];

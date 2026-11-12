@@ -30,3 +30,4 @@ One spec a built feature, card first; the template is [_template.md](_template.m
 | [transport-depots.md](transport-depots.md) | The four depots a transit line's vehicles come from, the fleet pool, headway, dead runs and running charge |
 | [emergency-services.md](emergency-services.md) | How far a police or fire station answers, how many calls it runs, unanswered calls, and the two-rung ladder |
 | [parks-and-recreation.md](parks-and-recreation.md) | Five park rungs at real size, the open-space standard, and how park coverage lifts land value |
+| [diorama-art-direction.md](diorama-art-direction.md) | Warm minimalist diorama aesthetic: ambient hemisphere bounce, soft sky haze, matte calibrated palette, toy-kit proportions |

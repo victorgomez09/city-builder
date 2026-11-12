@@ -271,10 +271,10 @@ const WEST = 8;
  * the band widen to fill, while avenue/highway's wider carriageways leave a
  * narrower band that reads as a shoulder rather than a full sidewalk.
  */
-export const SIDEWALK_COLOR: readonly [number, number, number] = [0.82, 0.81, 0.79];
+export const SIDEWALK_COLOR: readonly [number, number, number] = [0.851, 0.82, 0.765]; // CityRT sidewalk warm limestone #D9D1C3
 
-/** Lane paint: uniformly white across tiers, not tier-tinted. */
-export const MARKING_COLOR: readonly [number, number, number] = [0.95, 0.95, 0.96];
+/** Lane paint: uniformly ivory white across tiers, not tier-tinted. */
+export const MARKING_COLOR: readonly [number, number, number] = [0.965, 0.945, 0.894]; // CityRT marking ivory #F6F1E4
 export { PAINT_HALF_WIDTH_M };
 
 /**
@@ -365,7 +365,7 @@ const GRAVEL_BASE_COLOR: readonly [number, number, number] = [0.62, 0.55, 0.42];
  * clear of the mid-grey band (0.45..0.58) that reads as a physical concrete
  * median or divider, so plain carriageway never looks like a raised band.
  */
-const ASPHALT_COLOR: readonly [number, number, number] = [0.42, 0.42, 0.43];
+const ASPHALT_COLOR: readonly [number, number, number] = [0.435, 0.416, 0.4]; // CityRT warm slate asphalt #6F6A66
 /** Railway rail: bright steel, distinctly lighter/metallic against the ballast (but below marking white). */
 const RAILWAY_RAIL_COLOR: readonly [number, number, number] = [0.7, 0.71, 0.74];
 /** Railway sleeper (cross-tie): dark creosote timber. */
@@ -726,7 +726,7 @@ function pushLocalRect(
  * everything else — lane lines between traffic going the same way, and the
  * edge line that says where the running surface ends.
  */
-export const YELLOW_MARKING_COLOR: readonly [number, number, number] = [0.92, 0.76, 0.16];
+export const YELLOW_MARKING_COLOR: readonly [number, number, number] = [0.91, 0.769, 0.416]; // CityRT warm amber yellow marking #E8C46A
 
 /** The paint a planned line asks for. */
 function paintOf(line: MarkingLine): readonly [number, number, number] {

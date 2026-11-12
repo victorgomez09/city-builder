@@ -134,6 +134,22 @@ export function hasAntenna(buildingId: number): boolean {
   return hash1(buildingId * PROP_HASH_SLOT_MULTIPLIER + HASH_SLOT_ANTENNA) < ANTENNA_PROBABILITY;
 }
 
+/** Multi-storey flat-roofed buildings (floors >= 2) get an elevator/stair penthouse core breaking the roofline. */
+export function hasPenthouse(entry: BuildingCatalogEntry, floors: number): boolean {
+  if (isHouseEntry(entry) || isFarmEntry(entry)) return false;
+  return floors >= 2;
+}
+
+export function computePenthousePlacement(
+  box: SetbackBox,
+  buildingId: number,
+): { x: number; z: number } {
+  const seed = buildingId * PROP_HASH_SLOT_MULTIPLIER + 15;
+  const offX = (hash1(seed) * 2 - 1) * (box.w * 0.15);
+  const offZ = (hash1(seed + 1) * 2 - 1) * (box.d * 0.15);
+  return { x: offX, z: offZ };
+}
+
 // ---------------------------------------------------------------------------
 // Scattered placement on the top box (vents/AC units/antenna) — pure.
 // ---------------------------------------------------------------------------
@@ -313,7 +329,14 @@ export function computeSiloClusterPlacements(
 // RoofPropRenderer
 // ---------------------------------------------------------------------------
 
-export type PropKind = 'vent' | 'ac' | 'antenna' | 'warningLight' | 'smokestack' | 'silo';
+export type PropKind =
+  | 'vent'
+  | 'ac'
+  | 'antenna'
+  | 'warningLight'
+  | 'smokestack'
+  | 'silo'
+  | 'penthouse';
 const ALL_PROP_KINDS: readonly PropKind[] = [
   'vent',
   'ac',
@@ -321,6 +344,7 @@ const ALL_PROP_KINDS: readonly PropKind[] = [
   'warningLight',
   'smokestack',
   'silo',
+  'penthouse',
 ];
 
 export interface PropSize {
@@ -336,6 +360,8 @@ const SMOKESTACK_SIZE: PropSize = { w: 1.6, h: 6, d: 1.6 };
 /** A heavy plant's stack: twice the height of a light works', and wider for it. */
 const HEAVY_SMOKESTACK_SIZE: PropSize = { w: 2, h: 12, d: 2 };
 const SILO_SIZE: PropSize = { w: 2.2, h: 4, d: 2.2 };
+/** Elevator and stair mechanical penthouse: 3.5 x 2.8 m footprint, 2.4 m tall. */
+const PENTHOUSE_SIZE: PropSize = { w: 3.5, h: 2.4, d: 2.8 };
 
 /** The stack this building carries, by its zone. Exported for tests. */
 export function smokestackSize(entry: BuildingCatalogEntry): Readonly<PropSize> {
@@ -350,6 +376,7 @@ const ANTENNA_COLOR = 0x2b2e33;
 const SMOKESTACK_COLOR = 0x4a4d50;
 /** Poured concrete, not the near-white it used to be. */
 const SILO_COLOR = materialHex('whitePlaster');
+const PENTHOUSE_COLOR = materialHex('cleanConcrete');
 /** A lamp, not a material: emissive, so the albedo ceiling does not apply. */
 const WARNING_LIGHT_COLOR = 0xff3b30;
 
@@ -374,9 +401,18 @@ interface BuildingPropSlots {
   warningLight: number[];
   smokestack: number[];
   silo: number[];
+  penthouse: number[];
 }
 function emptySlots(): BuildingPropSlots {
-  return { vent: [], ac: [], antenna: [], warningLight: [], smokestack: [], silo: [] };
+  return {
+    vent: [],
+    ac: [],
+    antenna: [],
+    warningLight: [],
+    smokestack: [],
+    silo: [],
+    penthouse: [],
+  };
 }
 
 const _matrix = new THREE.Matrix4();
@@ -437,6 +473,7 @@ export class RoofPropRenderer {
         INITIAL_PROP_CAPACITY,
       ),
       silo: new InstancedSlotPool(scene, baseAnchoredCylinder(), body(), INITIAL_PROP_CAPACITY),
+      penthouse: new InstancedSlotPool(scene, baseAnchoredBox(), body(), INITIAL_PROP_CAPACITY),
     };
   }
 
@@ -571,6 +608,24 @@ export class RoofPropRenderer {
     const roofY = groundY + (topBox.yOffset + topBox.h) * heightScale;
 
     const slots = emptySlots();
+
+    // --- elevator / stair penthouse core (2+ floors, flat-roofed only) ---
+    if (hasPenthouse(entry, floors)) {
+      const local = computePenthousePlacement(topBox, building.id);
+      const rotated = rotateLocalOffset(local.x, local.z, building.rotation);
+      slots.penthouse.push(
+        this.place(
+          'penthouse',
+          centerX + rotated.x,
+          roofY,
+          centerZ + rotated.z,
+          building.rotation,
+          PENTHOUSE_SIZE,
+          PENTHOUSE_COLOR,
+          tint,
+        ),
+      );
+    }
 
     // --- vent / AC boxes: count scales with top-box roof area ---
     const count = computeRoofPropCount(roofAreaM2(topBox), building.id);

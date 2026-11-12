@@ -481,11 +481,11 @@ const BLOB_HEIGHT_SEGMENTS = 4;
 /** The last, smallest broadleaf blob sits in the cluster's shadow and takes one ring fewer. */
 const SMALL_BLOB_HEIGHT_SEGMENTS = 3;
 
-const TRUNK_COLOR = 0x6b4a2f;
-const BROADLEAF_CANOPY_COLOR = 0x2f6b3a;
-const PINE_COLOR = 0x24503a;
-const POPLAR_COLOR = 0x5c8a4a;
-const SHRUB_COLOR = 0x6b7a3f;
+const TRUNK_COLOR = 0x7a5b3e;
+const BROADLEAF_CANOPY_COLOR = 0x4d7c4a;
+const PINE_COLOR = 0x386348;
+const POPLAR_COLOR = 0x6e9954;
+const SHRUB_COLOR = 0x7a8a48;
 
 /** Paints every vertex of `geometry` the same absolute color (RGB baked in, not a multiplier). */
 export function paintVertexColor(

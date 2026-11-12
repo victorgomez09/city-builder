@@ -179,6 +179,12 @@ programme's last epic, parks and recreation, is complete (2026-10-23;
 parks at the real sizes of the US park types, planned to a provision
 standard, capped like every other service, drawn as five kits that read
 apart and worn when full. **The municipal services programme is complete.**
+**The warm minimalist diorama art direction is complete (2026-11-12; [diorama-art-direction.md](specs/diorama-art-direction.md))**
+— transforming the 3D scene into a warm, tactile architectural model aesthetic: studio hemisphere fill light with warm
+earth ground bounce (`[0.45, 0.38, 0.28]`), softened shadows (0.60 intensity), gentle cream horizon haze in `src/render/scene.ts`
+and `src/render/sky.ts`, calibrated matte materials and slate asphalt in `src/render/palette.ts`, calm cerulean water planes
+in `src/render/water.ts`, warm foliage canopy hues in `src/render/trees.ts`, and refined toy-kit vehicle proportions with a curated
+retro-toy color palette in `src/render/vehicles.ts`.
 **In progress, at the player's request (2026-11-12): UI facelift & visual
 redesign** — a complete aesthetic modernization and polish pass across the
 DOM overlay ([ux/](ux/README.md), [ui-style-guide.md](art/ui-style-guide.md)):

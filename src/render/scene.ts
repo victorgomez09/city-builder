@@ -150,57 +150,46 @@ interface Keyframe {
 }
 
 const NIGHT_KEYFRAME: Keyframe = {
-  sunColor: [0.6, 0.7, 1.0], // blue moonlight directional
-  // The moon: a directional light from the noon sun's place (placeSun), so a
-  // roof — whose noon value is mostly sun — keeps the same share of its day
-  // value at night as a wall does.
+  sunColor: [0.718, 0.765, 0.949], // CityRT night moonlight #B7C3F2
   sunIntensity: 0.55,
-  // The hemisphere is the sole ambient term on a wall. With the one night
-  // tint every sunlit surface reads (nightlook.ts) it lands a body at 03:00
-  // at 18–30% of its noon value and the ground at 12–25% — the two are one
-  // dial — while the sky dome and background stay navy.
-  hemiSkyColor: [0.49, 0.55, 0.78],
-  hemiGroundColor: [0.06, 0.07, 0.1],
-  hemiIntensity: 0.5,
-  backgroundColor: [0x0a / 0xff, 0x12 / 0xff, 0x24 / 0xff], // deep navy #0a1224
+  hemiSkyColor: [0.478, 0.533, 0.769], // CityRT night sky hs #7A88C4
+  hemiGroundColor: [0.235, 0.267, 0.408], // CityRT night ground hg #3C4468
+  hemiIntensity: 0.65,
+  backgroundColor: [0.184, 0.227, 0.408], // CityRT night sky #2F3A68
   shadowIntensity: 0.2,
   nightFactor: 1,
 };
 
 const DUSK_KEYFRAME: Keyframe = {
-  sunColor: [0.7, 0.65, 0.85], // cooling toward violet
-  sunIntensity: 0.55,
-  // Twilight sits between golden hour and night on the ramp, and 03:00 is
-  // lerped halfway from night toward this frame: its light matches the
-  // night's in strength and differs in hue, so the small hours never fall
-  // under the night's own legibility floor.
-  hemiSkyColor: [0.56, 0.53, 0.73],
-  hemiGroundColor: [0.07, 0.06, 0.09],
-  hemiIntensity: 0.5,
-  backgroundColor: [0.14, 0.1, 0.22], // violet dusk sky
+  sunColor: [0.75, 0.68, 0.86], // cooling toward violet
+  sunIntensity: 0.65,
+  hemiSkyColor: [0.65, 0.62, 0.8],
+  hemiGroundColor: [0.25, 0.22, 0.3],
+  hemiIntensity: 0.65,
+  backgroundColor: [0.35, 0.3, 0.45], // violet dusk sky
   shadowIntensity: 0.3,
   nightFactor: 0.65,
 };
 
 const GOLDEN_KEYFRAME: Keyframe = {
-  sunColor: [1.0, 0.55, 0.2], // low, warm sun
-  sunIntensity: 0.85,
-  hemiSkyColor: [0.65, 0.45, 0.35],
-  hemiGroundColor: [0.3, 0.22, 0.15],
-  hemiIntensity: 0.55,
-  backgroundColor: [0.85, 0.5, 0.32], // orange horizon
-  shadowIntensity: 0.75,
+  sunColor: [1.0, 0.804, 0.651], // CityRT evening sun #FFCDA6
+  sunIntensity: 1.1,
+  hemiSkyColor: [0.902, 0.816, 0.886], // CityRT evening hs #E6D0E2
+  hemiGroundColor: [0.659, 0.573, 0.604], // CityRT evening hg #A8929A
+  hemiIntensity: 0.85,
+  backgroundColor: [0.949, 0.725, 0.58], // CityRT evening bot #F2B994
+  shadowIntensity: 0.6,
   nightFactor: 0.2,
 };
 
 const DAY_KEYFRAME: Keyframe = {
-  sunColor: [1.0, 0.98, 0.92],
-  sunIntensity: 1.8,
-  hemiSkyColor: [0.55, 0.72, 0.95],
-  hemiGroundColor: [0.25, 0.2, 0.12],
-  hemiIntensity: 0.9,
-  backgroundColor: [0.55, 0.75, 0.95],
-  shadowIntensity: 1,
+  sunColor: [1.0, 0.945, 0.863], // CityRT daytime sun key #FFF1DC
+  sunIntensity: 1.45,
+  hemiSkyColor: [0.914, 0.894, 0.949], // CityRT daytime hs lavender #E9E4F2
+  hemiGroundColor: [0.725, 0.663, 0.549], // CityRT daytime hg warm earth #B9A98C
+  hemiIntensity: 1.15,
+  backgroundColor: [0.945, 0.902, 0.824], // CityRT daytime paper horizon #F1E6D2
+  shadowIntensity: 0.55, // silky soft architectural shadows
   nightFactor: 0,
 };
 
@@ -273,10 +262,10 @@ export function moonDirection(): { x: number; y: number; z: number } {
 // backgroundColor whose haze amount itself fades out as nightFactor rises,
 // so the horizon collapses back to the exact flat night color after dark
 // instead of staying implausibly bright.
-const SKY_ZENITH_DAY: readonly [number, number, number] = [0.25, 0.45, 0.85];
-const SKY_ZENITH_NIGHT: readonly [number, number, number] = [0.02, 0.04, 0.12];
-const SKY_HORIZON_HAZE_BLEND_DAY = 0.45;
-const SKY_HAZE_WHITE: readonly [number, number, number] = [1, 1, 1];
+const SKY_ZENITH_DAY: readonly [number, number, number] = [0.663, 0.757, 0.855]; // CityRT sky zenith #A9C1DA
+const SKY_ZENITH_NIGHT: readonly [number, number, number] = [0.184, 0.227, 0.408]; // CityRT sky night #2F3A68
+const SKY_HORIZON_HAZE_BLEND_DAY = 0.35;
+const SKY_HAZE_WHITE: readonly [number, number, number] = [0.945, 0.902, 0.824]; // CityRT paper white #F1E6D2
 
 /**
  * Deterministic day/night color state for t in [0,1) (t=0.5 is noon, t=0/1

@@ -7,22 +7,23 @@ no flow.
 ## The surface
 
 - **Seabed**: the terrain continues visibly under the surface — underwater
-  vertex colours ramp blue-green with depth, fully tinted at a maximum visible
-  depth of 12 m — so the land-to-water line reads under the surface exactly as
-  it does above it.
+  vertex colours ramp sandy to cerulean blue-grey with depth, fully tinted at a
+  maximum visible depth of 12 m — so the land-to-water line reads under the
+  surface with soft clarity.
 - **Shoreline**: a static foam band draws every coastline where the height is
-  within 0.4 m of sea level, and a second, animated band of scrolling foam
-  brightens and pulses against it wherever the baked depth is under roughly
-  0.8 m.
-- **Surface animation**: three scrolling wave/normal layers — two shorter ones
-  plus a long, ~35–60 m wavelength chop layer — combine with a sine-sum vertex
-  swell (total swell amplitude budget ≤0.35 m) so the surface visibly moves at
-  the default RTS camera distance (~600 m). Colour is depth-keyed (shallow teal
-  to deep navy) with glancing-angle opacity and a broad, two-lobe sun glint
-  tied to the day/night ramp — see [lighting.md](lighting.md).
-- **Sky reflection**: an analytic, fresnel-weighted blend of the sky's zenith
-  and horizon colours into the water's own colour, fed every frame from the
-  same time-of-day ramp — no render pass, no cubemap.
+  within 0.4 m of sea level, and an animated band of soft ivory foam
+  pulses gently with wide separation (~24–38 m) wherever the baked depth is under roughly 0.65 m.
+- **Surface animation**: widely spaced trochoidal wave layers (wavelengths from
+  24 m up to an 88 m long-wavelength orbital swell) with flat glassy troughs
+  providing wide, calm separation between wave crests, combined with
+  a gentle sine-sum vertex swell (total swell amplitude budget ≤0.12 m) so the
+  surface reads calm and expansive from RTS camera distance (~600 m). Colour is depth-keyed
+  (clean cerulean `#7FA9C9` to deep `#5E8DB3`) with cubic glancing-angle Fresnel
+  reflection and standard PBR specular highlights without blooming emissive —
+  see [lighting.md](lighting.md).
+- **Sky reflection**: an analytic, cubic-Fresnel-weighted (`(1 - cosView)^2.5`)
+  blend of the sky's zenith and horizon colours into the water's own colour, fed
+  every frame from the same time-of-day ramp — no render pass, no cubemap.
 - **Fouling**: where the city's drains empty, the surface goes from its
   depth-keyed colour toward a murky brown. Each vertex (one every two tiles)
   carries the worst fouling of the tiles that meet at it, 0..1, from the
