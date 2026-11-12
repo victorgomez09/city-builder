@@ -67,12 +67,15 @@ export function quitToMenu(): void {
 
 // --- persisted user settings ------------------------------------------------
 
+export type TerrainQuality = 'low' | 'medium' | 'high' | 'ultra';
+
 /** User-facing options; persisted in localStorage across games/reloads. */
 export interface GameSettings {
   bloom: boolean;
   sandboxUnlockAll: boolean;
   /** Testing: ignore funds/costs so anything is buildable (cash flow still tracked; HUD shows ∞). */
   unlimitedMoney: boolean;
+  terrainQuality: TerrainQuality;
   masterVolume: number; // 0..1
   muted: boolean;
   /** Music mixes independently of the city bed and UI cues. */
@@ -85,6 +88,7 @@ export const DEFAULT_SETTINGS: GameSettings = {
   bloom: true,
   sandboxUnlockAll: false,
   unlimitedMoney: false,
+  terrainQuality: 'high',
   masterVolume: 0.7,
   muted: false,
   musicVolume: 0.6,

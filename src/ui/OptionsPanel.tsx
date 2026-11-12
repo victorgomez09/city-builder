@@ -5,7 +5,7 @@
  */
 import type { JSX } from 'react';
 import { LABEL, PANEL_ROUNDED } from './theme';
-import type { GameSettings } from '../app/session';
+import type { GameSettings, TerrainQuality } from '../app/session';
 import type { MusicPlayer } from '../app/music';
 import { MusicPanel } from './MusicPanel';
 
@@ -33,6 +33,21 @@ export function OptionsPanel({
     >
       <div className={`flex w-full max-w-sm flex-col gap-4 p-4 text-white ${PANEL_ROUNDED}`}>
         <h2 className="text-lg font-semibold">Options</h2>
+
+        <div className="flex items-center justify-between gap-3 text-sm">
+          <span>Terrain Quality</span>
+          <select
+            aria-label="Terrain Quality"
+            value={settings.terrainQuality ?? 'high'}
+            onChange={(e) => onChange({ terrainQuality: e.target.value as TerrainQuality })}
+            className="cursor-pointer rounded border border-white/20 bg-[#131d2a] px-2 py-1 text-xs text-white outline-none focus:border-accent"
+          >
+            <option value="low">Low (1x quads / 20m)</option>
+            <option value="medium">Medium (2x quads / 10m)</option>
+            <option value="high">High (4x quads / 5m - HD)</option>
+            <option value="ultra">Ultra (8x quads / 2.5m - UHD)</option>
+          </select>
+        </div>
 
         <label className="flex items-center justify-between gap-3 text-sm">
           <span>Bloom</span>

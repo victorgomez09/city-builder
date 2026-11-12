@@ -282,7 +282,8 @@ async function startGame(session: Extract<AppSession, { screen: 'playing' }>): P
   const cityName = session.cityName ?? MAP_NAME;
   const map = generateProceduralMap(seed, cityName, session.mapOptions);
 
-  const terrain = new TerrainRenderer(world.scene);
+  const initialTerrainQuality = useCityStore.getState().settings.terrainQuality ?? 'high';
+  const terrain = new TerrainRenderer(world.scene, initialTerrainQuality);
   terrain.build(map);
   const heightAt = (x: number, z: number): number => terrain.heightAt(x, z);
 
@@ -322,7 +323,7 @@ async function startGame(session: Extract<AppSession, { screen: 'playing' }>): P
     clientGrid.deckSurfaceAt(wx, wz) ?? heightAt(wx, wz);
 
   // Animated water surface and cumulus layer; both tick in the frame loop below.
-  const water = new WaterRenderer(world.scene, heightAt);
+  const water = new WaterRenderer(world.scene, heightAt, map.size, initialTerrainQuality);
   const clouds = new CloudLayer(world.scene);
 
   const trees = new TreeRenderer(world.scene, heightAt);
@@ -2846,6 +2847,10 @@ async function startGame(session: Extract<AppSession, { screen: 'playing' }>): P
       }
       if (patch.unlimitedMoney !== undefined) {
         postCommands([{ kind: 'setUnlimitedMoney', on: patch.unlimitedMoney }], true);
+      }
+      if (patch.terrainQuality !== undefined) {
+        terrain.setQuality(patch.terrainQuality);
+        water.setQuality(patch.terrainQuality);
       }
       applyAudioSettings(store.getState().settings);
     },

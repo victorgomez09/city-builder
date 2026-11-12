@@ -49,6 +49,7 @@ import {
 } from 'three/tsl';
 import { nightTintNode } from './nightlook';
 import { MAP_SIZE, MAX_WATER_DEPTH_VIS, SEA_LEVEL, TILE_METERS } from '../shared/constants';
+import type { TerrainQuality } from './terrain';
 
 export type HeightSampler = (x: number, z: number) => number;
 
@@ -378,8 +379,12 @@ export function glintSpecular(ndotH: number): number {
 // WaterRenderer
 // ---------------------------------------------------------------------------
 
-/** Vertex-grid resolution of the water plane — high definition for smooth shoreline intersection. */
-const WATER_SEGMENTS = 256;
+export const WATER_SEGMENTS_FOR_QUALITY: Record<TerrainQuality, number> = {
+  low: 128,
+  medium: 256,
+  high: 384,
+  ultra: 512,
+};
 const DEFAULT_LIGHT_DIRECTION = new THREE.Vector3(0, 1, 0.15).normalize();
 
 function findDirectionalLight(scene: THREE.Scene): THREE.DirectionalLight | null {
@@ -406,18 +411,31 @@ export class WaterRenderer {
   private readonly skyHorizonUniform = uniform(new THREE.Vector3(...DEFAULT_SKY_HORIZON_COLOR));
   private readonly sunLight: THREE.DirectionalLight | null;
   private readonly scratchLightDir = new THREE.Vector3();
-  private readonly foulAttribute: THREE.BufferAttribute;
+  private readonly heightAt: HeightSampler;
+  private foulAttribute: THREE.BufferAttribute;
+  private lastFouling: Uint8Array | null = null;
   private readonly sizeTiles: number;
+  private quality: TerrainQuality = 'high';
+  private currentSegments: number = 384;
 
-  constructor(scene: THREE.Scene, heightAt: HeightSampler, mapSizeTiles: number = MAP_SIZE) {
+  constructor(
+    scene: THREE.Scene,
+    heightAt: HeightSampler,
+    mapSizeTiles: number = MAP_SIZE,
+    quality: TerrainQuality = 'high',
+  ) {
     this.sunLight = findDirectionalLight(scene);
+    this.heightAt = heightAt;
+    this.quality = quality;
+    this.currentSegments = WATER_SEGMENTS_FOR_QUALITY[quality] ?? 384;
+    this.sizeTiles = mapSizeTiles;
 
     const sizeMeters = mapSizeTiles * TILE_METERS;
     const geometry = new THREE.PlaneGeometry(
       sizeMeters,
       sizeMeters,
-      WATER_SEGMENTS,
-      WATER_SEGMENTS,
+      this.currentSegments,
+      this.currentSegments,
     );
     geometry.rotateX(-Math.PI / 2);
     geometry.translate(sizeMeters / 2, 0, sizeMeters / 2);
@@ -434,7 +452,6 @@ export class WaterRenderer {
     this.foulAttribute = new THREE.BufferAttribute(new Float32Array(position.count), 1);
     this.foulAttribute.setUsage(THREE.DynamicDrawUsage);
     geometry.setAttribute('waterFoul', this.foulAttribute);
-    this.sizeTiles = mapSizeTiles;
 
     this.material = this.createMaterial();
 
@@ -445,6 +462,47 @@ export class WaterRenderer {
     this.mesh.receiveShadow = true;
     this.mesh.castShadow = false;
     scene.add(this.mesh);
+  }
+
+  /** Dynamically updates the water surface mesh resolution to match quality settings. */
+  setQuality(quality: TerrainQuality): void {
+    const segs = WATER_SEGMENTS_FOR_QUALITY[quality] ?? 384;
+    if (this.quality === quality && this.currentSegments === segs) return;
+    this.quality = quality;
+    this.currentSegments = segs;
+    this.rebuildGeometry();
+  }
+
+  private rebuildGeometry(): void {
+    const sizeMeters = this.sizeTiles * TILE_METERS;
+    const geometry = new THREE.PlaneGeometry(
+      sizeMeters,
+      sizeMeters,
+      this.currentSegments,
+      this.currentSegments,
+    );
+    geometry.rotateX(-Math.PI / 2);
+    geometry.translate(sizeMeters / 2, 0, sizeMeters / 2);
+
+    const position = geometry.attributes.position;
+    if (!position) return;
+    const depths = new Float32Array(position.count);
+    for (let i = 0; i < position.count; i++) {
+      const worldX = position.getX(i);
+      const worldZ = position.getZ(i);
+      depths[i] = Math.max(0, SEA_LEVEL - this.heightAt(worldX, worldZ));
+    }
+    geometry.setAttribute('waterDepth', new THREE.BufferAttribute(depths, 1));
+    this.foulAttribute = new THREE.BufferAttribute(new Float32Array(position.count), 1);
+    this.foulAttribute.setUsage(THREE.DynamicDrawUsage);
+    geometry.setAttribute('waterFoul', this.foulAttribute);
+
+    this.mesh.geometry.dispose();
+    this.mesh.geometry = geometry;
+
+    if (this.lastFouling) {
+      this.setFouling(this.lastFouling);
+    }
   }
 
   /**
@@ -460,6 +518,7 @@ export class WaterRenderer {
    * snapshot carries a new layer, so the attribute is rewritten rarely.
    */
   setFouling(waterFoul: Uint8Array): void {
+    this.lastFouling = waterFoul;
     const position = this.mesh.geometry.attributes.position;
     if (!position) return;
     const values = this.foulAttribute.array as Float32Array;

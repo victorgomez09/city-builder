@@ -29,14 +29,24 @@ import {
 
 // --- pure color ramp ---------------------------------------------------------
 
+export type TerrainQuality = 'low' | 'medium' | 'high' | 'ultra';
+
+export const TERRAIN_QUALITY_SUBDIVISIONS: Record<TerrainQuality, number> = {
+  low: 1, // 1 quad per tile (16 segments per chunk, 20m vertex spacing)
+  medium: 2, // 2 quads per tile (32 segments per chunk, 10m vertex spacing)
+  high: 4, // 4 quads per tile (64 segments per chunk, 5m vertex spacing) - HD
+  ultra: 8, // 8 quads per tile (128 segments per chunk, 2.5m vertex spacing) - UHD
+};
+
 const GRASS_MAX_HEIGHT = 130; // meters at which elevation-driven effects (patchiness) saturate
 const ROCK_BLEND_RANGE = 3; // meters of slope beyond MAX_BUILD_SLOPE to fully saturate to rock
 const TREE_DARKEN_MAX = 0.35; // fraction darkened at full (255) tree density (canopy-shadow read)
 
-const SAND_COLOR: readonly [number, number, number] = [0.82, 0.77, 0.58];
-const ROCK_DARK_SLATE: readonly [number, number, number] = [0.3, 0.32, 0.36];
+const WET_SAND_COLOR: readonly [number, number, number] = [0.65, 0.59, 0.45]; // compacted moist sand near the water line
+const DRY_SAND_COLOR: readonly [number, number, number] = [0.86, 0.81, 0.62]; // warm sun-bleached golden beach sand
+const ROCK_DARK_SLATE: readonly [number, number, number] = [0.28, 0.30, 0.34];
 const ROCK_GRANITE: readonly [number, number, number] = [0.44, 0.43, 0.41];
-const ROCK_LIGHT_STONE: readonly [number, number, number] = [0.55, 0.53, 0.49];
+const ROCK_LIGHT_STONE: readonly [number, number, number] = [0.56, 0.54, 0.49];
 const SNOW_COLOR: readonly [number, number, number] = [0.93, 0.95, 0.98];
 
 /** Altitude in meters where alpine snowcaps begin to appear. */
@@ -147,11 +157,23 @@ export function treeShadeFactor(treeDensity: number): number {
 /**
  * Underwater seabed color ramp: sandy just under the surface, ramping to a
  * deep blue-green, fully tinted at MAX_WATER_DEPTH_VIS meters. `depth` is
- * meters below SEA_LEVEL (0 at the surface).
+ * meters below SEA_LEVEL (0 at the surface). In shallow waters (<4m), subtle
+ * sandy ripples break up flat shading.
  */
-export function seabedDepthColor(depth: number): [number, number, number] {
+export function seabedDepthColor(
+  depth: number,
+  worldX: number = 0,
+  worldZ: number = 0,
+): [number, number, number] {
   const t = clamp01(depth / MAX_WATER_DEPTH_VIS);
-  return lerp3(SEABED_SHALLOW_COLOR, SEABED_DEEP_COLOR, t);
+  const base = lerp3(SEABED_SHALLOW_COLOR, SEABED_DEEP_COLOR, t);
+  if (depth < 4) {
+    const ripple = valueNoise2D(worldX, worldZ, 6.0, 7723);
+    const shallowFactor = 1 - depth / 4;
+    const mod = 1 + (ripple - 0.5) * 0.14 * shallowFactor;
+    return [clamp01(base[0] * mod), clamp01(base[1] * mod), clamp01(base[2] * mod)];
+  }
+  return base;
 }
 
 /**
@@ -162,6 +184,32 @@ export function seabedDepthColor(depth: number): [number, number, number] {
 export function shorelineBandWeight(height: number): number {
   const dist = Math.abs(height - SEA_LEVEL);
   return clamp01(1 - dist / SHORELINE_BAND_METERS);
+}
+
+/**
+ * Procedural beach and coastal sand texture:
+ * Blends from compacted wet sand at the shoreline to warm sunlit dry sand,
+ * with deterministic fine grain and coastal ripple noise.
+ */
+export function sandColorAt(
+  worldX: number,
+  worldZ: number,
+  height: number,
+): [number, number, number] {
+  const wetT = clamp01((height - SEA_LEVEL) / 1.5);
+  const baseSand = lerp3(WET_SAND_COLOR, DRY_SAND_COLOR, wetT);
+
+  // Micro-grain noise (fine sand particles and pebbles)
+  const grainNoise = valueNoise2D(worldX, worldZ, 2.8, 1193);
+  // Coastal ripple noise (wind and tide ripples across dunes)
+  const duneNoise = valueNoise2D(worldX, worldZ, 12, 5231);
+
+  const factor = 0.92 + grainNoise * 0.12 + (duneNoise - 0.5) * 0.08;
+  return [
+    clamp01(baseSand[0] * factor),
+    clamp01(baseSand[1] * factor),
+    clamp01(baseSand[2] * factor),
+  ];
 }
 
 /** 3-hue grass blend (fresh green / olive / yellow-green) from a single low-frequency noise value in [0,1). */
@@ -202,7 +250,15 @@ export function groundCoverTint(
   height: number,
   nearRoad: boolean,
 ): [number, number, number] {
-  if (nearRoad) return [MOWN_GREEN_COLOR[0], MOWN_GREEN_COLOR[1], MOWN_GREEN_COLOR[2]];
+  if (nearRoad) {
+    const lawnMicro = valueNoise2D(worldX, worldZ, 4, 1847);
+    const lawnFactor = 0.96 + lawnMicro * 0.08;
+    return [
+      clamp01(MOWN_GREEN_COLOR[0] * lawnFactor),
+      clamp01(MOWN_GREEN_COLOR[1] * lawnFactor),
+      clamp01(MOWN_GREEN_COLOR[2] * lawnFactor),
+    ];
+  }
   const hueNoise = valueNoise2D(worldX, worldZ, GRASS_HUE_CELL_METERS, GRASS_HUE_SEED);
   const patchNoise = valueNoise2D(worldX, worldZ, DRY_PATCH_CELL_METERS, DRY_PATCH_SEED);
   const base = grassHueBlend(hueNoise);
@@ -210,8 +266,8 @@ export function groundCoverTint(
   const tinted = lerp3(base, DRY_PATCH_COLOR, patchT);
 
   // Subtle organic micro-noise (fine grass blade / soil variation):
-  const micro = valueNoise2D(worldX, worldZ, 6, 3141);
-  const microFactor = 0.94 + micro * 0.12;
+  const micro = valueNoise2D(worldX, worldZ, 5, 3141);
+  const microFactor = 0.93 + micro * 0.14;
   return [
     clamp01(tinted[0] * microFactor),
     clamp01(tinted[1] * microFactor),
@@ -221,32 +277,39 @@ export function groundCoverTint(
 
 /**
  * Procedural geological rock texture:
- * Sedimentary horizontal strata and micro-fractures blending dark basalt/slate,
- * weathered mountain granite, and sunlit limestone layers.
+ * Sedimentary horizontal strata, mineral variations, and micro-fractures blending
+ * dark basalt/slate, weathered mountain granite, and sunlit limestone layers.
  */
-export function rockColorAt(worldX: number, worldZ: number, height: number): [number, number, number] {
+export function rockColorAt(
+  worldX: number,
+  worldZ: number,
+  height: number,
+): [number, number, number] {
   const strataNoise = valueNoise2D(worldX, worldZ, 32, 4821);
   const microNoise = valueNoise2D(worldX, worldZ, 7, 9217);
+  const cragNoise = valueNoise2D(worldX, worldZ, 2.8, 3317);
   const strataBand = Math.sin(height * 0.35 + strataNoise * 3.2) * 0.5 + 0.5;
 
   const baseStone = lerp3(ROCK_DARK_SLATE, ROCK_GRANITE, microNoise);
-  return lerp3(baseStone, ROCK_LIGHT_STONE, strataBand * 0.45);
+  const stratified = lerp3(baseStone, ROCK_LIGHT_STONE, strataBand * 0.45);
+
+  const cragFactor = 0.93 + cragNoise * 0.14;
+  return [
+    clamp01(stratified[0] * cragFactor),
+    clamp01(stratified[1] * cragFactor),
+    clamp01(stratified[2] * cragFactor),
+  ];
 }
 
 /**
  * Deterministic terrain vertex color:
- * - underwater (height < SEA_LEVEL): seabedDepthColor ramp by depth.
- * - on land: sand near SEA_LEVEL fading into the ground-cover tint
- *   (hue variants + dry patches + mown-near-road), blended to rock where
- *   local slope exceeds MAX_BUILD_SLOPE or at high alpine altitudes.
- * - high alpine summits (height > 62m) receive snowcaps on gentle ledges.
+ * - underwater (height < SEA_LEVEL): seabedDepthColor ramp by depth with sandy ripples.
+ * - on land: natural coastal dunes and wet/dry sand fading into ground-cover tint,
+ *   blended into rock where local slope exceeds MAX_BUILD_SLOPE or at high alpine altitudes.
+ * - high alpine summits receive organic snowcaps on gentle ledges and mountain gullies.
  * - a shoreline foam band is blended in wherever height sits within
  *   SHORELINE_BAND_METERS of SEA_LEVEL, on either side.
  * - dense tree cover darkens the final color (canopy-shadow read).
- * Pure and exported for tests; `slope` is in the same units as
- * MAX_BUILD_SLOPE (meters of height delta); `worldX`/`worldZ` are meters
- * (the ground-cover noise's coordinate space); `nearRoad` is true when the
- * tile sits on or within 1 tile of a road.
  */
 export function vertexColorFor(
   height: number,
@@ -259,17 +322,23 @@ export function vertexColorFor(
   let rgb: [number, number, number];
 
   if (height < SEA_LEVEL) {
-    rgb = seabedDepthColor(SEA_LEVEL - height);
+    rgb = seabedDepthColor(SEA_LEVEL - height, worldX, worldZ);
   } else {
-    const sandT = clamp01((height - SEA_LEVEL) / SAND_BAND_METERS);
+    // Soft organic dune perturbation along the shoreline: avoids flat contour knife-edges
+    const duneWobble = (valueNoise2D(worldX, worldZ, 14, 6199) - 0.5) * 1.4;
+    const sandT = clamp01((height + duneWobble - SEA_LEVEL) / SAND_BAND_METERS);
+    const sand = sandColorAt(worldX, worldZ, height);
     const cover = groundCoverTint(worldX, worldZ, treeDensity, height, nearRoad);
-    rgb = lerp3(SAND_COLOR, cover, sandT);
+    rgb = lerp3(sand, cover, sandT);
 
     // Multi-criteria rock blending:
     // 1. Cliffs where slope exceeds buildable limit
-    const slopeRock = clamp01((slope - (MAX_BUILD_SLOPE - 0.8)) / ROCK_BLEND_RANGE);
+    const rockNoise = (valueNoise2D(worldX, worldZ, 18, 4423) - 0.5) * 1.2;
+    const slopeRock = clamp01(
+      (slope + rockNoise * 0.5 - (MAX_BUILD_SLOPE - 0.8)) / ROCK_BLEND_RANGE,
+    );
     // 2. High altitude transition (rock emerges naturally above 38m, dominates above 65m)
-    const altitudeRock = clamp01((height - 38) / 28);
+    const altitudeRock = clamp01((height + rockNoise * 4 - 38) / 28);
     const rockT = Math.max(slopeRock, altitudeRock * 0.9);
 
     if (rockT > 0) {
@@ -278,13 +347,18 @@ export function vertexColorFor(
     }
 
     // High alpine snowcaps:
-    // Above SNOW_MIN_HEIGHT, snow appears on summits and gentle high-altitude ledges
-    if (height > SNOW_MIN_HEIGHT) {
-      const snowAltitude = clamp01((height - SNOW_MIN_HEIGHT) / SNOW_BLEND_RANGE);
-      const snowSlopeFactor = clamp01(1 - (slope - 2) / 5.5);
-      const snowNoise = valueNoise2D(worldX, worldZ, 18, 7331);
-      const snowT = clamp01(snowAltitude * snowSlopeFactor * (snowNoise * 0.5 + 0.75));
-      rgb = lerp3(rgb, SNOW_COLOR, snowT);
+    // Above SNOW_MIN_HEIGHT, snow appears on summits and gentle high-altitude ledges,
+    // perturbed organically along gullies and ridges.
+    if (height > SNOW_MIN_HEIGHT - 25) {
+      const snowWobble = (valueNoise2D(worldX, worldZ, 22, 7331) - 0.5) * 35;
+      const effectiveSnowMin = SNOW_MIN_HEIGHT + snowWobble;
+      if (height > effectiveSnowMin) {
+        const snowAltitude = clamp01((height - effectiveSnowMin) / SNOW_BLEND_RANGE);
+        const snowSlopeFactor = clamp01(1 - (slope - 2) / 6.0);
+        const fineSnow = valueNoise2D(worldX, worldZ, 6, 2911);
+        const snowT = clamp01(snowAltitude * snowSlopeFactor * (0.65 + fineSnow * 0.45));
+        rgb = lerp3(rgb, SNOW_COLOR, snowT);
+      }
     }
   }
 
@@ -388,14 +462,18 @@ export class TerrainRenderer {
   private chunks: (ChunkEntry | null)[];
   private skirts: Record<SkirtSide, SkirtEntry | null>;
   private map: MapData | null = null;
+  private quality: TerrainQuality = 'high';
+  private subdivisionsPerTile = TERRAIN_QUALITY_SUBDIVISIONS.high;
   private readonly dirtyChunks = new Set<number>();
   /** Which perimeter sides need their skirt geometry rebuilt on next update(). */
   private readonly dirtySides = new Set<SkirtSide>();
   /** Flat-index (z*size+x) set of tiles currently carrying a road — drives the "mown" band. */
   private roadTiles = new Set<number>();
 
-  constructor(scene: THREE.Scene) {
+  constructor(scene: THREE.Scene, quality: TerrainQuality = 'high') {
     this.scene = scene;
+    this.quality = quality;
+    this.subdivisionsPerTile = TERRAIN_QUALITY_SUBDIVISIONS[quality] ?? 4;
     this.chunks = new Array<ChunkEntry | null>(CHUNKS_PER_SIDE * CHUNKS_PER_SIDE).fill(null);
     this.skirts = { west: null, east: null, north: null, south: null };
     // The ground carries the one night tint every sunlit surface does, so it
@@ -412,6 +490,32 @@ export class TerrainRenderer {
       vertexColors: true,
       side: THREE.DoubleSide,
     });
+  }
+
+  /** Dynamically updates the mesh quad density according to graphic quality settings. */
+  setQuality(quality: TerrainQuality): void {
+    const subs = TERRAIN_QUALITY_SUBDIVISIONS[quality] ?? 4;
+    if (this.quality === quality && this.subdivisionsPerTile === subs) return;
+    this.quality = quality;
+    this.subdivisionsPerTile = subs;
+    if (this.map) {
+      this.rebuildAll();
+    }
+  }
+
+  getQuality(): TerrainQuality {
+    return this.quality;
+  }
+
+  private rebuildAll(): void {
+    for (let cz = 0; cz < CHUNKS_PER_SIDE; cz++) {
+      for (let cx = 0; cx < CHUNKS_PER_SIDE; cx++) {
+        this.refreshChunk(cx, cz);
+      }
+    }
+    for (const side of SKIRT_SIDES) {
+      this.refreshSkirt(side);
+    }
   }
 
   /** 0 (day) .. 1 (night): how far the ground shades toward the night tint. */
@@ -641,8 +745,8 @@ export class TerrainRenderer {
 
   private makeChunkGeometry(cx: number, cz: number): THREE.BufferGeometry {
     const chunkMeters = CHUNK_TILES * TILE_METERS;
-    // 32x32 quads per chunk (10m vertex spacing) following the smooth Hermite cubic heightfield
-    const segments = CHUNK_TILES * 2;
+    // Chunk quads scaled by quality subdivision factor
+    const segments = CHUNK_TILES * this.subdivisionsPerTile;
     const geometry = new THREE.PlaneGeometry(chunkMeters, chunkMeters, segments, segments);
     geometry.rotateX(-Math.PI / 2);
     geometry.translate(cx * chunkMeters + chunkMeters / 2, 0, cz * chunkMeters + chunkMeters / 2);
@@ -707,24 +811,15 @@ export class TerrainRenderer {
   }
 
   /**
-   * One vertical quad-strip column per boundary tile-corner along
-   * `side` (MAP_SIZE+1 of them, so adjoining sides meet exactly at the 4
-   * corners with no gap/overlap), each column carrying SKIRT_ROWS vertices
-   * (surface / topsoil-bottom / rock-band-top / fixed base) so the GPU's
-   * linear vertex-color interpolation between rows reproduces skirtColorAt
-   * exactly at every point along the strip, not just at the sampled rows.
-   * The top row reuses heightAt/terrainColorAt — the identical height and
-   * color source the terrain chunks sample — so the skirt hangs with no
-   * crack and no seam against the chunk above it. Spatial layout always
-   * spans the fixed CHUNKS_PER_SIDE*CHUNK_TILES (=MAP_SIZE) world grid the
-   * chunk meshes actually occupy — matching makeChunkGeometry, `map.size` is
-   * used only to clamp array lookups (tree density), never geometry extent.
+   * One vertical quad-strip column per boundary vertex along `side`
+   * (MAP_SIZE*subdivisions+1 of them, so adjoining sides meet exactly at the 4
+   * corners with no gap/overlap and seamlessly match the subdivided terrain chunk edge).
    */
   private makeSkirtGeometry(side: SkirtSide): THREE.BufferGeometry {
     const map = this.map;
     const mapSize = map?.size ?? MAP_SIZE;
     const trees = map?.trees ?? null;
-    const columns = MAP_SIZE + 1;
+    const columns = MAP_SIZE * this.subdivisionsPerTile + 1;
     const rockBandTop = SKIRT_BASE_Y + SKIRT_ROCK_BAND_METERS;
 
     const positions = new Float32Array(columns * SKIRT_ROWS * 3);
@@ -780,10 +875,10 @@ export class TerrainRenderer {
     return geometry;
   }
 
-  /** World (x, z) of the `col`-th boundary tile-corner (0..MAP_SIZE inclusive) along a perimeter side. */
+  /** World (x, z) of the `col`-th boundary vertex along a perimeter side. */
   private skirtColumnWorld(side: SkirtSide, col: number): { wx: number; wz: number } {
     const extent = MAP_SIZE * TILE_METERS;
-    const along = col * TILE_METERS;
+    const along = (col / this.subdivisionsPerTile) * TILE_METERS;
     switch (side) {
       case 'west':
         return { wx: 0, wz: along };
