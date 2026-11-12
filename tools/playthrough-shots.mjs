@@ -44,9 +44,9 @@ page.on('console', (m) => {
 await page.addInitScript(() => {
   // Only the first load starts a new game; loading a save reloads the page
   // with its own session intent, which must survive.
-  if (!sessionStorage.getItem('slimcity.session')) {
+  if (!sessionStorage.getItem('cityvi.session')) {
     sessionStorage.setItem(
-      'slimcity.session',
+      'cityvi.session',
       JSON.stringify({ screen: 'playing', seed: 12345, mode: 'new' }),
     );
   }
@@ -58,8 +58,8 @@ await page.waitForTimeout(1500);
 
 const call = (fn, ...a) => page.evaluate(fn, ...a);
 const cam = tileCamera(page);
-const grid = () => call(() => window.__slimcity.readGrid());
-const stats = () => call(() => window.__slimcity.getStats());
+const grid = () => call(() => window.__cityvi.readGrid());
+const stats = () => call(() => window.__cityvi.getStats());
 
 // A dry, gentle block big enough for the whole town.
 const g0 = await grid();
@@ -183,7 +183,7 @@ const view = async (v) => {
       const acc = new Map();
       for (let sy = 60; sy < 380; sy += 4) {
         for (let sx = 340; sx < 1280; sx += 4) {
-          const t = window.__slimcity.screenToTile(sx, sy);
+          const t = window.__cityvi.screenToTile(sx, sy);
           if (!t) continue;
           const k = `${t.x},${t.z}`;
           const a = acc.get(k) ?? [0, 0, 0];
@@ -234,8 +234,8 @@ const run = async (seconds) => {
 const TOWN = { x: X + 8, z: Z + 12, d: 900 };
 const SOUTH = { x: X + 8, z: Z + 21, d: 900 };
 
-await call(() => window.__slimcity.setSpeed(0));
-await call(() => window.__slimcity.setDayT(0.5));
+await call(() => window.__cityvi.setSpeed(0));
+await call(() => window.__cityvi.setDayT(0.5));
 await view(TOWN);
 await logAlerts(page, 'playthrough');
 await step('start', async () => {
@@ -488,7 +488,7 @@ await step('bus-line', async () => {
   await tap(T(28, 15));
   await tap(T(28, 15), 'right');
   await page.waitForTimeout(1500);
-  const transit = await call(() => window.__slimcity.readTransit());
+  const transit = await call(() => window.__cityvi.readTransit());
   check(
     'a bus line is drawn between two stops',
     transit.lines.length === 1,
@@ -503,7 +503,7 @@ await step('district', async () => {
 });
 await step('town-at-work', async () => {
   await run(20);
-  const transit = await call(() => window.__slimcity.readTransit());
+  const transit = await call(() => window.__cityvi.readTransit());
   check(
     'the bus carries riders',
     (transit.ridership[0] ?? 0) > 0,

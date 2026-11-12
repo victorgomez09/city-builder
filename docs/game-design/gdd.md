@@ -2,7 +2,7 @@
 
 ## Vision
 
-SlimCity is a small-form-factor city builder for the browser: a familiar
+CityVI is a small-form-factor city builder for the browser: a familiar
 city-builder play grammar and UI layout at reduced scale, built on Three.js
 as a deliberate engine showcase — proof that a web engine can deliver a
 living, data-rich city simulation. It targets a laptop in a browser tab, not
@@ -11,7 +11,7 @@ impressive.
 
 ## Two identities, one build
 
-SlimCity is built to be two things at once, and every system is expected to
+CityVI is built to be two things at once, and every system is expected to
 serve both:
 
 - **The game.** Paint zones, grow a city, read it through infoview lenses —

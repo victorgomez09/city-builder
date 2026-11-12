@@ -19,22 +19,22 @@ was considered and set aside.
 
 ## Decision
 
-SlimCity deliberately reuses the city-builder genre's established
+CityVI deliberately reuses the city-builder genre's established
 grammar — UI layout conventions and mechanic vocabulary (zoning, RCI
 demand, milestones, infoviews, service radius, and the like) — rather
 than inventing its own from scratch. Originality is spent elsewhere:
-names, visual assets, and branding are original to SlimCity and must
+names, visual assets, and branding are original to CityVI and must
 never reference or imitate any specific commercial game.
 
 ## Consequences
 
-- **Good:** players already fluent in the genre can operate SlimCity's UI
+- **Good:** players already fluent in the genre can operate CityVI's UI
   and mechanics without a learning curve, which matters for a
   small-form-factor showcase with no scope budget to teach a novel
   interaction model; design effort goes into execution — visual language,
   performance, the engine showcase — instead of re-litigating solved UI
   and mechanic problems.
-- **Bad:** SlimCity forecloses a distinctive interaction identity of its
+- **Bad:** CityVI forecloses a distinctive interaction identity of its
   own at the grammar level — it will always read as a city builder in the
   familiar mould rather than something that differentiates on UI or
   mechanic novelty; every future feature has to fit genre expectations

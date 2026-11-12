@@ -11,7 +11,7 @@ page.on('console', (m) => {
 await page.addInitScript(() => {
   try {
     sessionStorage.setItem(
-      'slimcity.session',
+      'cityvi.session',
       JSON.stringify({ screen: 'playing', seed: 12345, mode: 'new' }),
     );
   } catch (e) {
@@ -22,17 +22,17 @@ await page.goto(base + '?nobloom', { waitUntil: 'domcontentloaded' });
 await page.waitForSelector('#viewport canvas', { timeout: 20000 });
 await page.waitForTimeout(4000);
 const ready = () =>
-  page.waitForFunction(() => !!window.__slimcity && !!window.__slimcity.cmd, null, {
+  page.waitForFunction(() => !!window.__cityvi && !!window.__cityvi.cmd, null, {
     timeout: 20000,
   });
 const call = async (fn, ...a) => {
   await ready();
   return page.evaluate(fn, ...a);
 };
-const cmd = (l, c) => call(([x, y]) => window.__slimcity.cmd(x, y), [l, c]);
-const readGrid = () => call(() => window.__slimcity.readGrid());
-const stats = () => call(() => window.__slimcity.getStats());
-const setSpeed = (s) => call((x) => window.__slimcity.setSpeed(x), s);
+const cmd = (l, c) => call(([x, y]) => window.__cityvi.cmd(x, y), [l, c]);
+const readGrid = () => call(() => window.__cityvi.readGrid());
+const stats = () => call(() => window.__cityvi.getStats());
+const setSpeed = (s) => call((x) => window.__cityvi.setSpeed(x), s);
 
 const g0 = await readGrid();
 const N = g0.size;

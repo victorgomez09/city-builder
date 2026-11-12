@@ -1,5 +1,5 @@
 /**
- * SlimCity service dispatch: deterministically spawns
+ * CityVI service dispatch: deterministically spawns
  * incidents from the existing coverage-gap fields (Crime/FireRisk/Pollution)
  * at real per-resident call rates, routes a service vehicle station ->
  * incident -> station over the road network, and resolves the incident after

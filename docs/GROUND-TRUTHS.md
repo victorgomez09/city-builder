@@ -1,6 +1,6 @@
 # Ground truths
 
-The always/never rules of SlimCity, one bullet and one id each, split by area.
+The always/never rules of CityVI, one bullet and one id each, split by area.
 
 How to use it:
 

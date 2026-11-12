@@ -37,7 +37,7 @@ page.on('pageerror', (e) => {
 await page.addInitScript(() => {
   try {
     sessionStorage.setItem(
-      'slimcity.session',
+      'cityvi.session',
       JSON.stringify({ screen: 'playing', seed: 12345, mode: 'new' }),
     );
   } catch (e) {
@@ -52,11 +52,11 @@ const call = async (fn, ...a) => {
   await hooksReady(page);
   return page.evaluate(fn, ...a);
 };
-const cmd = (l, c) => call(([x, y]) => window.__slimcity.cmd(x, y), [l, c]);
-const readGrid = () => call(() => window.__slimcity.readGrid());
-const readBuildings = () => call(() => window.__slimcity.readBuildings());
-const stats = () => call(() => window.__slimcity.getStats());
-const setSpeed = (s) => call((x) => window.__slimcity.setSpeed(x), s);
+const cmd = (l, c) => call(([x, y]) => window.__cityvi.cmd(x, y), [l, c]);
+const readGrid = () => call(() => window.__cityvi.readGrid());
+const readBuildings = () => call(() => window.__cityvi.readBuildings());
+const stats = () => call(() => window.__cityvi.getStats());
+const setSpeed = (s) => call((x) => window.__cityvi.setSpeed(x), s);
 const cam = tileCamera(page);
 
 const g = await readGrid();
@@ -154,8 +154,8 @@ console.log('pop', s.population, 'jobs', s.jobs);
 // command lands, so a no-op command follows the pin and the sim then holds still.
 await setSpeed(0);
 await call((t) => {
-  window.__slimcity.setDayT(t);
-  window.__slimcity.cmd('Light', [{ kind: 'setUnlimitedMoney', on: true }]);
+  window.__cityvi.setDayT(t);
+  window.__cityvi.cmd('Light', [{ kind: 'setUnlimitedMoney', on: true }]);
 }, NOON);
 await page.waitForTimeout(1500);
 

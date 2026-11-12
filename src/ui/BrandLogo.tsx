@@ -1,5 +1,5 @@
 /**
- * SlimCity wordmark: self-contained inline SVG (no external image/font/network
+ * CityVI wordmark: self-contained inline SVG (no external image/font/network
  * assets), so it renders identically in the packaged app and in tests. Two-tone
  * text ("Slim" light + "City" bold) sits on a tiny building-blocks skyline.
  * Uses currentColor for the skyline + "Slim" so callers can tint the whole
@@ -13,7 +13,7 @@ export default function BrandLogo({ className }: { className?: string }) {
       viewBox="0 0 320 96"
       width="100%"
       role="img"
-      aria-label="SlimCity"
+      aria-label="CityVI"
       className={className}
       xmlns="http://www.w3.org/2000/svg"
     >

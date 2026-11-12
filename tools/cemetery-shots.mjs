@@ -25,7 +25,7 @@ page.on('pageerror', (e) => errors.push(e.message));
 const session = (value) =>
   page.addInitScript((v) => {
     try {
-      sessionStorage.setItem('slimcity.session', JSON.stringify(v));
+      sessionStorage.setItem('cityvi.session', JSON.stringify(v));
     } catch (e) {
       void e;
     }
@@ -99,7 +99,7 @@ async function load(saveId) {
   await page.goto(base, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('#viewport canvas', { timeout: 30000 });
   await hooksReady(page);
-  await page.waitForFunction(() => window.__slimcity.getStats().population > 0, null, {
+  await page.waitForFunction(() => window.__cityvi.getStats().population > 0, null, {
     timeout: 30000,
   });
 }
@@ -113,15 +113,15 @@ const shot = async (name, settle = 1500) => {
 
 // --- the cemetery, the hearse and the street -------------------------------
 await load(saves.withCemetery);
-await hook(() => window.__slimcity.setDayT(0.5));
-await hook(() => window.__slimcity.setSpeed(0));
+await hook(() => window.__cityvi.setDayT(0.5));
+await hook(() => window.__cityvi.setSpeed(0));
 const c = saves.cemetery;
 // The town plants it with its back to main street; a player turns the lot to
 // face the road, so do the same: rotation 2 puts the gate on the north side.
 await hook(
   ([x, z]) => {
-    window.__slimcity.cmd('Money', [{ kind: 'setUnlimitedMoney', on: true }]);
-    window.__slimcity.cmd('Turn', [
+    window.__cityvi.cmd('Money', [{ kind: 'setUnlimitedMoney', on: true }]);
+    window.__cityvi.cmd('Turn', [
       { kind: 'bulldoze', tiles: [{ x, z }] },
       { kind: 'placeBuilding', catalogId: 'cemetery', x, z, rotation: 2 },
     ]);
@@ -131,13 +131,13 @@ await hook(
 await page.waitForTimeout(1500);
 c.id = await hook(
   ([x, z]) => {
-    const g = window.__slimcity.readGrid();
+    const g = window.__cityvi.readGrid();
     return g.buildingId[z * g.size + x];
   },
   [c.x, c.z],
 );
 console.log('cemetery id after turning', c.id);
-await hook(([id, used]) => window.__slimcity.setInterments(id, used), [c.id, 420]);
+await hook(([id, used]) => window.__cityvi.setInterments(id, used), [c.id, 420]);
 // The default pitch (0.7) and yaw, the lot's street side toward the camera.
 await camera(c.x + 1, c.z + 1, 200, 0, 0.7);
 await shot('a-cemetery-default-pitch');
@@ -157,12 +157,12 @@ await shot('b2-cemetery-gatehouse', 2000);
 await restore();
 
 // A hearse, an ambulance and a car stopped on main street (z = 100).
-const T = await hook(() => window.__slimcity.tileMeters());
+const T = await hook(() => window.__cityvi.tileMeters());
 const roadZ = (100 + 0.5) * T;
 const startX = 91 * T;
 await hook(
   ([z, x0, kinds]) =>
-    window.__slimcity.setVehicles(
+    window.__cityvi.setVehicles(
       kinds.map((kind, i) => ({ x: x0 + i * 10, z, heading: Math.PI / 2, kind })),
     ),
   // car, ambulance, hearse
@@ -175,19 +175,19 @@ await shot('c2-hearse-ambulance-car-three-quarter');
 
 // --- the health lens over a body backlog -----------------------------------
 await load(saves.backlogSave);
-await hook(() => window.__slimcity.setDayT(0.5));
-await hook(() => window.__slimcity.setSpeed(4));
+await hook(() => window.__cityvi.setDayT(0.5));
+await hook(() => window.__cityvi.setSpeed(4));
 await page.waitForTimeout(12000);
-await hook(() => window.__slimcity.setSpeed(0));
-await hook(() => window.__slimcity.setOverlay(7));
+await hook(() => window.__cityvi.setSpeed(0));
+await hook(() => window.__cityvi.setOverlay(7));
 await camera(100.5, 100, 220, 0, 1.0);
 await shot('d-health-lens-district');
 await camera(100.5, 100, 800, 0, 1.2);
 await shot('d2-health-lens-town');
-await hook(() => window.__slimcity.setOverlay(null));
+await hook(() => window.__cityvi.setOverlay(null));
 await camera(100.5, 100, 150, 0, 0.7);
 await shot('d3-district-no-lens');
 
-console.log('stats', JSON.stringify(await hook(() => window.__slimcity.getStats())));
+console.log('stats', JSON.stringify(await hook(() => window.__cityvi.getStats())));
 console.log('page errors', errors.length ? errors : 'none');
 await browser.close();

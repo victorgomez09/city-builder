@@ -66,7 +66,7 @@ export function StartMenu({
       aria-label="Main menu"
     >
       <div className="w-64">
-        {logoSlot ?? <h1 className="text-center text-3xl font-bold text-white">SlimCity</h1>}
+        {logoSlot ?? <h1 className="text-center text-3xl font-bold text-white">CityVI</h1>}
       </div>
       <div className={`flex w-64 flex-col gap-3 p-4 ${PANEL_ROUNDED}`}>
         {/* Only over a running game, where it is the way back to the city —

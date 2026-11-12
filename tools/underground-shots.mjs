@@ -29,7 +29,7 @@ page.on('console', (m) => {
 await page.addInitScript(() => {
   try {
     sessionStorage.setItem(
-      'slimcity.session',
+      'cityvi.session',
       JSON.stringify({ screen: 'playing', seed: 12345, mode: 'new' }),
     );
   } catch (e) {
@@ -54,7 +54,7 @@ try {
 
   const hook = (fn, arg) => page.evaluate(fn, arg);
   const cmd = (label, commands) =>
-    hook(([l, c]) => window.__slimcity.cmd(l, c), [label, commands]);
+    hook(([l, c]) => window.__cityvi.cmd(l, c), [label, commands]);
   const camera = tileCamera(page);
   const shot = async (name, settle = 1800) => {
     await page.waitForTimeout(settle);
@@ -64,7 +64,7 @@ try {
 
   // A dry, flat block: 40 tiles along the street, 10 rows north of it for the
   // homes' side streets and 12 south for the shore kits and their pond.
-  const g0 = await hook(() => window.__slimcity.readGrid());
+  const g0 = await hook(() => window.__cityvi.readGrid());
   const N = g0.size;
   const idx = (x, z) => z * N + x;
   let anchor = null;
@@ -88,8 +88,8 @@ try {
   const { x: X, z: Z } = anchor;
   console.log('anchor', JSON.stringify(anchor));
 
-  await hook(() => window.__slimcity.setDayT(0.5));
-  await hook(() => window.__slimcity.setSpeed(0));
+  await hook(() => window.__cityvi.setDayT(0.5));
+  await hook(() => window.__cityvi.setSpeed(0));
   await cmd('Sandbox', [{ kind: 'setSandbox', on: true }]);
   await cmd('Money', [{ kind: 'setUnlimitedMoney', on: true }]);
   await page.waitForTimeout(300);
@@ -103,7 +103,7 @@ try {
       for (let row = 0; row < h; row++) {
         for (let col = 0; col < w; col++) heights[row * w + col] = row >= pondRow ? -1.5 : 2.0;
       }
-      window.__slimcity.cmd('Pond', [{ kind: 'terraformSet', x, z, w, h, heights }]);
+      window.__cityvi.cmd('Pond', [{ kind: 'terraformSet', x, z, w, h, heights }]);
     },
     [X - 3, Z - 12, 44, 23, 17],
   );
@@ -139,7 +139,7 @@ try {
 
   // Prove the subject stands before shooting it.
   const standing = await hook(() =>
-    window.__slimcity
+    window.__cityvi
       .readBuildings()
       .filter((b) => ['water-pump', 'water-drain', 'res-low-1'].includes(b.catalogId))
       .map((b) => b.catalogId),
@@ -149,7 +149,7 @@ try {
   check(standing.includes('water-drain'), 'drain missing');
   check(standing.filter((c) => c === 'res-low-1').length === homes.length, 'homes missing');
 
-  const g = await hook(() => window.__slimcity.readGrid());
+  const g = await hook(() => window.__cityvi.readGrid());
   const pipeCount = g.waterPipe.reduce((n, v) => n + (v === 1 ? 1 : 0), 0);
   const pipeAt = (x, z) => g.waterPipe[idx(x, z)] === 1;
   console.log('pipe tiles', pipeCount);
@@ -159,16 +159,16 @@ try {
   check(pipeAt(X + 11, Z - 5), 'no pipe under the side street');
 
   // The lenses read coverage the sim sends, so it runs a few seconds first.
-  await hook(() => window.__slimcity.setSpeed(1));
+  await hook(() => window.__cityvi.setSpeed(1));
   await page.waitForTimeout(4000);
-  await hook(() => window.__slimcity.setSpeed(0));
+  await hook(() => window.__cityvi.setSpeed(0));
   await page.waitForTimeout(600);
 
-  const T = await hook(() => window.__slimcity.tileMeters());
+  const T = await hook(() => window.__cityvi.tileMeters());
   // Cars on the street for scale.
   await hook(
     ([tile, x, z]) =>
-      window.__slimcity.setVehicles(
+      window.__cityvi.setVehicles(
         [5, 9, 16, 22].map((dx, i) => ({
           x: (x + dx) * tile,
           z: (z + (i % 2 ? 0.35 : 0.65)) * tile,
@@ -179,7 +179,7 @@ try {
     [T, X, Z],
   );
 
-  const under = () => hook(() => window.__slimcity.readUnderground());
+  const under = () => hook(() => window.__cityvi.readUnderground());
   const overlayOff = () =>
     page.evaluate(() => {
       const b = document.querySelector('button[aria-label="Turn off overlay"]');
@@ -189,8 +189,8 @@ try {
   const view = { x: X + 11, z: Z, d: 150 };
 
   // Plain surface: no tool, no lens, and no pipe may show.
-  await hook(() => window.__slimcity.setTool('select'));
-  await hook(() => window.__slimcity.setOverlay(null));
+  await hook(() => window.__cityvi.setTool('select'));
+  await hook(() => window.__cityvi.setOverlay(null));
   await page.waitForTimeout(500);
   let u = await under();
   console.log('surface', JSON.stringify({ active: u.active, pipesVisible: u.pipesVisible }));
@@ -199,7 +199,7 @@ try {
   await shot('surface');
 
   // The view the pipe tool gives.
-  await hook(() => window.__slimcity.setTool('water.pipe'));
+  await hook(() => window.__cityvi.setTool('water.pipe'));
   await page.waitForTimeout(800);
   u = await under();
   console.log('underground', JSON.stringify({ active: u.active, tri: u.triangles, risers: u.risers }));
@@ -221,16 +221,16 @@ try {
   await cmd('Cable over open ground', [
     { kind: 'stringPowerLine', tiles: colTiles(X + 33, Z - 9, Z - 2), on: true, lineKind: 3 },
   ]);
-  await hook(() => window.__slimcity.setSpeed(1));
+  await hook(() => window.__cityvi.setSpeed(1));
   await page.waitForTimeout(3500);
-  await hook(() => window.__slimcity.setSpeed(0));
+  await hook(() => window.__cityvi.setSpeed(0));
   await page.waitForTimeout(600);
-  const gc = await hook(() => window.__slimcity.readGrid());
+  const gc = await hook(() => window.__cityvi.readGrid());
   const cableTiles = gc.powerLine.reduce((n, v) => n + (v === 3 ? 1 : 0), 0);
   check(cableTiles === 16 + 8, `cable not laid (${cableTiles} tiles)`);
-  const cableRead = () => hook(() => window.__slimcity.readPowerCables());
+  const cableRead = () => hook(() => window.__cityvi.readPowerCables());
 
-  await hook(() => window.__slimcity.setTool('select'));
+  await hook(() => window.__cityvi.setTool('select'));
   await page.waitForTimeout(500);
   let c = await cableRead();
   console.log('cable surface', JSON.stringify({ boxes: c.boxes.length, guards: c.guards, overlay: c.overlay }));
@@ -241,7 +241,7 @@ try {
   await camera(X + 33, Z - 5, 50, Math.PI, 0.6);
   await shot('cable-surface-open');
 
-  await hook(() => window.__slimcity.setTool('power.cable'));
+  await hook(() => window.__cityvi.setTool('power.cable'));
   await page.waitForTimeout(1000);
   u = await under();
   c = await cableRead();
@@ -255,7 +255,7 @@ try {
   await shot('cable-underground-riser');
   await camera(X + 33, Z - 5, 55, Math.PI, 1.0);
   await shot('cable-underground-open');
-  await hook(() => window.__slimcity.setTool('select'));
+  await hook(() => window.__cityvi.setTool('select'));
 
   // Lenses, each with the tool put back to select.
   const lenses = [
@@ -264,8 +264,8 @@ try {
     ['trash', false],
   ];
   for (const [lens, underground] of lenses) {
-    await hook(() => window.__slimcity.setTool('select'));
-    await hook((l) => window.__slimcity.setOverlay(l), lens);
+    await hook(() => window.__cityvi.setTool('select'));
+    await hook((l) => window.__cityvi.setOverlay(l), lens);
     await page.waitForTimeout(1200);
     u = await under();
     const off = await overlayOff();

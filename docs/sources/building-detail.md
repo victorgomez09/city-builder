@@ -62,7 +62,7 @@ The first slice built the measurement before any recipe existed. The art bible's
 - The measurement found the frame already at 23–38 ms on a laptop GPU before any detail, an overview at 4,118 draw calls, and yards costing more than houses. The figures are in [modeling-standards](../art/modeling-standards.md#what-the-measurement-read).
 - The player chose a tiered, measured budget, and once the measurement had counted chose that a tier counts everything on the lot: body, roof, parts, paving, yard, trees, cars and interments. The tiers are set where the shipped buildings were found.
 - No save-sized city existed and growth is tick-driven, so `tools/frame-budget.mjs` builds a synthetic Metropolis by command. Sandbox mode makes the place command take any catalog entry; the script lays streets over dry ground and places about nine thousand zoned buildings in the catalog's real mix plus one of every kit, in about eighty seconds, with the sim paused (a running sim clears a city with no power or zones).
-- It reads frame time with the browser's frame cap off, and draw calls and triangles from `window.__slimcity.renderInfo()`, over four fixed views by day and night against the empty map, and writes the record beside the shots.
+- It reads frame time with the browser's frame cap off, and draw calls and triangles from `window.__cityvi.renderInfo()`, over four fixed views by day and night against the empty map, and writes the record beside the shots.
 
 The performance slice paid for the detail before it was drawn, and the houses built to the improved frame.
 

@@ -126,7 +126,7 @@ await unlimitedMoneyOption(page);
 await page.addInitScript(() => {
   try {
     sessionStorage.setItem(
-      'slimcity.session',
+      'cityvi.session',
       JSON.stringify({ screen: 'playing', seed: 12345, mode: 'new' }),
     );
   } catch (e) {
@@ -138,18 +138,18 @@ await page.waitForSelector('#viewport canvas', { timeout: 20000 });
 await hooksReady(page);
 
 const call = (fn, ...a) => page.evaluate(fn, ...a);
-const cmd = (l, c) => call(([x, y]) => window.__slimcity.cmd(x, y), [l, c]);
+const cmd = (l, c) => call(([x, y]) => window.__cityvi.cmd(x, y), [l, c]);
 const cam = tileCamera(page);
 
 // Sandbox and unlimited money: the audit is about geometry, and a tier that
 // refuses to lay for want of a milestone or a balance tests nothing.
 await cmd('Sandbox', [{ kind: 'setSandbox', on: true }]);
 await cmd('Money', [{ kind: 'setUnlimitedMoney', on: true }]);
-await call(() => window.__slimcity.setDayT(0.32));
+await call(() => window.__cityvi.setDayT(0.32));
 await logAlerts(page, 'roadmatrix');
 
 const grid = await call(() => {
-  const g = window.__slimcity.readGrid();
+  const g = window.__cityvi.readGrid();
   return { size: g.size, water: Array.from(g.water) };
 });
 const N = grid.size;
@@ -258,7 +258,7 @@ async function lay(kase, X, Z) {
 const readRun = (measured, axis) =>
   call(
     ([m, ax]) => {
-      const S = window.__slimcity;
+      const S = window.__cityvi;
       const tiles = [];
       for (let k = m.from; k <= m.to; k++) {
         const x = ax === 'x' ? m.x : k;
@@ -559,7 +559,7 @@ for (const { kase, tag, measured, junctions, end } of plan) {
     await page.waitForTimeout(600);
     // Daylight is pinned on every shot: the sim keeps running between them, so
     // a light set once leaves later classes shot at dusk.
-    await call(() => window.__slimcity.setDayT(0.5));
+    await call(() => window.__cityvi.setDayT(0.5));
     await page.waitForTimeout(150);
     await cleanShot(page, `${out}/${tag}${suffix}.png`);
     // Straight down no height can be judged: a deck's piers, parapets and the
@@ -586,7 +586,7 @@ for (const { kase, tag, X, Z } of deferredPlan) {
 }
 await page.waitForTimeout(1500);
 const after = await call(() => {
-  const g = window.__slimcity.readGrid();
+  const g = window.__cityvi.readGrid();
   return {
     elevations: Array.from(g.roadElevation),
     tiers: Array.from(g.roadTier),
@@ -616,7 +616,7 @@ for (const { tag, X, Z } of deferredPlan) {
 // Reported rather than failed: a fresh scene with no roads on it already
 // submits these, so they are not the road matrix's to answer for. Worth
 // printing anyway — the count rising after a road change would be.
-const empty = await call(() => window.__slimcity.readEmptyDraws());
+const empty = await call(() => window.__cityvi.readEmptyDraws());
 if (empty.length > 0) {
   notes.push(
     `${empty.length} empty draws in the scene (an empty map has them too, so not from the roads)`,

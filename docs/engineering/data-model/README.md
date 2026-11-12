@@ -1,6 +1,6 @@
 # Data model and schema
 
-SlimCity's world is a flat grid of typed arrays — one array per layer,
+CityVI's world is a flat grid of typed arrays — one array per layer,
 `MAP_SIZE * MAP_SIZE` entries each, no per-tile objects. A save is those
 arrays serialized behind a version number, plus a small JSON envelope for
 everything that isn't a grid layer. This document is the shape of that data:

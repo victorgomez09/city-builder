@@ -23,7 +23,7 @@ page.on('pageerror', (e) => errors.push(e.message));
 const session = (value) =>
   page.addInitScript((v) => {
     try {
-      sessionStorage.setItem('slimcity.session', JSON.stringify(v));
+      sessionStorage.setItem('cityvi.session', JSON.stringify(v));
     } catch (e) {
       void e;
     }
@@ -57,7 +57,7 @@ console.log('save', JSON.stringify(saved));
 // flag), so the page starts with it on, as a player who switched it on would.
 await page.addInitScript(() => {
   try {
-    localStorage.setItem('slimcity.settings', JSON.stringify({ unlimitedMoney: true }));
+    localStorage.setItem('cityvi.settings', JSON.stringify({ unlimitedMoney: true }));
   } catch (e) {
     void e;
   }
@@ -66,7 +66,7 @@ await session({ screen: 'playing', seed: 0, mode: 'load', saveId: saved.saveId }
 await page.goto(base, { waitUntil: 'domcontentloaded' });
 await page.waitForSelector('#viewport canvas', { timeout: 30000 });
 await hooksReady(page);
-await page.waitForFunction(() => window.__slimcity.getStats().population > 0, null, {
+await page.waitForFunction(() => window.__cityvi.getStats().population > 0, null, {
   timeout: 30000,
 });
 
@@ -78,23 +78,23 @@ const shot = async (name, settle = 1500) => {
   console.log('shot', name);
 };
 
-await hook(() => window.__slimcity.setDayT(0.5));
-await hook(() => window.__slimcity.setSpeed(0));
+await hook(() => window.__cityvi.setDayT(0.5));
+await hook(() => window.__cityvi.setSpeed(0));
 const police = saved.policeDistrict;
 const fire = saved.fireDistrict;
 // The two first-rung stations beside the districts, on the same north side of
 // main street, so the lots all face south to the street.
 const small = { police: { x: police.x + 9, z: 98 }, fire: { x: police.x + 12, z: 98 } };
 await hook((s) => {
-  window.__slimcity.cmd('Sandbox', [{ kind: 'setSandbox', on: true }]);
-  window.__slimcity.cmd('Money', [{ kind: 'setUnlimitedMoney', on: true }]);
+  window.__cityvi.cmd('Sandbox', [{ kind: 'setSandbox', on: true }]);
+  window.__cityvi.cmd('Money', [{ kind: 'setUnlimitedMoney', on: true }]);
   // The zone has grown shops on the row beside the district stations; they
   // are cleared first so the two first-rung stations have the ground.
   const row = [];
   for (let x = s.police.x; x < s.fire.x + 2; x++) {
     for (let z = s.police.z; z < s.police.z + 2; z++) row.push({ x, z });
   }
-  window.__slimcity.cmd('Stations', [
+  window.__cityvi.cmd('Stations', [
     { kind: 'bulldoze', tiles: row },
     {
       kind: 'placeBuilding',
@@ -123,20 +123,20 @@ await shot('a2-four-stations-closer');
 const restore = await closeUp(page, 2);
 // Local x of the first bay door of the district fire station, in tiles from its
 // lot centre, and the engine 6.5 m beyond the front wall.
-const T = await hook(() => window.__slimcity.tileMeters());
+const T = await hook(() => window.__cityvi.tileMeters());
 const bay0X = fire.x + 1.5 + (-27 + 18 * 0.3048 * 0.5) / T;
 const apronZ = fire.z + 1 + (-17 + 20 + 1.5 + 5) / T;
 // A car stands on the apron beside the engines for scale (no sim car stays there).
 await hook(
   ([tile, x, z]) =>
-    window.__slimcity.setVehicles([
+    window.__cityvi.setVehicles([
       { x: (x + 0.5) * tile, z: (z + 0.5) * tile, heading: 0, kind: 0 },
     ]),
   [T, bay0X + 0.5, apronZ - 0.2],
 );
 await camera(bay0X + 0.5, apronZ, 40, yaw - 0.7, 0.3);
 await shot('b-engine-on-apron-with-car', 2000);
-await hook(() => window.__slimcity.setVehicles([]));
+await hook(() => window.__cityvi.setVehicles([]));
 await camera(bay0X, fire.z + 1 + 3 / T, 40, yaw + 0.5, 0.1);
 await shot('b2-engine-at-bay-door', 2000);
 await restore();
@@ -144,8 +144,8 @@ await restore();
 // Night: the panes and the door glazing are the lit face of each station.
 // The clock is read when a snapshot arrives, so the sim must be running for the
 // dusk to take hold.
-await hook(() => window.__slimcity.setSpeed(1));
-await hook(() => window.__slimcity.setDayT(0.96));
+await hook(() => window.__cityvi.setSpeed(1));
+await hook(() => window.__cityvi.setDayT(0.96));
 await camera(rowX, 99, 190, yaw, ROW_PITCH);
 await shot('c-four-stations-night', 2500);
 await camera(rowX, 99, 185, yaw + 0.15, ROW_PITCH - 0.2);

@@ -13,8 +13,8 @@
 export type AppSession =
   { screen: 'menu' } | { screen: 'playing'; seed: number; mode: 'new' | 'load'; saveId?: number };
 
-const SESSION_KEY = 'slimcity.session';
-const SETTINGS_KEY = 'slimcity.settings';
+const SESSION_KEY = 'cityvi.session';
+const SETTINGS_KEY = 'cityvi.settings';
 
 /** Reads the persisted session intent; defaults to the menu on first visit. */
 export function readAppSession(): AppSession {

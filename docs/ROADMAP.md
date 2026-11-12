@@ -1,6 +1,6 @@
-# SlimCity — Design & Technical Roadmap
+# CityVI — Design & Technical Roadmap
 
-**SlimCity** is a small-form-factor **city builder** for the browser: a
+**CityVI** is a small-form-factor **city builder** for the browser: a
 familiar city-builder play grammar and UI layout at reduced scale, built on
 **Three.js** as a deliberate engine showcase — proof that a web engine can
 deliver a living, data-rich city sim. Maps and texture sets are
@@ -125,7 +125,7 @@ again, update the figure here and nowhere else.
   no walk from the sidewalk to their street breezeway. The mid-rise and the
   tower now draw one body at the catalog height, which holds more floor than
   their `units` were counted on when they stepped; the unit counts were left
-  as they were. `window.__slimcity.readKit()` reports only the kit's first
+  as they were. `window.__cityvi.readKit()` reports only the kit's first
   six part kinds.
 - A ground truth says `VISUAL_DAY_TICKS` never drives a sim rule, but the
   traffic system's rush hour reads the visual clock and the transit dead

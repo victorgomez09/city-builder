@@ -1,6 +1,6 @@
 # Asset guidelines
 
-**Everything in SlimCity is procedural geometry built in code.** There is
+**Everything in CityVI is procedural geometry built in code.** There is
 no imported-mesh pipeline: no GLTF, no FBX, no OBJ, and no
 `GLTFLoader`/`FBXLoader`/`OBJLoader` anywhere in `src/`. An asset is a
 TypeScript function that returns geometry from a catalogue entry plus a

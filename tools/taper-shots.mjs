@@ -29,7 +29,7 @@ page.on('pageerror', (e) => {
 await page.addInitScript(() => {
   try {
     sessionStorage.setItem(
-      'slimcity.session',
+      'cityvi.session',
       JSON.stringify({ screen: 'playing', seed: 12345, mode: 'new' }),
     );
   } catch (e) {
@@ -42,9 +42,9 @@ await page.waitForSelector('#viewport canvas', { timeout: 20000 });
 await page.waitForTimeout(4000);
 
 const call = (fn, ...a) => page.evaluate(fn, ...a);
-const cmd = (l, c) => call(([x, y]) => window.__slimcity.cmd(x, y), [l, c]);
-const readGrid = () => call(() => window.__slimcity.readGrid());
-const approach = (x, z) => call(([ax, az]) => window.__slimcity.readApproach(ax, az), [x, z]);
+const cmd = (l, c) => call(([x, y]) => window.__cityvi.cmd(x, y), [l, c]);
+const readGrid = () => call(() => window.__cityvi.readGrid());
+const approach = (x, z) => call(([ax, az]) => window.__cityvi.readApproach(ax, az), [x, z]);
 const cam = tileCamera(page);
 
 const g0 = await readGrid();
@@ -125,7 +125,7 @@ const MIDX = (X + CX + 0.5) * TILE;
 /** The runs of one colour along a line ACROSS the road at world z. */
 const runsAcross = async (zWorld, x0, x1, n) => {
   const row = await call(
-    ([a, b2, c, d, e]) => window.__slimcity.readSurface(a, b2, c, d, e),
+    ([a, b2, c, d, e]) => window.__cityvi.readSurface(a, b2, c, d, e),
     [x0, zWorld, x1, zWorld, n],
   );
   const at = (i) => x0 + ((i + 0.5) * (x1 - x0)) / n;
@@ -179,7 +179,7 @@ if (off.length > 0)
 
 if (pageErrors.length > 0) failures.push(`page errors: ${pageErrors.join(' | ')}`);
 
-await call(() => window.__slimcity.setDayT(0.5));
+await call(() => window.__cityvi.setDayT(0.5));
 const shot = async (name, tx, tz, d, yaw, pitch) => {
   await cam(tx, tz, d, yaw, pitch);
   await page.waitForTimeout(900);

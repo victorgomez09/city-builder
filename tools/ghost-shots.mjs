@@ -3,7 +3,7 @@
  * of all in replace mode, where the new road is about to reach past the one
  * already there and over whatever stands beside it.
  *
- * Measures the ghost's own extent through window.__slimcity.ghostBounds()
+ * Measures the ghost's own extent through window.__cityvi.ghostBounds()
  * rather than judging the picture by eye, then shoots what was measured.
  *
  * Usage: node tools/ghost-shots.mjs [url] [outDir]
@@ -37,10 +37,10 @@ page.on('pageerror', (e) => {
 await page.addInitScript(() => {
   try {
     sessionStorage.setItem(
-      'slimcity.session',
+      'cityvi.session',
       JSON.stringify({ screen: 'playing', seed: 12345, mode: 'new' }),
     );
-    localStorage.setItem('slimcity.settings', JSON.stringify({ sandboxUnlockAll: true, unlimitedMoney: true }));
+    localStorage.setItem('cityvi.settings', JSON.stringify({ sandboxUnlockAll: true, unlimitedMoney: true }));
   } catch (e) {
     void e;
   }
@@ -50,9 +50,9 @@ await page.waitForSelector('#viewport canvas', { timeout: 20000 });
 await page.waitForTimeout(4000);
 
 const call = (fn, ...a) => page.evaluate(fn, ...a);
-const cmd = (l, c) => call(([x, y]) => window.__slimcity.cmd(x, y), [l, c]);
-const readGrid = () => call(() => window.__slimcity.readGrid());
-const ghostBounds = () => call(() => window.__slimcity.ghostBounds());
+const cmd = (l, c) => call(([x, y]) => window.__cityvi.cmd(x, y), [l, c]);
+const readGrid = () => call(() => window.__cityvi.readGrid());
+const ghostBounds = () => call(() => window.__cityvi.ghostBounds());
 const cam = tileCamera(page);
 
 const failures = [];
@@ -95,8 +95,8 @@ console.log('anchor', JSON.stringify(anchor), 'spread', flattest.spread.toFixed(
 
 // Frame the flat block, then let the app say which tiles the drag will cross
 // and lay the road that is about to be replaced along exactly those.
-await call(() => window.__slimcity.setSpeed(0));
-await call(() => window.__slimcity.setDayT(0.5));
+await call(() => window.__cityvi.setSpeed(0));
+await call(() => window.__cityvi.setDayT(0.5));
 await cam(X + 6, Z, 80, 0.0, 1.0);
 await page.waitForTimeout(800);
 
@@ -125,7 +125,7 @@ const endDrag = async () => {
 
 const dragTiles = await call(
   ([y, x0, x1]) => {
-    const hook = window.__slimcity;
+    const hook = window.__cityvi;
     const seen = new Map();
     for (let sx = x0; sx <= x1; sx += 2) {
       const t = hook.screenToTile(sx, y);
@@ -229,7 +229,7 @@ await cam(X + 6, Z + 4, 80, 0.0, 1.0);
 await page.waitForTimeout(600);
 const clearRow = await call(
   ([y, x0, x1]) => {
-    const hook = window.__slimcity;
+    const hook = window.__cityvi;
     const seen = [];
     for (let sx = x0; sx <= x1; sx += 2) {
       const t = hook.screenToTile(sx, y);

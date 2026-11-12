@@ -31,11 +31,11 @@ page.on('pageerror', (e) => console.log('[pageerror]', e.message));
 await page.addInitScript(() => {
   try {
     sessionStorage.setItem(
-      'slimcity.session',
+      'cityvi.session',
       JSON.stringify({ screen: 'playing', seed: 12345, mode: 'new' }),
     );
     localStorage.setItem(
-      'slimcity.settings',
+      'cityvi.settings',
       JSON.stringify({ sandboxUnlockAll: true, unlimitedMoney: true }),
     );
   } catch (e) {
@@ -47,10 +47,10 @@ await page.waitForSelector('#viewport canvas', { timeout: 20000 });
 await page.waitForTimeout(4000);
 
 const call = (fn, ...a) => page.evaluate(fn, ...a);
-const cmd = (l, c) => call(([x, y]) => window.__slimcity.cmd(x, y), [l, c]);
-const readGrid = () => call(() => window.__slimcity.readGrid());
-const stats = () => call(() => window.__slimcity.getStats());
-const setSpeed = (s) => call((x) => window.__slimcity.setSpeed(x), s);
+const cmd = (l, c) => call(([x, y]) => window.__cityvi.cmd(x, y), [l, c]);
+const readGrid = () => call(() => window.__cityvi.readGrid());
+const stats = () => call(() => window.__cityvi.getStats());
+const setSpeed = (s) => call((x) => window.__cityvi.setSpeed(x), s);
 const cam = tileCamera(page);
 
 // A flat, dry block to build on, found rather than assumed.
@@ -150,7 +150,7 @@ if (s.population === 0) {
 // Midday, pinned. The sim clock had these at dusk, where a 1.75 m figure is a
 // dark smudge against dark grass and the shot cannot be read at all. The pin is
 // applied on the next snapshot, so it goes in while the sim still runs.
-await call(() => window.__slimcity.setDayT(0.5));
+await call(() => window.__cityvi.setDayT(0.5));
 await page.waitForTimeout(1500);
 await setSpeed(0);
 await page.waitForTimeout(600);
@@ -169,7 +169,7 @@ await cleanShot(page, `${out}/shelter-along-street.png`);
 
 // The shelter's idler (people stand only at shelters) and the house nearest it,
 // together. What grows varies run to run, so the house is looked up, not assumed.
-const homes = (await call(() => window.__slimcity.readBuildings())).filter(
+const homes = (await call(() => window.__cityvi.readBuildings())).filter(
   (h) => h.z > Z && h.z <= Z + 4 && h.state === 1,
 );
 if (homes.length === 0) throw new Error('no house grew beside the shelter');

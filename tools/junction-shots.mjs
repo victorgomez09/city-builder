@@ -33,7 +33,7 @@ page.on('pageerror', (e) => {
 await page.addInitScript(() => {
   try {
     sessionStorage.setItem(
-      'slimcity.session',
+      'cityvi.session',
       JSON.stringify({ screen: 'playing', seed: 12345, mode: 'new' }),
     );
   } catch (e) {
@@ -46,9 +46,9 @@ await page.waitForSelector('#viewport canvas', { timeout: 20000 });
 await page.waitForTimeout(4000);
 
 const call = (fn, ...a) => page.evaluate(fn, ...a);
-const cmd = (l, c) => call(([x, y]) => window.__slimcity.cmd(x, y), [l, c]);
-const readGrid = () => call(() => window.__slimcity.readGrid());
-const readSigns = () => call(() => window.__slimcity.readSigns());
+const cmd = (l, c) => call(([x, y]) => window.__cityvi.cmd(x, y), [l, c]);
+const readGrid = () => call(() => window.__cityvi.readGrid());
+const readSigns = () => call(() => window.__cityvi.readSigns());
 const cam = tileCamera(page);
 
 const g0 = await readGrid();
@@ -105,7 +105,7 @@ await page.waitForTimeout(2000);
 const failures = [];
 
 // --- What the avenue actually draws as it runs into the junction -------------
-const approach = (x, z) => call(([ax, az]) => window.__slimcity.readApproach(ax, az), [x, z]);
+const approach = (x, z) => call(([ax, az]) => window.__cityvi.readApproach(ax, az), [x, z]);
 const along = [];
 for (let d = 4; d >= 1; d--) along.push({ d, ...(await approach(X + JX - d, Z + JZ)) });
 console.log('avenue into the junction:', JSON.stringify(along));
@@ -134,8 +134,8 @@ if (slots.size !== heads.length) failures.push('two signal heads share one tile'
 
 if (pageErrors.length > 0) failures.push(`page errors: ${pageErrors.join(' | ')}`);
 
-await call(() => window.__slimcity.setSpeed(0));
-await call(() => window.__slimcity.setDayT(0.5));
+await call(() => window.__cityvi.setSpeed(0));
+await call(() => window.__cityvi.setDayT(0.5));
 const shot = async (name, tx, tz, d, yaw, pitch, scale = 1) => {
   const restore = scale > 1 ? await closeUp(page, scale) : null;
   await cam(tx, tz, d, yaw, pitch);

@@ -22,7 +22,7 @@ page.on('pageerror', (e) => console.log('[pageerror]', e.message));
 await page.addInitScript(() => {
   try {
     sessionStorage.setItem(
-      'slimcity.session',
+      'cityvi.session',
       JSON.stringify({ screen: 'playing', seed: 12345, mode: 'new' }),
     );
   } catch (e) {
@@ -38,10 +38,10 @@ const call = async (fn, ...a) => {
   await hooksReady(page);
   return page.evaluate(fn, ...a);
 };
-const cmd = (l, c) => call(([x, y]) => window.__slimcity.cmd(x, y), [l, c]);
-const readGrid = () => call(() => window.__slimcity.readGrid());
-const stats = () => call(() => window.__slimcity.getStats());
-const setSpeed = (s) => call((x) => window.__slimcity.setSpeed(x), s);
+const cmd = (l, c) => call(([x, y]) => window.__cityvi.cmd(x, y), [l, c]);
+const readGrid = () => call(() => window.__cityvi.readGrid());
+const stats = () => call(() => window.__cityvi.getStats());
+const setSpeed = (s) => call((x) => window.__cityvi.setSpeed(x), s);
 const cam = tileCamera(page);
 
 const g0 = await readGrid();
@@ -100,7 +100,7 @@ await cmd('Utilities', [
   { kind: 'placeBuilding', catalogId: 'water-tower', x: X + 9, z: Z - 7, rotation: 0 },
 ]);
 await page.waitForTimeout(500);
-const placed = await call(() => window.__slimcity.readBuildings().map((b) => b.catalogId));
+const placed = await call(() => window.__cityvi.readBuildings().map((b) => b.catalogId));
 console.log('utilities placed:', JSON.stringify(placed));
 
 // Industry north of the middle street, commerce south of it.
@@ -129,11 +129,11 @@ console.log('population', s1.population, 'jobs', s1.jobs);
 await setSpeed(0);
 const census = await call(() => {
   const counts = {};
-  for (const bl of window.__slimcity.readBuildings()) {
+  for (const bl of window.__cityvi.readBuildings()) {
     counts[bl.catalogId] = (counts[bl.catalogId] ?? 0) + 1;
   }
-  const known = new Map(window.__slimcity.readBuildings().map((b) => [b.id, b.catalogId]));
-  const kitIds = window.__slimcity.readKitIds();
+  const known = new Map(window.__cityvi.readBuildings().map((b) => [b.id, b.catalogId]));
+  const kitIds = window.__cityvi.readKitIds();
   const orphans = kitIds.filter((id) => !known.has(id));
   const byCatalog = {};
   for (const id of kitIds) {
@@ -142,11 +142,11 @@ const census = await call(() => {
   }
   return {
     buildings: counts,
-    kit: window.__slimcity.readKit(),
+    kit: window.__cityvi.readKit(),
     kitBuildings: kitIds.length,
     kitOrphans: orphans.length,
     kitByCatalog: byCatalog,
-    at: window.__slimcity.readBuildings().map((b) => ({ id: b.catalogId, x: b.x, z: b.z })),
+    at: window.__cityvi.readBuildings().map((b) => ({ id: b.catalogId, x: b.x, z: b.z })),
   };
 });
 console.log('grown buildings:', JSON.stringify(census.buildings));
@@ -181,8 +181,8 @@ if (grown.length === 0) {
 // A paused sim posts a snapshot, which carries the pinned light to the scene,
 // only when a command lands, so a no-op command follows the pin.
 await call(() => {
-  window.__slimcity.setDayT(0.5);
-  window.__slimcity.cmd('Light', [{ kind: 'setUnlimitedMoney', on: true }]);
+  window.__cityvi.setDayT(0.5);
+  window.__cityvi.cmd('Light', [{ kind: 'setUnlimitedMoney', on: true }]);
 });
 await page.waitForTimeout(1500);
 

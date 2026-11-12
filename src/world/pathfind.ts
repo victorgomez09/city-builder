@@ -1,5 +1,5 @@
 /**
- * SlimCity road pathfinding: A* over the road network's node
+ * CityVI road pathfinding: A* over the road network's node
  * graph, with congestion-aware edge costs. Pure — no GridState, no three.js
  * or DOM — operates only on the graph shape (GraphNode[]/GraphEdge[]) so it
  * is trivially unit-testable and is reused by src/world/roads.ts's

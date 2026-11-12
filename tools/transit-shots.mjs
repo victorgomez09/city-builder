@@ -83,13 +83,13 @@ page.on('pageerror', (e) => {
 await page.addInitScript(() => {
   try {
     sessionStorage.setItem(
-      'slimcity.session',
+      'cityvi.session',
       JSON.stringify({ screen: 'playing', seed: 12345, mode: 'new' }),
     );
     // Every road unlocked, so a card locked behind a milestone cannot read as
     // a card that was retired.
     localStorage.setItem(
-      'slimcity.settings',
+      'cityvi.settings',
       JSON.stringify({ sandboxUnlockAll: true, unlimitedMoney: true }),
     );
   } catch (e) {
@@ -101,8 +101,8 @@ await page.waitForSelector('#viewport canvas', { timeout: 20000 });
 await page.waitForTimeout(4000);
 
 const call = (fn, ...a) => page.evaluate(fn, ...a);
-const cmd = (l, c) => call(([x, y]) => window.__slimcity.cmd(x, y), [l, c]);
-const readGrid = () => call(() => window.__slimcity.readGrid());
+const cmd = (l, c) => call(([x, y]) => window.__cityvi.cmd(x, y), [l, c]);
+const readGrid = () => call(() => window.__cityvi.readGrid());
 const cam = tileCamera(page);
 
 const failures = [];
@@ -266,7 +266,7 @@ for (const [tier, z] of [
 // ---------------------------------------------------------------------------
 await cmd('Money', [{ kind: 'setUnlimitedMoney', on: false }]);
 await page.waitForTimeout(400);
-const fundsNow = async () => (await call(() => window.__slimcity.getStats())).funds;
+const fundsNow = async () => (await call(() => window.__cityvi.getStats())).funds;
 
 const priceRun = async (label, profile, z, want) => {
   const before = await fundsNow();
@@ -291,8 +291,8 @@ await priceRun('Two-lane + bus lane', { id: 31, pieces: BUS_ONE_SIDE }, Z + 24, 
 if (pageErrors.length > 0) failures.push(`page errors: ${pageErrors.join(' | ')}`);
 
 await cmd('Money', [{ kind: 'setUnlimitedMoney', on: true }]);
-await call(() => window.__slimcity.setSpeed(0));
-await call(() => window.__slimcity.setDayT(0.5));
+await call(() => window.__cityvi.setSpeed(0));
+await call(() => window.__cityvi.setDayT(0.5));
 const shot = async (name, tx, tz, d, yaw, pitch) => {
   await cam(tx, tz, d, yaw, pitch);
   await page.waitForTimeout(900);

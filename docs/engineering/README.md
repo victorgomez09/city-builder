@@ -1,6 +1,6 @@
 # Engineering
 
-How SlimCity is built: the architecture, the contracts between its parts, the
+How CityVI is built: the architecture, the contracts between its parts, the
 data it stores, and the conventions the codebase holds itself to.
 
 ## Architecture

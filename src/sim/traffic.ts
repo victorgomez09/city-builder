@@ -1,5 +1,5 @@
 /**
- * SlimCity traffic system.
+ * CityVI traffic system.
  *
  * Statistical trip assignment, not per-agent simulation: each tick a handful
  * of (origin, destination) pairs are sampled and routed once over the

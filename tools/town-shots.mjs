@@ -24,7 +24,7 @@ page.on('pageerror', (e) => errors.push(e.message));
 const session = (value) =>
   page.addInitScript((v) => {
     try {
-      sessionStorage.setItem('slimcity.session', JSON.stringify(v));
+      sessionStorage.setItem('cityvi.session', JSON.stringify(v));
     } catch (e) {
       void e;
     }
@@ -58,11 +58,11 @@ await page.goto(base, { waitUntil: 'domcontentloaded' });
 await page.waitForSelector('#viewport canvas', { timeout: 30000 });
 await hooksReady(page);
 const hook = (fn, arg) => page.evaluate(fn, arg);
-await page.waitForFunction(() => window.__slimcity.getStats().population > 0, null, {
+await page.waitForFunction(() => window.__cityvi.getStats().population > 0, null, {
   timeout: 30000,
 });
-await hook(() => window.__slimcity.setSpeed(1));
-await hook(() => window.__slimcity.setDayT(0.5));
+await hook(() => window.__cityvi.setSpeed(1));
+await hook(() => window.__cityvi.setDayT(0.5));
 const camera = tileCamera(page);
 const { TOWN } = await page.evaluate(async () => ({
   TOWN: (await import('/tests/support/town.ts')).TOWN,
@@ -87,7 +87,7 @@ const tramTile = await (async () => {
   for (let i = 0; i < 120; i++) {
     const found = await hook(
       ([z0, x0, x1, T]) =>
-        window.__slimcity
+        window.__cityvi
           .readVehicles()
           .find((v) => Math.abs(v.z - (z0 + 0.5) * T) < T / 2 && v.x > x0 * T && v.x < x1 * T),
       [TOWN.tram.z, TOWN.tram.x0, TOWN.tram.x1, tileM],
@@ -97,11 +97,11 @@ const tramTile = await (async () => {
   }
   return null;
 })();
-if (tramTile) await hook(() => window.__slimcity.setSpeed(0));
+if (tramTile) await hook(() => window.__cityvi.setSpeed(0));
 else console.log('[town] no tram on the tramway within 60 s; 04-tramway shows the empty line');
 await camera(tramTile?.x ?? 70, tramTile?.z ?? TOWN.tram.z, 80, -Math.PI / 5, 0.8);
 await shot('04-tramway');
-if (tramTile) await hook(() => window.__slimcity.setSpeed(1));
+if (tramTile) await hook(() => window.__cityvi.setSpeed(1));
 await camera(90, 85, 120, Math.PI / 4, 0.9);
 await shot('04b-tram-crossing');
 await camera(TOWN.sixLane.x + 0.5, TOWN.main.z, 90, Math.PI / 4, 0.9);
@@ -118,15 +118,15 @@ await camera(150, 84, 160, -Math.PI / 4, 0.55);
 await shot('08b-motorway-sound-wall');
 await camera(95, 148, 600, Math.PI / 4, 0.85);
 await shot('09-airfield');
-await hook(() => window.__slimcity.setOverlay('trash'));
+await hook(() => window.__cityvi.setOverlay('trash'));
 await camera(TOWN.landfill.x0 + TOWN.landfill.w / 2, TOWN.landfill.z0 + 1, 360, 0, 1.1);
 await shot('10-trash-lens');
-await hook(() => window.__slimcity.setOverlay(null));
-await hook(() => window.__slimcity.setDayT(0.96));
+await hook(() => window.__cityvi.setOverlay(null));
+await hook(() => window.__cityvi.setDayT(0.96));
 await camera(90, 100, 1200, Math.PI / 5, 0.9);
 await shot('11-night');
 
-console.log('stats', JSON.stringify(await hook(() => window.__slimcity.getStats())));
-console.log('farm kit', JSON.stringify(await hook(() => window.__slimcity.farmKit())));
+console.log('stats', JSON.stringify(await hook(() => window.__cityvi.getStats())));
+console.log('farm kit', JSON.stringify(await hook(() => window.__cityvi.farmKit())));
 console.log('page errors', errors.length ? errors : 'none');
 await browser.close();

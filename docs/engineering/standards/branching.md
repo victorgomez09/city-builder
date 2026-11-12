@@ -12,7 +12,7 @@ this document says so rather than inventing a convention.
   `tree-shadows`, `turn-centerline`, `turn-markings-all-tiers`,
   `feat/night-lighting-and-audio`.
 - `release-please` maintains its own rolling branch
-  (`release-please--branches--main--components--slimcity`) automatically —
+  (`release-please--branches--main--components--cityvi`) automatically —
   never create or push to it by hand.
 - `ci.yml` runs on every push to `main` and every PR targeting `main`
   (`typecheck`, `lint`, `test`, `build`); there is no branch-protection

@@ -61,7 +61,7 @@ swallowing.
 
 ```ts
 void main().catch((err: unknown) => {
-  console.error('SlimCity failed to boot:', err);
+  console.error('CityVI failed to boot:', err);
 });
 ```
 

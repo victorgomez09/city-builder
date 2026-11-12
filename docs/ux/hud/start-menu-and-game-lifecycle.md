@@ -4,7 +4,7 @@ A full-screen overlay, distinct from every panel above in that it replaces
 the whole screen rather than floating over the viewport. It shows on first
 load as the start screen, and reopens as a pause overlay over a running
 game (from the corner Menu button, or Escape). Either way it is the same
-component, composing a self-generated **SlimCity** brand mark over five
+component, composing a self-generated **CityVI** brand mark over five
 stacked actions: **Resume Game** (present only over a running game, and
 first in the stack there, since leaving is the common reason to open the
 overlay), **New Game**, **Save Game**, **Load Game**, and **Options**, plus

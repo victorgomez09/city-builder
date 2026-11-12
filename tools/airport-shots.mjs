@@ -43,9 +43,9 @@ page.on('console', (m) => {
 await page.addInitScript(
   ([session]) => {
     try {
-      sessionStorage.setItem('slimcity.session', JSON.stringify(session));
+      sessionStorage.setItem('cityvi.session', JSON.stringify(session));
       localStorage.setItem(
-        'slimcity.settings',
+        'cityvi.settings',
         JSON.stringify({ sandboxUnlockAll: true, unlimitedMoney: true }),
       );
     } catch (e) {
@@ -62,16 +62,16 @@ try {
   await hooksReady(page);
   const cam = tileCamera(page);
   const send = (label, commands) =>
-    page.evaluate(([l, c]) => window.__slimcity.cmd(l, c), [label, commands]);
+    page.evaluate(([l, c]) => window.__cityvi.cmd(l, c), [label, commands]);
   await send('Sandbox', [{ kind: 'setSandbox', on: true }]);
   await send('Money', [{ kind: 'setUnlimitedMoney', on: true }]);
   await page.evaluate(() => {
-    window.__slimcity.setSpeed(0);
-    window.__slimcity.setDayT(0.5);
+    window.__cityvi.setSpeed(0);
+    window.__cityvi.setDayT(0.5);
   });
 
   // Dry ground for the street and the plot south of it.
-  const g = await page.evaluate(() => window.__slimcity.readGrid());
+  const g = await page.evaluate(() => window.__cityvi.readGrid());
   const N = g.size;
   const idx = (x, z) => z * N + x;
   const dry = (x, z, h0) =>
@@ -104,7 +104,7 @@ try {
   await page.evaluate(
     ([x, z, w, h, level]) => {
       const heights = new Float32Array(w * h).fill(level);
-      window.__slimcity.cmd('Level site', [{ kind: 'terraformSet', x, z, w, h, heights }]);
+      window.__cityvi.cmd('Level site', [{ kind: 'terraformSet', x, z, w, h, heights }]);
     },
     [X - 2, Z0 - 1, STREET_TILES + 4, ROWS + 2, h0],
   );
@@ -122,21 +122,21 @@ try {
   ]);
   await page.waitForTimeout(3000);
 
-  const standing = await page.evaluate(() => window.__slimcity.readBuildings());
+  const standing = await page.evaluate(() => window.__cityvi.readBuildings());
   console.log(
     'standing',
     JSON.stringify(standing.map((b) => `${b.catalogId}@${b.x},${b.z}:${b.state}`)),
   );
   if (!standing.some((b) => b.catalogId === AIRPORT.id)) throw new Error('airport not standing');
 
-  const T = await page.evaluate(() => window.__slimcity.tileMeters());
+  const T = await page.evaluate(() => window.__cityvi.tileMeters());
   // Plot centre in tiles, and a point in the airport's local frame (local +Z is south, away from the street).
   const cx = AX + AIRPORT.w / 2;
   const cz = AZ + AIRPORT.d / 2;
   const local = (lx, lz) => [cx + lx / T - 0.5, cz + lz / T - 0.5];
   // A car on the street at the terminal's entrance, for scale.
   await page.evaluate(
-    ([list]) => window.__slimcity.setVehicles(list),
+    ([list]) => window.__cityvi.setVehicles(list),
     [[{ x: cx * T, z: (road + 0.5) * T, heading: Math.PI / 2, kind: CAR }]],
   );
 
@@ -158,8 +158,8 @@ try {
   await restore();
 
   await page.evaluate((t) => {
-    window.__slimcity.setDayT(t);
-    window.__slimcity.cmd('Phase', [{ kind: 'setUnlimitedMoney', on: true }]);
+    window.__cityvi.setDayT(t);
+    window.__cityvi.cmd('Phase', [{ kind: 'setUnlimitedMoney', on: true }]);
   }, NIGHT);
   await page.waitForTimeout(2000);
   await shoot('airport-night', local(0, 0), 320, 0.4);

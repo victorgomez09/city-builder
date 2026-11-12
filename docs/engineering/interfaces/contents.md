@@ -8,5 +8,5 @@
 - [6. The world grid and persistence](6-the-world-grid-and-persistence.md)
 - [7. The simulation snapshot](7-the-simulation-snapshot.md)
 - [8. Invariants](8-invariants.md)
-- [9. The dev read-back surface: `window.__slimcity`](9-the-dev-read-back-surface-window__slimcity.md#9-the-dev-read-back-surface-windowslimcity)
+- [9. The dev read-back surface: `window.__cityvi`](9-the-dev-read-back-surface-window__cityvi.md#9-the-dev-read-back-surface-windowcityvi)
 - [10. Data files as interfaces](10-data-files-as-interfaces.md)

@@ -56,7 +56,7 @@ Back to [the index](../GROUND-TRUTHS.md).
   `src/shared/roadprofile.ts`
 - [R-saves-011] `SaveHeader.savedAt` is stamped on the main thread; the worker writes 0. —
   [interfaces.md](../engineering/interfaces/README.md)
-- [R-saves-012] The app has no backend. State lives in tab memory, IndexedDB (`slimcity` /
+- [R-saves-012] The app has no backend. State lives in tab memory, IndexedDB (`cityvi` /
   `saves`, at most 10), `localStorage` and `sessionStorage`; nothing fetches an
   API. — [constraints.md](../engineering/constraints.md),
   [data-model.md](../engineering/data-model/README.md)

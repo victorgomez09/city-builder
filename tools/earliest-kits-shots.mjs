@@ -24,7 +24,7 @@ page.on('pageerror', (e) => errors.push(e.message));
 await page.addInitScript(() => {
   try {
     sessionStorage.setItem(
-      'slimcity.session',
+      'cityvi.session',
       JSON.stringify({ screen: 'playing', seed: 12345, mode: 'new' }),
     );
   } catch (e) {
@@ -38,7 +38,7 @@ await hooksReady(page);
 await page.waitForTimeout(3000);
 
 const hook = (fn, arg) => page.evaluate(fn, arg);
-const cmd = (label, commands) => hook(([l, c]) => window.__slimcity.cmd(l, c), [label, commands]);
+const cmd = (label, commands) => hook(([l, c]) => window.__cityvi.cmd(l, c), [label, commands]);
 const camera = tileCamera(page);
 const shot = async (name, settle = 1800) => {
   await page.waitForTimeout(settle);
@@ -48,7 +48,7 @@ const shot = async (name, settle = 1800) => {
 
 // A dry, flat block: 40 tiles along the street, 10 rows north of it for the
 // plants and 12 south for the shore kits and their pond.
-const g0 = await hook(() => window.__slimcity.readGrid());
+const g0 = await hook(() => window.__cityvi.readGrid());
 const N = g0.size;
 const idx = (x, z) => z * N + x;
 let anchor = null;
@@ -72,8 +72,8 @@ if (!anchor) {
 const { x: X, z: Z } = anchor;
 console.log('anchor', JSON.stringify(anchor));
 
-await hook(() => window.__slimcity.setDayT(0.5));
-await hook(() => window.__slimcity.setSpeed(0));
+await hook(() => window.__cityvi.setDayT(0.5));
+await hook(() => window.__cityvi.setSpeed(0));
 await cmd('Sandbox', [{ kind: 'setSandbox', on: true }]);
 await cmd('Money', [{ kind: 'setUnlimitedMoney', on: true }]);
 await page.waitForTimeout(300);
@@ -87,7 +87,7 @@ await hook(
     for (let row = 0; row < h; row++) {
       for (let col = 0; col < w; col++) heights[row * w + col] = row >= pondRow ? -1.5 : 2.0;
     }
-    window.__slimcity.cmd('Pond', [{ kind: 'terraformSet', x, z, w, h, heights }]);
+    window.__cityvi.cmd('Pond', [{ kind: 'terraformSet', x, z, w, h, heights }]);
   },
   [X - 3, Z - 12, 44, 23, 15],
 );
@@ -123,7 +123,7 @@ for (const s of Object.values(sites)) await place(s.id, s.x, s.z, 0);
 await page.waitForTimeout(1200);
 
 const standing = await hook(() =>
-  window.__slimcity
+  window.__cityvi
     .readBuildings()
     .filter((b) =>
       [
@@ -141,11 +141,11 @@ const standing = await hook(() =>
 );
 console.log('standing', JSON.stringify(standing));
 
-const T = await hook(() => window.__slimcity.tileMeters());
+const T = await hook(() => window.__cityvi.tileMeters());
 // Cars on the street for scale, one before each kit.
 await hook(
   ([tile, x, z]) =>
-    window.__slimcity.setVehicles(
+    window.__cityvi.setVehicles(
       [3, 8, 13.5, 19, 23, 2, 8, 13.5].map((dx, i) => ({
         x: (x + dx) * tile,
         z: (z + (i % 2 ? 0.35 : 0.65)) * tile,
@@ -185,7 +185,7 @@ for (const [name, tx, tz, d, yaw, pitch] of views) {
   await shot(name);
 }
 
-await hook(() => window.__slimcity.setDayT(0.96));
+await hook(() => window.__cityvi.setDayT(0.96));
 await cmd('Phase', [{ kind: 'setUnlimitedMoney', on: true }]);
 await page.waitForTimeout(2000);
 for (const [name, tx, tz, d, yaw, pitch] of [

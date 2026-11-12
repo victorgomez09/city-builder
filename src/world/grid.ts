@@ -1,5 +1,5 @@
 /**
- * SlimCity world grid: the layered tile-grid data model plus
+ * CityVI world grid: the layered tile-grid data model plus
  * pure buildability/zoning/bulldoze logic. No three.js/DOM here — this is
  * the sim-worker-owned model, unit-testable without a GPU.
  */

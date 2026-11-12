@@ -60,7 +60,7 @@ verified against `.github/workflows/release.yml`:
    (`vX.Y.Z`, `include-v-in-tag: true`), and publishes a GitHub Release.
 4. That same workflow's `deploy` job (gated on
    `release-please.outputs.release_created`) then builds the SPA with
-   `BASE_PATH: /SlimCityGame/` and deploys it to GitHub Pages.
+   `BASE_PATH: /CityVIGame/` and deploys it to GitHub Pages.
 
 **Never tag a release by hand, never hand-edit `package.json`'s version or
 `CHANGELOG.md`.** The commit history is the only source of truth

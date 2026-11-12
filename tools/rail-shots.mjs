@@ -24,7 +24,7 @@ page.on('pageerror', (e) => console.log('[pageerror]', e.message));
 await page.addInitScript(() => {
   try {
     sessionStorage.setItem(
-      'slimcity.session',
+      'cityvi.session',
       JSON.stringify({ screen: 'playing', seed: 12345, mode: 'new' }),
     );
   } catch (e) {
@@ -37,11 +37,11 @@ await page.waitForSelector('#viewport canvas', { timeout: 20000 });
 await page.waitForTimeout(4000);
 
 const call = (fn, ...a) => page.evaluate(fn, ...a);
-const cmd = (l, c) => call(([x, y]) => window.__slimcity.cmd(x, y), [l, c]);
-const readGrid = () => call(() => window.__slimcity.readGrid());
-const readBuildings = () => call(() => window.__slimcity.readBuildings());
-const stats = () => call(() => window.__slimcity.getStats());
-const setSpeed = (s) => call((x) => window.__slimcity.setSpeed(x), s);
+const cmd = (l, c) => call(([x, y]) => window.__cityvi.cmd(x, y), [l, c]);
+const readGrid = () => call(() => window.__cityvi.readGrid());
+const readBuildings = () => call(() => window.__cityvi.readBuildings());
+const stats = () => call(() => window.__cityvi.getStats());
+const setSpeed = (s) => call((x) => window.__cityvi.setSpeed(x), s);
 const cam = tileCamera(page);
 
 const g0 = await readGrid();
@@ -169,7 +169,7 @@ for (let i = 0; i < 500; i++) {
 }
 
 const transit = await call(() => {
-  const s = window.__slimcity.readTransit ? window.__slimcity.readTransit() : null;
+  const s = window.__cityvi.readTransit ? window.__cityvi.readTransit() : null;
   return s;
 });
 console.log('transit snapshot:', JSON.stringify(transit));
@@ -236,7 +236,7 @@ const trainShot = async (name, tx, tz, d, yaw, pitch, minPixels = 300) => {
 };
 
 // A line's trains are drawn only under the transit lens, as every line's vehicles are.
-await call(() => window.__slimcity.setOverlay('transit'));
+await call(() => window.__cityvi.setOverlay('transit'));
 await page.waitForTimeout(500);
 // From the north, so the platform and track are in front of the station.
 const NORTH = Math.PI;

@@ -30,10 +30,10 @@ page.on('pageerror', (e) => {
 await page.addInitScript(() => {
   try {
     sessionStorage.setItem(
-      'slimcity.session',
+      'cityvi.session',
       JSON.stringify({ screen: 'playing', seed: 12345, mode: 'new' }),
     );
-    localStorage.setItem('slimcity.settings', JSON.stringify({ sandboxUnlockAll: true }));
+    localStorage.setItem('cityvi.settings', JSON.stringify({ sandboxUnlockAll: true }));
   } catch (e) {
     void e;
   }
@@ -43,11 +43,11 @@ await page.waitForSelector('#viewport canvas', { timeout: 20000 });
 await page.waitForTimeout(4000);
 
 const call = (fn, ...a) => page.evaluate(fn, ...a);
-const cmd = (l, c) => call(([x, y]) => window.__slimcity.cmd(x, y), [l, c]);
-const stats = () => call(() => window.__slimcity.getStats());
+const cmd = (l, c) => call(([x, y]) => window.__cityvi.cmd(x, y), [l, c]);
+const stats = () => call(() => window.__cityvi.getStats());
 
 const g = await call(() => {
-  const r = window.__slimcity.readGrid();
+  const r = window.__cityvi.readGrid();
   // Summarise INSIDE the page: handing 10 full layers across the boundary is
   // itself tens of megabytes, and a probe that perturbs what it measures is
   // worse than no probe.
@@ -142,7 +142,7 @@ await cmd('S', [
 const sample = () =>
   call(() => {
     const m = performance.memory;
-    const s = window.__slimcity.getStats();
+    const s = window.__cityvi.getStats();
     return {
       heapMB: m ? Math.round(m.usedJSHeapSize / 1048576) : -1,
       limitMB: m ? Math.round(m.jsHeapSizeLimit / 1048576) : -1,
@@ -152,7 +152,7 @@ const sample = () =>
     };
   });
 
-await call((x) => window.__slimcity.setSpeed(x), 4);
+await call((x) => window.__cityvi.setSpeed(x), 4);
 console.log(' t(s)  pop     heapMB  power MW d/s   water kL d/s  allocFail');
 for (let t = 0; t <= budget; t += 10) {
   await page.waitForTimeout(10000);

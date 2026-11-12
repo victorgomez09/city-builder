@@ -31,7 +31,7 @@ page.on('console', (m) => {
 await page.addInitScript(() => {
   try {
     sessionStorage.setItem(
-      'slimcity.session',
+      'cityvi.session',
       JSON.stringify({ screen: 'playing', seed: 12345, mode: 'new' }),
     );
   } catch (e) {
@@ -56,7 +56,7 @@ try {
 
   const hook = (fn, arg) => page.evaluate(fn, arg);
   const cmd = (label, commands) =>
-    hook(([l, c]) => window.__slimcity.cmd(l, c), [label, commands]);
+    hook(([l, c]) => window.__cityvi.cmd(l, c), [label, commands]);
   const camera = tileCamera(page);
   const shot = async (name, settle = 1800) => {
     await page.waitForTimeout(settle);
@@ -65,7 +65,7 @@ try {
   };
 
   // A dry, flat block: 40 tiles along the street, 10 rows each side of it.
-  const g0 = await hook(() => window.__slimcity.readGrid());
+  const g0 = await hook(() => window.__cityvi.readGrid());
   const N = g0.size;
   const idx = (x, z) => z * N + x;
   let anchor = null;
@@ -88,8 +88,8 @@ try {
   const { x: X, z: Z } = anchor;
   console.log('anchor', JSON.stringify(anchor));
 
-  await hook(() => window.__slimcity.setDayT(0.5));
-  await hook(() => window.__slimcity.setSpeed(0));
+  await hook(() => window.__cityvi.setDayT(0.5));
+  await hook(() => window.__cityvi.setSpeed(0));
   await cmd('Sandbox', [{ kind: 'setSandbox', on: true }]);
   await cmd('Money', [{ kind: 'setUnlimitedMoney', on: true }]);
   await page.waitForTimeout(300);
@@ -98,7 +98,7 @@ try {
   await hook(
     ([x, z, w, h]) => {
       const heights = new Float32Array(w * h).fill(2.0);
-      window.__slimcity.cmd('Plateau', [{ kind: 'terraformSet', x, z, w, h, heights }]);
+      window.__cityvi.cmd('Plateau', [{ kind: 'terraformSet', x, z, w, h, heights }]);
     },
     [X - 3, Z - 12, 44, 25],
   );
@@ -122,12 +122,12 @@ try {
   await page.waitForTimeout(1200);
 
   const standing = await hook(() =>
-    window.__slimcity.readBuildings().filter((b) => b.catalogId === 'res-low-1').length,
+    window.__cityvi.readBuildings().filter((b) => b.catalogId === 'res-low-1').length,
   );
   console.log('homes standing', standing);
   check(standing === 6, `homes missing (${standing} of 6)`);
 
-  const T = await hook(() => window.__slimcity.tileMeters());
+  const T = await hook(() => window.__cityvi.tileMeters());
   // The six service vehicles in the east lane, one every 1.1 tiles heading east,
   // and a 4 m car in the west lane beside the first.
   const order = ['Fire', 'Police', 'Ambulance', 'Garbage', 'Recycling', 'Hearse'];
@@ -144,16 +144,16 @@ try {
     })),
     { x: startTile * T, z: laneWest * T, heading: -Math.PI / 2, kind: KIND.Car },
   ];
-  await hook((l) => window.__slimcity.setVehicles(l), list);
+  await hook((l) => window.__cityvi.setVehicles(l), list);
   await page.waitForTimeout(600);
-  const drawn = await hook(() => window.__slimcity.readVehicles());
+  const drawn = await hook(() => window.__cityvi.readVehicles());
   console.log('vehicles read back', drawn.length);
   check(drawn.length >= list.length, `vehicles not stood (${drawn.length} of ${list.length})`);
 
   const PITCH = 0.4;
   // Plain view: no tool in hand and no lens.
-  await hook(() => window.__slimcity.setTool('select'));
-  await hook(() => window.__slimcity.setOverlay(null));
+  await hook(() => window.__cityvi.setTool('select'));
+  await hook(() => window.__cityvi.setOverlay(null));
   const midX = startTile + 2.5 * gap;
   await camera(midX, Z + 0.5, 120, 0, PITCH);
   await shot('lineup');
@@ -170,7 +170,7 @@ try {
     { kind: 'crime', x: X + 20.5, z: Z - 1.5, severity: 0.5, answered: true },
     { kind: 'medical', x: X + 24.5, z: Z - 1.5, severity: 0.9, answered: false },
   ];
-  await hook((p) => window.__slimcity.setIncidents(p), pins);
+  await hook((p) => window.__cityvi.setIncidents(p), pins);
   await page.waitForTimeout(600);
   await camera(X + 20.5, Z - 1, 170, 0, 0.7);
   await shot('incident-pins');
@@ -178,11 +178,11 @@ try {
   await shot('incident-pin-close');
 
   // The lineup again at night.
-  await hook(() => window.__slimcity.setDayT(0.96));
+  await hook(() => window.__cityvi.setDayT(0.96));
   await cmd('Phase', [{ kind: 'setUnlimitedMoney', on: true }]);
   await page.waitForTimeout(2000);
   // The command's snapshot clears the parked vehicles; stand them again.
-  await hook((l) => window.__slimcity.setVehicles(l), list);
+  await hook((l) => window.__cityvi.setVehicles(l), list);
   await camera(midX, Z + 0.5, 120, 0, PITCH);
   await shot('lineup-night', 2500);
 

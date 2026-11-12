@@ -103,7 +103,7 @@ trailing default.
 
 There is no compression anywhere in the save path — `SavePayload` is
 concatenated raw bytes, and the grid buffer inside it is uncompressed typed
-arrays. Storage is IndexedDB (`src/app/persist.ts`): database `'slimcity'`,
+arrays. Storage is IndexedDB (`src/app/persist.ts`): database `'cityvi'`,
 object store `'saves'` (auto-incrementing `id`, indexed on `savedAt`). Up to
 `MAX_STORED_SAVES = 10` slots are kept; `storeSave` prunes the oldest beyond
 that on every save. `listSaves`/`getSaveById`/`deleteSave` back a save-slot
@@ -122,6 +122,6 @@ There is no export or import path in the codebase — no file download, no
 file picker, no serialization format other than the IndexedDB record above.
 A save exists only inside the browser profile that made it. Session intent
 ("go straight to gameplay on the next load") lives separately in
-`sessionStorage` (`slimcity.session`), and user settings (audio, bloom,
-sandbox toggles) in `localStorage` (`slimcity.settings`) — neither is part
+`sessionStorage` (`cityvi.session`), and user settings (audio, bloom,
+sandbox toggles) in `localStorage` (`cityvi.settings`) — neither is part
 of a save record, and neither is versioned or migrated the way saves are.

@@ -9,7 +9,7 @@ crossed, and what (if anything) currently stops that from happening.
 
 ## Browser-only, no backend
 
-**What it is:** SlimCity is a static single-page app. There is no server
+**What it is:** CityVI is a static single-page app. There is no server
 component, no API, no account system. State lives in the tab (in-memory)
 and in the browser's IndexedDB (saves) and `localStorage`/`sessionStorage`
 (settings, session intent).

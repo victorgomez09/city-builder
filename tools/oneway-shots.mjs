@@ -28,7 +28,7 @@ page.on('pageerror', (e) => {
 await page.addInitScript(() => {
   try {
     sessionStorage.setItem(
-      'slimcity.session',
+      'cityvi.session',
       JSON.stringify({ screen: 'playing', seed: 12345, mode: 'new' }),
     );
   } catch (e) {
@@ -41,8 +41,8 @@ await page.waitForSelector('#viewport canvas', { timeout: 20000 });
 await page.waitForTimeout(4000);
 
 const call = (fn, ...a) => page.evaluate(fn, ...a);
-const cmd = (l, c) => call(([x, y]) => window.__slimcity.cmd(x, y), [l, c]);
-const readGrid = () => call(() => window.__slimcity.readGrid());
+const cmd = (l, c) => call(([x, y]) => window.__cityvi.cmd(x, y), [l, c]);
+const readGrid = () => call(() => window.__cityvi.readGrid());
 const cam = tileCamera(page);
 
 const g0 = await readGrid();
@@ -108,8 +108,8 @@ if (!(report.drawnSouthward.length === 1 && report.drawnSouthward[0] === FLOW.so
 if (!(report.drawnNorthward.length === 1 && report.drawnNorthward[0] === FLOW.north))
   failures.push(`the northward column stored ${JSON.stringify(report.drawnNorthward)}, not north`);
 
-await call(() => window.__slimcity.setSpeed(0));
-await call(() => window.__slimcity.setDayT(0.5));
+await call(() => window.__cityvi.setSpeed(0));
+await call(() => window.__cityvi.setDayT(0.5));
 const shot = async (name, tx, tz, d, yaw, pitch, scale = 1) => {
   const restore = scale > 1 ? await closeUp(page, scale) : null;
   await cam(tx, tz, d, yaw, pitch);

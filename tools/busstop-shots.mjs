@@ -34,9 +34,9 @@ page.on('pageerror', (e) => console.log('[pageerror]', e.message));
 await page.addInitScript(
   ([session]) => {
     try {
-      sessionStorage.setItem('slimcity.session', JSON.stringify(session));
+      sessionStorage.setItem('cityvi.session', JSON.stringify(session));
       localStorage.setItem(
-        'slimcity.settings',
+        'cityvi.settings',
         JSON.stringify({ sandboxUnlockAll: true, unlimitedMoney: true }),
       );
     } catch (e) {
@@ -52,15 +52,15 @@ try {
   await hooksReady(page);
   const cam = tileCamera(page);
   const send = (label, commands) =>
-    page.evaluate(([l, c]) => window.__slimcity.cmd(l, c), [label, commands]);
+    page.evaluate(([l, c]) => window.__cityvi.cmd(l, c), [label, commands]);
   await send('Sandbox', [{ kind: 'setSandbox', on: true }]);
   await send('Money', [{ kind: 'setUnlimitedMoney', on: true }]);
   await page.evaluate(() => {
-    window.__slimcity.setSpeed(0);
-    window.__slimcity.setDayT(0.5);
+    window.__cityvi.setSpeed(0);
+    window.__cityvi.setDayT(0.5);
   });
 
-  const g = await page.evaluate(() => window.__slimcity.readGrid());
+  const g = await page.evaluate(() => window.__cityvi.readGrid());
   const N = g.size;
   const idx = (x, z) => z * N + x;
   const flatDry = (x, z, h0) =>
@@ -126,15 +126,15 @@ try {
   ]);
   await page.waitForTimeout(1500);
   // Let the depot field its buses, then hold the city still for the shots.
-  await page.evaluate(() => window.__slimcity.setSpeed(4));
+  await page.evaluate(() => window.__cityvi.setSpeed(4));
   await page.waitForTimeout(10000);
-  await page.evaluate(() => window.__slimcity.setSpeed(0));
+  await page.evaluate(() => window.__cityvi.setSpeed(0));
   await page.waitForTimeout(500);
   console.log(
     'depot',
     JSON.stringify(
       await page.evaluate(() =>
-        window.__slimcity
+        window.__cityvi
           .readBuildings()
           .filter((b) => ['bus-depot', 'wind-turbine'].includes(b.catalogId))
           .map((b) => `${b.catalogId}@${b.x},${b.z} state ${b.state} problems ${b.problems}`),
@@ -143,7 +143,7 @@ try {
   );
   console.log(
     'transit',
-    JSON.stringify(await page.evaluate(() => window.__slimcity.readTransit().served)),
+    JSON.stringify(await page.evaluate(() => window.__cityvi.readTransit().served)),
   );
 
   const shoot = async (name, tx, tz, distance, yaw, pitch = DEFAULT_PITCH) => {
@@ -192,7 +192,7 @@ try {
       },
       [a.toString('base64'), b.toString('base64')],
     );
-  await page.evaluate(() => window.__slimcity.setOverlay('transit'));
+  await page.evaluate(() => window.__cityvi.setOverlay('transit'));
   await cam(X + BOTH_AT, Z, 70, 0, DEFAULT_PITCH);
   await page.waitForTimeout(1500);
   let shot = false;
@@ -210,7 +210,7 @@ try {
     await page.screenshot({ path: `${out}/bus-at-shelter-missing.png` });
     throw new Error('no bus came into frame for bus-at-shelter');
   }
-  await page.evaluate(() => window.__slimcity.setOverlay(null));
+  await page.evaluate(() => window.__cityvi.setOverlay(null));
 
   const back = await closeUp(page, 2);
   // Both roads and the stops on them, close enough to read.

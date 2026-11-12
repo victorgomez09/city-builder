@@ -33,7 +33,7 @@ await unlimitedMoneyOption(page);
 await page.addInitScript(() => {
   try {
     sessionStorage.setItem(
-      'slimcity.session',
+      'cityvi.session',
       JSON.stringify({ screen: 'playing', seed: 12345, mode: 'new' }),
     );
   } catch (e) {
@@ -45,9 +45,9 @@ await page.waitForSelector('#viewport canvas', { timeout: 20000 });
 await page.waitForTimeout(4000);
 
 const call = (fn, ...a) => page.evaluate(fn, ...a);
-const cmd = (l, c) => call(([x, y]) => window.__slimcity.cmd(x, y), [l, c]);
-const readGrid = () => call(() => window.__slimcity.readGrid());
-const approach = (x, z) => call(([ax, az]) => window.__slimcity.readApproach(ax, az), [x, z]);
+const cmd = (l, c) => call(([x, y]) => window.__cityvi.cmd(x, y), [l, c]);
+const readGrid = () => call(() => window.__cityvi.readGrid());
+const approach = (x, z) => call(([ax, az]) => window.__cityvi.readApproach(ax, az), [x, z]);
 const cam = tileCamera(page);
 
 const g0 = await readGrid();
@@ -178,7 +178,7 @@ await page.waitForTimeout(2500);
 // Whether the crossing registered as a junction at all, before asking what the
 // approach to it looks like: an approach that reports no junction and a
 // junction that was never made are different faults with the same read-back.
-const junctions = await call(() => window.__slimcity.readJunctions());
+const junctions = await call(() => window.__cityvi.readJunctions());
 const onCorridor = junctions.filter((j) => Math.abs(j.z - (Z + CROSS_Z)) <= 1);
 console.log('junctions on the crossing row:', JSON.stringify(onCorridor));
 if (onCorridor.length === 0)
@@ -199,7 +199,7 @@ for (const [name, x, side] of [
   for (let d = 1; d <= ZONE + 1; d++) {
     const a = await approach(X + x, Z + CROSS_Z + side * d);
     const m = await call(
-      ([ax, az]) => window.__slimcity.readDrawn(ax, az),
+      ([ax, az]) => window.__cityvi.readDrawn(ax, az),
       [X + x, Z + CROSS_Z + side * d],
     );
     down.push({

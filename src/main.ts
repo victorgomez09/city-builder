@@ -1,5 +1,5 @@
 /**
- * SlimCity render-thread boot: creates the renderer,
+ * CityVI render-thread boot: creates the renderer,
  * builds the world from the procedural map, spawns the sim worker, and wires
  * snapshots/acks/fields into the renderers, the zustand UI store, the tool
  * manager + undo stack, and IndexedDB persistence.
@@ -258,7 +258,7 @@ async function startGame(session: Extract<AppSession, { screen: 'playing' }>): P
   const viewport = document.getElementById('viewport');
   const uiRoot = document.getElementById('ui-root');
   if (!viewport || !uiRoot) {
-    throw new Error('SlimCity: #viewport / #ui-root missing from index.html');
+    throw new Error('CityVI: #viewport / #ui-root missing from index.html');
   }
 
   // Seed + optional load payload: a Load Game intent carries no fresh seed of
@@ -612,7 +612,7 @@ async function startGame(session: Extract<AppSession, { screen: 'playing' }>): P
     heightPatches: 0,
   };
   if (import.meta.env.DEV) {
-    (window as unknown as Record<string, unknown>).__slimcity = {
+    (window as unknown as Record<string, unknown>).__cityvi = {
       map,
       snapshotCounts: (): Record<string, number> => ({ ...snapshotCounts }),
       freeRoadTriangles: (): number => freeRoads.triangleCount(),
@@ -1748,12 +1748,12 @@ async function startGame(session: Extract<AppSession, { screen: 'playing' }>): P
     return inBounds(x, z) ? { x, z } : null;
   };
 
-  // Second half of the dev-only __slimcity smoke hook (the first half is
+  // Second half of the dev-only __cityvi smoke hook (the first half is
   // declared above, before screenToTile exists): pixel->tile
   // picking so screenshot scripts can aim tools at exact tiles instead of
   // dead-reckoning the camera projection. Stripped from production builds.
   if (import.meta.env.DEV) {
-    const hook = (window as unknown as Record<string, unknown>).__slimcity;
+    const hook = (window as unknown as Record<string, unknown>).__cityvi;
     if (hook && typeof hook === 'object') {
       (hook as Record<string, unknown>).screenToTile = screenToTile;
       // Audio can only be judged in a real browser (jsdom has no WebAudio and
@@ -3144,7 +3144,7 @@ async function startGame(session: Extract<AppSession, { screen: 'playing' }>): P
     try {
       bloomPipeline = createBloomPipeline(handle.renderer, world.scene, camera);
     } catch (err) {
-      console.warn('SlimCity: bloom pipeline unavailable, rendering without post-FX:', err);
+      console.warn('CityVI: bloom pipeline unavailable, rendering without post-FX:', err);
       bloomPipeline = null;
     }
   }
@@ -3220,7 +3220,7 @@ async function main(): Promise<void> {
   // screen === 'menu'); no world/worker exists until New/Load Game reloads
   // into startGame() above.
   const uiRoot = document.getElementById('ui-root');
-  if (!uiRoot) throw new Error('SlimCity: #ui-root missing');
+  if (!uiRoot) throw new Error('CityVI: #ui-root missing');
   const store = useCityStore.getState();
   store.setScreen('menu');
   store.bindActions({
@@ -3237,5 +3237,5 @@ async function main(): Promise<void> {
 }
 
 void main().catch((err: unknown) => {
-  console.error('SlimCity failed to boot:', err);
+  console.error('CityVI failed to boot:', err);
 });

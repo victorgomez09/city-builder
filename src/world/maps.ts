@@ -1,5 +1,5 @@
 /**
- * SlimCity map data: a deterministic procedural
+ * CityVI map data: a deterministic procedural
  * fallback terrain generator, plus a pure raster-to-grid resampler for
  * AI-generated map packs. No I/O and no three.js/DOM here — PNG decoding to
  * pixels happens elsewhere; this module only turns numbers into numbers.

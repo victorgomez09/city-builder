@@ -1,5 +1,5 @@
 /**
- * SlimCity roads on the grid: road tile edits (neighbor-mask auto-tiling,
+ * CityVI roads on the grid: road tile edits (neighbor-mask auto-tiling,
  * tier upgrades, dezoning) and the joining rules the masks follow. The graph
  * routing runs on is src/world/roadgraph.ts. Pure logic over GridState — no
  * three.js, no DOM.

@@ -1,4 +1,4 @@
-/** Deterministic town builder via the __slimcity.cmd/readGrid dev hooks —
+/** Deterministic town builder via the __cityvi.cmd/readGrid dev hooks —
  * no screen picking. Builds roads + utilities + zones by exact tile, proves
  * road-carried power on the lens, grows to milestone 1, then captures the
  * M1-gated roads (avenue median, one-way arrows, four-lane). */
@@ -21,7 +21,7 @@ page.on('pageerror', (e) => console.log(`[pageerror] ${e.message}`));
 await page.addInitScript(
   (v) => {
     try {
-      sessionStorage.setItem('slimcity.session', JSON.stringify(v));
+      sessionStorage.setItem('cityvi.session', JSON.stringify(v));
     } catch (e) {
       void e;
     }
@@ -33,13 +33,13 @@ await page.goto(url, { waitUntil: 'domcontentloaded' });
 await page.waitForSelector('#viewport canvas', { timeout: 30000 });
 await page.waitForTimeout(4000);
 
-const ready = () => page.waitForFunction(() => !!window.__slimcity && !!window.__slimcity.cmd, null, { timeout: 120000 });
+const ready = () => page.waitForFunction(() => !!window.__cityvi && !!window.__cityvi.cmd, null, { timeout: 120000 });
 const call = async (fn, ...a) => { await ready(); return page.evaluate(fn, ...a); };
-const cmd = (label, commands) => call(([l, c]) => window.__slimcity.cmd(l, c), [label, commands]);
-const readGrid = () => call(() => window.__slimcity.readGrid());
-const stats = () => call(() => window.__slimcity.getStats());
-const setSpeed = (s) => call((x) => window.__slimcity.setSpeed(x), s);
-const setOverlay = (o) => call((x) => window.__slimcity.setOverlay(x), o);
+const cmd = (label, commands) => call(([l, c]) => window.__cityvi.cmd(l, c), [label, commands]);
+const readGrid = () => call(() => window.__cityvi.readGrid());
+const stats = () => call(() => window.__cityvi.getStats());
+const setSpeed = (s) => call((x) => window.__cityvi.setSpeed(x), s);
+const setOverlay = (o) => call((x) => window.__cityvi.setOverlay(x), o);
 const cam = tileCamera(page);
 
 const g = await readGrid();
@@ -100,7 +100,7 @@ await page.waitForTimeout(1000);
 console.log('after utilities:', JSON.stringify(await stats()));
 
 // Power lens over the arterial.
-await call(() => window.__slimcity.setDayT(0.5));
+await call(() => window.__cityvi.setDayT(0.5));
 await cam((X0 + X1) / 2, ROADZ1, 260);
 await page.waitForTimeout(500);
 await setOverlay('power');
@@ -134,7 +134,7 @@ while (s.milestoneLevel < 1 && Date.now() - t0 < GROW_BUDGET_MS) {
   console.log(`t+${Math.round((Date.now() - t0) / 1000)}s pop=${s.population} jobs=${s.jobs} emp=${s.employed} pwrSup=${s.powerSupply} watSup=${s.waterSupply} ms=${s.milestoneLevel}`);
 }
 await setSpeed(0);
-await call(() => window.__slimcity.setDayT(0.5));
+await call(() => window.__cityvi.setDayT(0.5));
 await page.waitForTimeout(500);
 console.log(`grew to pop=${s.population} ms=${s.milestoneLevel}`);
 await cam((X0 + X1) / 2, ROADZ1, 240);
@@ -161,9 +161,9 @@ if (s.milestoneLevel >= 1) {
   console.log('MILESTONE 1 NOT REACHED');
   // Say why: what stands, how much zoned ground is still empty, and what the advisor names.
   const facts = await call(() => {
-    const gr = window.__slimcity.readGrid();
+    const gr = window.__cityvi.readGrid();
     const counts = {};
-    for (const bd of window.__slimcity.readBuildings()) counts[bd.catalogId] = (counts[bd.catalogId] ?? 0) + 1;
+    for (const bd of window.__cityvi.readBuildings()) counts[bd.catalogId] = (counts[bd.catalogId] ?? 0) + 1;
     const zoned = {};
     for (let i = 0; i < gr.zone.length; i++)
       if (gr.zone[i]) {

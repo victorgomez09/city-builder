@@ -34,7 +34,7 @@ page.on('pageerror', (e) => {
 await page.addInitScript(() => {
   try {
     sessionStorage.setItem(
-      'slimcity.session',
+      'cityvi.session',
       JSON.stringify({ screen: 'playing', seed: 12345, mode: 'new' }),
     );
   } catch (e) {
@@ -47,9 +47,9 @@ await page.waitForSelector('#viewport canvas', { timeout: 20000 });
 await page.waitForTimeout(4000);
 
 const call = (fn, ...a) => page.evaluate(fn, ...a);
-const cmd = (l, c) => call(([x, y]) => window.__slimcity.cmd(x, y), [l, c]);
-const readGrid = () => call(() => window.__slimcity.readGrid());
-const approach = (x, z) => call(([ax, az]) => window.__slimcity.readApproach(ax, az), [x, z]);
+const cmd = (l, c) => call(([x, y]) => window.__cityvi.cmd(x, y), [l, c]);
+const readGrid = () => call(() => window.__cityvi.readGrid());
+const approach = (x, z) => call(([ax, az]) => window.__cityvi.readApproach(ax, az), [x, z]);
 const cam = tileCamera(page);
 
 const g0 = await readGrid();
@@ -176,7 +176,7 @@ for (const x of [ON.x + 1, ON.mergeX - 1]) {
 // signalised at.
 const controlAt = (x, z) =>
   call(
-    ([cx, cz]) => (window.__slimcity.readJunctions() ?? []).find((j) => j.x === cx && j.z === cz),
+    ([cx, cz]) => (window.__cityvi.readJunctions() ?? []).find((j) => j.x === cx && j.z === cz),
     [x, z],
   );
 const atMotorway = await controlAt(X + ON.mergeX, Z + HWY);

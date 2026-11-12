@@ -29,7 +29,7 @@ page.on('pageerror', (e) => {
 await page.addInitScript(() => {
   try {
     sessionStorage.setItem(
-      'slimcity.session',
+      'cityvi.session',
       JSON.stringify({ screen: 'playing', seed: 12345, mode: 'new' }),
     );
   } catch (e) {
@@ -42,9 +42,9 @@ await page.waitForSelector('#viewport canvas', { timeout: 20000 });
 await page.waitForTimeout(4000);
 
 const call = (fn, ...a) => page.evaluate(fn, ...a);
-const cmd = (l, c) => call(([x, y]) => window.__slimcity.cmd(x, y), [l, c]);
-const readGrid = () => call(() => window.__slimcity.readGrid());
-const signs = () => call(() => window.__slimcity.readSigns());
+const cmd = (l, c) => call(([x, y]) => window.__cityvi.cmd(x, y), [l, c]);
+const readGrid = () => call(() => window.__cityvi.readGrid());
+const signs = () => call(() => window.__cityvi.readSigns());
 const cam = tileCamera(page);
 
 const g0 = await readGrid();
@@ -156,7 +156,7 @@ await cmd('allway', [{ kind: 'setJunctionControl', x: X + 20, z: Z + 22, control
 await page.waitForTimeout(3500);
 
 const failures = [];
-const lampPoles = await call(() => window.__slimcity.readLampPoles());
+const lampPoles = await call(() => window.__cityvi.readLampPoles());
 console.log('lamps standing:', lampPoles.length);
 if (lampPoles.length === 0) failures.push('no street lamp stood on the powered streets');
 const all = await signs();
@@ -164,7 +164,7 @@ console.log('signs laid:', all.length);
 
 // Every kerb prop that actually went out. A manhole cover is 1 m across on a
 // tile many times that, so counting them is the only way to know they exist.
-const counts = await call(() => window.__slimcity.readFurnitureCounts());
+const counts = await call(() => window.__cityvi.readFurnitureCounts());
 console.log('furniture:', JSON.stringify(counts));
 if (counts.manholes === 0)
   failures.push('not one manhole cover on a city full of paved road — sewers under all but dirt');
@@ -172,7 +172,7 @@ if (counts.meters === 0) failures.push('no meters on the street that has parking
 
 // Both cabinets should turn up on a city with this much kerb — a street of
 // identical boxes is what the mix exists to avoid.
-const cabinets = await call(() => window.__slimcity.readCabinets());
+const cabinets = await call(() => window.__cityvi.readCabinets());
 const pedestals = cabinets.filter((c) => c.kind === 'pedestal');
 console.log('cabinets:', JSON.stringify({ total: cabinets.length, pedestals: pedestals.length }));
 if (pedestals.length === 0) failures.push('not one round telco pedestal among the cabinets');
@@ -234,8 +234,8 @@ for (const [name, tx, tz, d, yaw, pitch] of shots) {
 // After dark, to read the lanterns' pools on the road. The pin only takes
 // effect while the sim runs a snapshot, so the speed is set around it.
 await call(() => {
-  window.__slimcity.setSpeed(1);
-  window.__slimcity.setDayT(3 / 24);
+  window.__cityvi.setSpeed(1);
+  window.__cityvi.setDayT(3 / 24);
 });
 await page.waitForTimeout(800);
 for (const [name, tx, tz, d, yaw, pitch] of [

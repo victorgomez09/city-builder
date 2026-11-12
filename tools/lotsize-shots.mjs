@@ -62,10 +62,10 @@ await unlimitedMoneyOption(page);
 await page.addInitScript(
   ([session]) => {
     try {
-      sessionStorage.setItem('slimcity.session', JSON.stringify(session));
-      const saved = JSON.parse(localStorage.getItem('slimcity.settings') ?? '{}');
+      sessionStorage.setItem('cityvi.session', JSON.stringify(session));
+      const saved = JSON.parse(localStorage.getItem('cityvi.settings') ?? '{}');
       localStorage.setItem(
-        'slimcity.settings',
+        'cityvi.settings',
         JSON.stringify({ ...saved, sandboxUnlockAll: true, unlimitedMoney: true }),
       );
     } catch (e) {
@@ -82,16 +82,16 @@ try {
   const cam = tileCamera(page);
   const T = await tileMeters(page);
   const send = (label, commands) =>
-    page.evaluate(([l, c]) => window.__slimcity.cmd(l, c), [label, commands]);
-  const readBuildings = () => page.evaluate(() => window.__slimcity.readBuildings());
+    page.evaluate(([l, c]) => window.__cityvi.cmd(l, c), [label, commands]);
+  const readBuildings = () => page.evaluate(() => window.__cityvi.readBuildings());
   await send('Sandbox', [{ kind: 'setSandbox', on: true }]);
   await send('Money', [{ kind: 'setUnlimitedMoney', on: true }]);
   await page.evaluate(() => {
-    window.__slimcity.setSpeed(0);
-    window.__slimcity.setDayT(0.5);
+    window.__cityvi.setSpeed(0);
+    window.__cityvi.setDayT(0.5);
   });
 
-  const g = await page.evaluate(() => window.__slimcity.readGrid());
+  const g = await page.evaluate(() => window.__cityvi.readGrid());
   const N = g.size;
   const idx = (x, z) => z * N + x;
   const flatDry = (x, z, h0) =>
@@ -188,8 +188,8 @@ try {
   // A paused sim posts a snapshot, which carries the pinned phase to the lighting, only when a command lands.
   const setPhase = async (dayT) => {
     await page.evaluate((t) => {
-      window.__slimcity.setDayT(t);
-      window.__slimcity.cmd('Phase', [{ kind: 'setUnlimitedMoney', on: true }]);
+      window.__cityvi.setDayT(t);
+      window.__cityvi.cmd('Phase', [{ kind: 'setUnlimitedMoney', on: true }]);
     }, dayT);
     await page.waitForTimeout(2000);
   };
@@ -209,7 +209,7 @@ try {
     const cars = [];
     for (const h of spots) {
       const b = standing.find((c) => c.x === h.x && c.z === h.z);
-      const slots = await page.evaluate((id) => window.__slimcity.readHouseCars(id), b.id);
+      const slots = await page.evaluate((id) => window.__cityvi.readHouseCars(id), b.id);
       // The house's centre and its nearest car, in the tile coordinates the camera takes.
       const hx = h.x + fam.w / 2 - 0.5;
       const hz = h.z + fam.d / 2 - 0.5;

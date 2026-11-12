@@ -1,5 +1,5 @@
 /**
- * SlimCity district policies: small,
+ * CityVI district policies: small,
  * explicit, tested economy/pathfind-cost effects applied per-district. Pure —
  * no GridState, no three.js/DOM, no hidden global state. A `PolicyStore`
  * instance is owned by the worker (Command 'setDistrictPolicy' flows into

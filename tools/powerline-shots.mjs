@@ -26,7 +26,7 @@ page.on('pageerror', (e) => {
 await page.addInitScript(() => {
   try {
     sessionStorage.setItem(
-      'slimcity.session',
+      'cityvi.session',
       JSON.stringify({ screen: 'playing', seed: 12345, mode: 'new' }),
     );
   } catch (e) {
@@ -39,9 +39,9 @@ await page.waitForSelector('#viewport canvas', { timeout: 20000 });
 await page.waitForTimeout(4000);
 
 const call = (fn, ...a) => page.evaluate(fn, ...a);
-const cmd = (l, c) => call(([x, y]) => window.__slimcity.cmd(x, y), [l, c]);
-const readGrid = () => call(() => window.__slimcity.readGrid());
-const poles = () => call(() => window.__slimcity.readPowerPoles());
+const cmd = (l, c) => call(([x, y]) => window.__cityvi.cmd(x, y), [l, c]);
+const readGrid = () => call(() => window.__cityvi.readGrid());
+const poles = () => call(() => window.__cityvi.readPowerPoles());
 const cam = tileCamera(page);
 
 const g0 = await readGrid();
@@ -261,12 +261,12 @@ await cleanShot(page, `${out}/substation-300m.png`);
 await cam(X + 24, Z + 1, 110, 0.9, 0.4);
 await page.waitForTimeout(800);
 await cleanShot(page, `${out}/substation-line.png`);
-await call(() => window.__slimcity.setDayT(0.96));
+await call(() => window.__cityvi.setDayT(0.96));
 await page.waitForTimeout(2500);
 await cam(X + 17, Z + 1, 60, 0.6, 0.55);
 await page.waitForTimeout(800);
 await cleanShot(page, `${out}/substation-night.png`);
-await call(() => window.__slimcity.setDayT(0.5));
+await call(() => window.__cityvi.setDayT(0.5));
 
 // The buried cable. A new street with its supply buried along the middle of it:
 // the overhead pole line ends on a riser at each end of the buried stretch, no pole
@@ -304,7 +304,7 @@ await cmd('Cable from the line', [
 ]);
 await page.waitForTimeout(4500);
 const buried = await readGrid();
-const cables = await call(() => window.__slimcity.readPowerCables());
+const cables = await call(() => window.__cityvi.readPowerCables());
 const nowPoles = await poles();
 console.log('cable tiles:', buried.powerLine.filter((v) => v === CABLE).length);
 console.log('boxes:', cables.boxes.length, 'riser guards:', cables.guards);
@@ -364,14 +364,14 @@ await cleanShot(page, `${out}/cable-meets-line-close.png`);
 // The refusal: with the Power Line tool in hand, the cursor over open ground that
 // touches no source and no line says why the run would not stand.
 await cam(X + 14, Z - 12, 200, 0, 1.45);
-await call(() => window.__slimcity.setTool('power.line'));
+await call(() => window.__cityvi.setTool('power.line'));
 await page.waitForTimeout(800);
 const view = page.viewportSize();
 const open = await call(
   ([w, h, size, grid]) => {
     for (let sy = 140; sy < h - 140; sy += 16)
       for (let sx = 80; sx < w - 80; sx += 16) {
-        const t = window.__slimcity.screenToTile(sx, sy);
+        const t = window.__cityvi.screenToTile(sx, sy);
         if (!t) continue;
         let clear = true;
         for (let dz = -2; dz <= 2 && clear; dz++)
@@ -402,7 +402,7 @@ else {
   if (!chip.includes('A line must start at a power station, a substation or a live line.'))
     failures.push('the cursor chip does not say where a line must start');
 }
-await call(() => window.__slimcity.setTool('select'));
+await call(() => window.__cityvi.setTool('select'));
 
 await b.close();
 for (const e of pageErrors) failures.push(`page error: ${e}`);

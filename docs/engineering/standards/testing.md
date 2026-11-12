@@ -196,7 +196,7 @@ just one.
 
 This is a real, load-bearing project rule, not a suggestion: **render work
 is verified by looking at a screenshot in a real browser, not by a
-read-back assertion passing.** `window.__slimcity` (wired in `main.ts`,
+read-back assertion passing.** `window.__cityvi` (wired in `main.ts`,
 dev-only, stripped from production builds) exposes `readGrid()`,
 `readTransit()`, `readEmptyDraws()`, and similar structural read-backs
 precisely so a `tools/*-shots.mjs` harness can confirm the _data_ is

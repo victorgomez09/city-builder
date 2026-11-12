@@ -6,7 +6,7 @@ import { songsManifestPlugin } from './tools/vite-songs-manifest';
 import pkg from './package.json' with { type: 'json' };
 
 // The deploy target decides where the site lives: GitHub Pages serves it under
-// /SlimCityGame/ and sets BASE_PATH in its workflow; Netlify and any other
+// /CityVIGame/ and sets BASE_PATH in its workflow; Netlify and any other
 // root-hosted deploy leave it unset and get '/'. Dev + Playwright stay at '/'.
 export default defineConfig(() => ({
   base: process.env.BASE_PATH ?? '/',
@@ -21,7 +21,7 @@ export default defineConfig(() => ({
       // Nothing under these ever reaches the bundle, but the dev server watches
       // the whole project, so writing a markdown file or a capture script
       // reloads the page. That costs nothing while you are editing prose — and
-      // everything to a screenshot harness, which loses `window.__slimcity`
+      // everything to a screenshot harness, which loses `window.__cityvi`
       // mid-run and then photographs a city that reset itself to empty. The
       // shot still lands and still exits 0, which is the dangerous part.
       ignored: ['**/docs/**', '**/tools/shots-*/**', '**/tools/*-shots.mjs', '**/*.md'],

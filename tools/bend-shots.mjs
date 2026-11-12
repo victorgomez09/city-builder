@@ -44,9 +44,9 @@ const initSession = (session) =>
   context.addInitScript(
     ([s]) => {
       try {
-        sessionStorage.setItem('slimcity.session', JSON.stringify(s));
+        sessionStorage.setItem('cityvi.session', JSON.stringify(s));
         localStorage.setItem(
-          'slimcity.settings',
+          'cityvi.settings',
           JSON.stringify({ sandboxUnlockAll: true, unlimitedMoney: true }),
         );
       } catch (e) {
@@ -81,10 +81,10 @@ try {
   await hooksReady(page);
 
   const call = (fn, ...a) => page.evaluate(fn, ...a);
-  const cmd = (l, c) => call(([x, y]) => window.__slimcity.cmd(x, y), [l, c]);
-  const readGrid = () => call(() => window.__slimcity.readGrid());
+  const cmd = (l, c) => call(([x, y]) => window.__cityvi.cmd(x, y), [l, c]);
+  const readGrid = () => call(() => window.__cityvi.readGrid());
   const cam = tileCamera(page);
-  const T = await call(() => window.__slimcity.tileMeters());
+  const T = await call(() => window.__cityvi.tileMeters());
   const shot = async (name, settle = 1200) => {
     await page.waitForTimeout(settle);
     await cleanShot(page, `${out}/${name}.png`);
@@ -97,8 +97,8 @@ try {
   await cmd('Sandbox', [{ kind: 'setSandbox', on: true }]);
   await cmd('Money', [{ kind: 'setUnlimitedMoney', on: true }]);
   await call(() => {
-    window.__slimcity.setSpeed(0);
-    window.__slimcity.setDayT(0.5);
+    window.__cityvi.setSpeed(0);
+    window.__cityvi.setDayT(0.5);
   });
 
   // --- ground: the flattest dry sites, none overlapping --------------------------
@@ -276,9 +276,9 @@ try {
   );
   const kinds = [VEHICLE.Truck, VEHICLE.Car, VEHICLE.Bus, VEHICLE.Car, VEHICLE.Truck, VEHICLE.Car];
   const list = stand.map((v, i) => ({ ...v, kind: kinds[i] }));
-  await call((l) => window.__slimcity.setVehicles(l), list);
+  await call((l) => window.__cityvi.setVehicles(l), list);
   await page.waitForTimeout(600);
-  const drawn = await call(() => window.__slimcity.readVehicles());
+  const drawn = await call(() => window.__cityvi.readVehicles());
   console.log('vehicles stood', drawn.length, 'of', list.length);
   await look(n.x, n.z, 70, 0.4, 1.0);
   await shot('vehicles-60-two-lane-oblique', 800);

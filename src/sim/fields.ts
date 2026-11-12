@@ -1,5 +1,5 @@
 /**
- * SlimCity scalar-field simulation.
+ * CityVI scalar-field simulation.
  *
  * Twelve Uint8 layers per tile (see FieldId in shared/types.ts) that emit,
  * diffuse and decay each tick - the classic diffusing-field trick. All math is

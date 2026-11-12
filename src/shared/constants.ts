@@ -1,5 +1,5 @@
 /**
- * SlimCity shared constants & pure helpers. Same contract rules as types.ts:
+ * CityVI shared constants & pure helpers. Same contract rules as types.ts:
  * module agents code against this file and must not edit it.
  */
 

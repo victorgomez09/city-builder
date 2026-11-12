@@ -1,4 +1,4 @@
-# SlimCity — Scope guards
+# CityVI — Scope guards
 
 What we are deliberately **not** building, and why. Two lists: things deferred
 to a later year, and things rejected outright. Treat the rejected list as

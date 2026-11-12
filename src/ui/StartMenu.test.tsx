@@ -22,15 +22,15 @@ function renderMenu(overrides: Partial<Parameters<typeof StartMenu>[0]> = {}) {
 }
 
 describe('StartMenu', () => {
-  it('renders the fallback "SlimCity" heading when no logoSlot is provided', () => {
+  it('renders the fallback "CityVI" heading when no logoSlot is provided', () => {
     renderMenu();
-    expect(screen.getByRole('heading', { name: 'SlimCity' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'CityVI' })).toBeInTheDocument();
   });
 
   it('renders a supplied logoSlot instead of the fallback heading', () => {
     renderMenu({ logoSlot: <div data-testid="custom-logo">Logo</div> });
     expect(screen.getByTestId('custom-logo')).toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: 'SlimCity' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'CityVI' })).not.toBeInTheDocument();
   });
 
   it('renders all five buttons in order', () => {

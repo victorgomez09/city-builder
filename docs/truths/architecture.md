@@ -93,7 +93,7 @@ Back to [the index](../GROUND-TRUTHS.md).
 - [R-architecture-014] Only state the render thread or worker must read (tool, overlay, photo mode,
   screen, settings) goes in the store; transient navigation state is `useState`
   in `App.tsx`. — [ui-architecture.md](../ux/ui-architecture.md)
-- [R-architecture-015] Dev-only read-backs hang off `window.__slimcity` behind
+- [R-architecture-015] Dev-only read-backs hang off `window.__cityvi` behind
   `import.meta.env.DEV`. Add a read method there rather than inferring from
   pixels, and never edit `src/` while a screenshot harness is running. —
   [interfaces.md](../engineering/interfaces/README.md),

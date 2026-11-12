@@ -1,6 +1,6 @@
-# SlimCity — Player Guide
+# CityVI — Player Guide
 
-How to play SlimCity: lay roads, paint zones, keep the lights and water on, and
+How to play CityVI: lay roads, paint zones, keep the lights and water on, and
 watch a city grow itself. You don't place houses — you set the conditions and the
 simulation fills them in.
 

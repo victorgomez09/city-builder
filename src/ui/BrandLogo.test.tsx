@@ -9,13 +9,13 @@ afterEach(() => {
 });
 
 describe('BrandLogo', () => {
-  it('renders an accessible SVG wordmark labeled "SlimCity"', () => {
+  it('renders an accessible SVG wordmark labeled "CityVI"', () => {
     render(<BrandLogo />);
-    expect(screen.getByRole('img', { name: 'SlimCity' })).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'CityVI' })).toBeInTheDocument();
   });
 
   it('forwards a className to the root svg so callers can tint it', () => {
     render(<BrandLogo className="text-white" />);
-    expect(screen.getByRole('img', { name: 'SlimCity' })).toHaveClass('text-white');
+    expect(screen.getByRole('img', { name: 'CityVI' })).toHaveClass('text-white');
   });
 });

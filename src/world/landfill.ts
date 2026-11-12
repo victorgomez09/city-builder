@@ -1,5 +1,5 @@
 /**
- * SlimCity landfill area paint: a per-tile membership layer (GridState.landfill)
+ * CityVI landfill area paint: a per-tile membership layer (GridState.landfill)
  * painted/erased like world/districts.ts paints districts. Collected trash piles
  * up on these tiles; painting more expands the landfill's capacity.
  *

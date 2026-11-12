@@ -1,5 +1,5 @@
 /**
- * SlimCity transit system.
+ * CityVI transit system.
  *
  * Player-built lines — bus, rail or tram — each carried by whichever network its
  * mode names. This module owns the

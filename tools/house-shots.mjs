@@ -75,9 +75,9 @@ page.on('pageerror', (e) => console.log('[pageerror]', e.message));
 await page.addInitScript(
   ([session]) => {
     try {
-      sessionStorage.setItem('slimcity.session', JSON.stringify(session));
+      sessionStorage.setItem('cityvi.session', JSON.stringify(session));
       localStorage.setItem(
-        'slimcity.settings',
+        'cityvi.settings',
         JSON.stringify({ sandboxUnlockAll: true, unlimitedMoney: true }),
       );
     } catch (e) {
@@ -93,16 +93,16 @@ try {
   await hooksReady(page);
   const cam = tileCamera(page);
   const send = (label, commands) =>
-    page.evaluate(([l, c]) => window.__slimcity.cmd(l, c), [label, commands]);
-  const readBuildings = () => page.evaluate(() => window.__slimcity.readBuildings());
+    page.evaluate(([l, c]) => window.__cityvi.cmd(l, c), [label, commands]);
+  const readBuildings = () => page.evaluate(() => window.__cityvi.readBuildings());
   await send('Sandbox', [{ kind: 'setSandbox', on: true }]);
   await send('Money', [{ kind: 'setUnlimitedMoney', on: true }]);
   await page.evaluate(() => {
-    window.__slimcity.setSpeed(0);
-    window.__slimcity.setDayT(0.5);
+    window.__cityvi.setSpeed(0);
+    window.__cityvi.setDayT(0.5);
   });
 
-  const g = await page.evaluate(() => window.__slimcity.readGrid());
+  const g = await page.evaluate(() => window.__cityvi.readGrid());
   const N = g.size;
   const idx = (x, z) => z * N + x;
   const flatDry = (x, z, h0) =>
@@ -210,7 +210,7 @@ try {
   }
   await page.waitForTimeout(3000);
   const standing = await readBuildings();
-  console.log('lamp poles', await page.evaluate(() => window.__slimcity.readLampPoles().length));
+  console.log('lamp poles', await page.evaluate(() => window.__cityvi.readLampPoles().length));
   console.log(
     'standing',
     JSON.stringify(
@@ -233,8 +233,8 @@ try {
   // A paused sim posts a snapshot, which carries the pinned phase to the lighting, only when a command lands.
   const setPhase = async (dayT) => {
     await page.evaluate((t) => {
-      window.__slimcity.setDayT(t);
-      window.__slimcity.cmd('Phase', [{ kind: 'setUnlimitedMoney', on: true }]);
+      window.__cityvi.setDayT(t);
+      window.__cityvi.cmd('Phase', [{ kind: 'setUnlimitedMoney', on: true }]);
       for (let i = 0; i < 100; i++) {
         const buttons = document.querySelectorAll('[aria-label="Dismiss notification"]');
         if (buttons.length === 0) return;

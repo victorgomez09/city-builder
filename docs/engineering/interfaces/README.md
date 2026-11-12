@@ -1,6 +1,6 @@
 # Interface Contract
 
-SlimCity runs as three cooperating parts: a deterministic simulation in a Web
+CityVI runs as three cooperating parts: a deterministic simulation in a Web
 Worker, an imperative three.js render thread, and a React + Zustand DOM
 overlay. They never share memory or call each other's functions directly —
 every exchange crosses one of two boundaries, and both boundaries are typed
@@ -17,7 +17,7 @@ edit this file." This document describes the shapes and guarantees that layer
 defines. It does not restate what the simulation _does_ with a command — that
 is the specs' job. Start at the [documentation map](../../README.md).
 
-A second surface is documented here for the same reason: `window.__slimcity`,
+A second surface is documented here for the same reason: `window.__cityvi`,
 the dev-only read-back API `src/main.ts` exposes so browser-driven visual
 checks can inspect the running game without reimplementing its internals.
 
@@ -34,5 +34,5 @@ checks can inspect the running game without reimplementing its internals.
 | [6. The world grid and persistence](6-the-world-grid-and-persistence.md) | 2102 |
 | [7. The simulation snapshot](7-the-simulation-snapshot.md) | 16993 |
 | [8. Invariants](8-invariants.md) | 2957 |
-| [9. The dev read-back surface: `window.__slimcity`](9-the-dev-read-back-surface-window__slimcity.md) | 18624 |
+| [9. The dev read-back surface: `window.__cityvi`](9-the-dev-read-back-surface-window__cityvi.md) | 18624 |
 | [10. Data files as interfaces](10-data-files-as-interfaces.md) | 2090 |

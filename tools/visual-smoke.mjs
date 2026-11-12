@@ -1,5 +1,5 @@
 /**
- * SlimCity visual smoke harness: boots the real game in headless Chromium,
+ * CityVI visual smoke harness: boots the real game in headless Chromium,
  * drives tools via the keyboard hotkeys + mouse, and screenshots the canvas
  * after each action so a human (or model) can SEE what renders.
  *

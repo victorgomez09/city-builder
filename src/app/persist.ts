@@ -7,7 +7,7 @@
  *     determinism rule) and the main thread (which stamps `savedAt` before the
  *     bytes hit disk). Layout, all little-endian u32 length prefixes:
  *       [u32 headerJsonLen][headerJson][u32 gridLen][gridBytes][u32 metaJsonLen][metaJson]
- *  2. IndexedDB storage ('slimcity' db, 'saves' store) plus the autosave
+ *  2. IndexedDB storage ('cityvi' db, 'saves' store) plus the autosave
  *     cadence driver (every 2 game-months of snapshot ticks) and the
  *     saveNow()/loadLatest() worker bridges.
  */
@@ -162,7 +162,7 @@ export class AutoSaver {
 // IndexedDB storage
 // ---------------------------------------------------------------------------
 
-const DB_NAME = 'slimcity';
+const DB_NAME = 'cityvi';
 const DB_VERSION = 1;
 const SAVES_STORE = 'saves';
 const SAVED_AT_INDEX = 'savedAt';

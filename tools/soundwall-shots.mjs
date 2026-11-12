@@ -63,7 +63,7 @@ page.on('console', (m) => {
 });
 await page.addInitScript(() => {
   sessionStorage.setItem(
-    'slimcity.session',
+    'cityvi.session',
     JSON.stringify({ screen: 'playing', seed: 12345, mode: 'new' }),
   );
 });
@@ -74,8 +74,8 @@ await hooksReady(page);
 await page.waitForTimeout(1500);
 
 const call = (fn, ...a) => page.evaluate(fn, ...a);
-const cmd = (label, commands) => call(([l, c]) => window.__slimcity.cmd(l, c), [label, commands]);
-const grid = () => call(() => window.__slimcity.readGrid());
+const cmd = (label, commands) => call(([l, c]) => window.__cityvi.cmd(l, c), [label, commands]);
+const grid = () => call(() => window.__cityvi.readGrid());
 const cam = tileCamera(page);
 
 // The flattest dry block 40 × 30 on the map.
@@ -168,7 +168,7 @@ await cmd('Bridge', [
 await page.waitForTimeout(1500);
 
 const g = await grid();
-const counts = await call(() => window.__slimcity.readSoundWalls());
+const counts = await call(() => window.__cityvi.readSoundWalls());
 const profileOf = (x, z) => g.roadProfile[idx(x, z)];
 console.log(
   'profiles',
@@ -188,8 +188,8 @@ if (profileOf(X + 8, Z + 4) !== WALLED)
 if (counts.panels === 0) failures.push('no wall was drawn');
 if (pageErrors.length > 0) failures.push(`page errors: ${pageErrors.join(' | ')}`);
 
-await call(() => window.__slimcity.setSpeed(0));
-await call(() => window.__slimcity.setDayT(0.45));
+await call(() => window.__cityvi.setSpeed(0));
+await call(() => window.__cityvi.setDayT(0.45));
 
 const shot = async (name, tx, tz, d, yaw, pitch) => {
   await cam(tx, tz, d, yaw, pitch);

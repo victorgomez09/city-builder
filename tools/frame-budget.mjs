@@ -445,9 +445,9 @@ page.on('console', (m) => {
 await page.addInitScript(
   ([session]) => {
     try {
-      sessionStorage.setItem('slimcity.session', JSON.stringify(session));
+      sessionStorage.setItem('cityvi.session', JSON.stringify(session));
       localStorage.setItem(
-        'slimcity.settings',
+        'cityvi.settings',
         JSON.stringify({ sandboxUnlockAll: true, unlimitedMoney: true }),
       );
     } catch (e) {
@@ -463,10 +463,10 @@ try {
   await page.waitForSelector('#viewport canvas', { timeout: 60000 });
   await hooksReady(page);
   await page.evaluate(() => {
-    window.__slimcity.cmd('Sandbox', [{ kind: 'setSandbox', on: true }]);
-    window.__slimcity.cmd('Money', [{ kind: 'setUnlimitedMoney', on: true }]);
-    window.__slimcity.setSpeed(0);
-    window.__slimcity.setDayT(0.5);
+    window.__cityvi.cmd('Sandbox', [{ kind: 'setSandbox', on: true }]);
+    window.__cityvi.cmd('Money', [{ kind: 'setUnlimitedMoney', on: true }]);
+    window.__cityvi.setSpeed(0);
+    window.__cityvi.setDayT(0.5);
   });
   await page.waitForTimeout(1500);
 
@@ -495,7 +495,7 @@ try {
   });
   console.log('machine', JSON.stringify(result.machine));
 
-  const grid = await page.evaluate(() => window.__slimcity.readGrid());
+  const grid = await page.evaluate(() => window.__cityvi.readGrid());
   const N = grid.size;
   const water = Uint8Array.from(grid.water);
   const tier = await page.evaluate(
@@ -618,7 +618,7 @@ try {
               }
               windows.sort((a, b) => a - b);
               const mean = s.reduce((a, b) => a + b, 0) / s.length;
-              const info = window.__slimcity.renderInfo();
+              const info = window.__cityvi.renderInfo();
               resolve({
                 meanMs: mean,
                 p50Ms: s[Math.floor(s.length * 0.5)],
@@ -653,8 +653,8 @@ try {
   const setPhase = async (t) => {
     if (phase === t) return;
     await page.evaluate((day) => {
-      window.__slimcity.setDayT(day);
-      window.__slimcity.cmd('Phase', [{ kind: 'setUnlimitedMoney', on: true }]);
+      window.__cityvi.setDayT(day);
+      window.__cityvi.cmd('Phase', [{ kind: 'setUnlimitedMoney', on: true }]);
     }, t);
     await page.waitForTimeout(2000);
     phase = t;
@@ -685,7 +685,7 @@ try {
     for (let i = 0; i < commands.length; i += CHUNK) {
       await page.evaluate(
         ([l, list]) => {
-          for (const c of list) window.__slimcity.cmd(l, [c]);
+          for (const c of list) window.__cityvi.cmd(l, [c]);
         },
         [label, commands.slice(i, i + CHUNK)],
       );
@@ -706,8 +706,8 @@ try {
     return last;
   };
   const roadTiles = () =>
-    page.evaluate(() => window.__slimcity.readGrid().roadTier.filter((t) => t > 0).length);
-  const buildingCount = () => page.evaluate(() => window.__slimcity.readBuildings().length);
+    page.evaluate(() => window.__cityvi.readGrid().roadTier.filter((t) => t > 0).length);
+  const buildingCount = () => page.evaluate(() => window.__cityvi.readBuildings().length);
 
   await send(
     'Street',
@@ -737,7 +737,7 @@ try {
   await settle('buildings', buildingCount);
   result.buildMs = Date.now() - started;
 
-  const standing = await page.evaluate(() => window.__slimcity.readBuildings());
+  const standing = await page.evaluate(() => window.__cityvi.readBuildings());
   const at = new Set(standing.map((b) => `${b.catalogId}@${b.x},${b.z}`));
   const missing = all.filter((p) => !at.has(`${p.catalogId}@${p.x},${p.z}`));
   const tally = (list) => {
@@ -761,11 +761,11 @@ try {
 
   // Whether a placed home got a lot plan (drive, yard, front door): proof the lots draw.
   result.lots = await page.evaluate(() => {
-    const homes = window.__slimcity
+    const homes = window.__cityvi
       .readBuildings()
       .filter((b) => /^res-(half|normal|low|estate|acre)/.test(b.catalogId));
     const sample = homes.filter((_, i) => i % Math.max(1, Math.floor(homes.length / 300)) === 0);
-    const planned = sample.filter((b) => window.__slimcity.readHousePlan(b.id) !== null).length;
+    const planned = sample.filter((b) => window.__cityvi.readHousePlan(b.id) !== null).length;
     return { sampled: sample.length, withLotPlan: planned };
   });
   console.log('buildings', JSON.stringify({ ...result.buildings, standingByCatalogId: undefined }));

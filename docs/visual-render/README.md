@@ -1,6 +1,6 @@
 # Rendering
 
-How SlimCity draws the world: the Three.js pipeline that turns simulation
+How CityVI draws the world: the Three.js pipeline that turns simulation
 state into pixels. This folder is about the RENDER PIPELINE — instancing,
 chunking, draw calls, picking, the day/night lighting rig, terrain, water,
 vegetation, materials, and level of detail. It is not about what things look

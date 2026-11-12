@@ -23,7 +23,7 @@ page.on('pageerror', (e) => errors.push(e.message));
 await page.addInitScript(() => {
   try {
     sessionStorage.setItem(
-      'slimcity.session',
+      'cityvi.session',
       JSON.stringify({ screen: 'playing', seed: 12345, mode: 'new' }),
     );
   } catch (e) {
@@ -37,7 +37,7 @@ await hooksReady(page);
 await page.waitForTimeout(3000);
 
 const hook = (fn, arg) => page.evaluate(fn, arg);
-const cmd = (label, commands) => hook(([l, c]) => window.__slimcity.cmd(l, c), [label, commands]);
+const cmd = (label, commands) => hook(([l, c]) => window.__cityvi.cmd(l, c), [label, commands]);
 const camera = tileCamera(page);
 const shot = async (name, settle = 1800) => {
   await page.waitForTimeout(settle);
@@ -46,7 +46,7 @@ const shot = async (name, settle = 1800) => {
 };
 
 // A dry, flat block to build the three yards across.
-const g0 = await hook(() => window.__slimcity.readGrid());
+const g0 = await hook(() => window.__cityvi.readGrid());
 const N = g0.size;
 const idx = (x, z) => z * N + x;
 let anchor = null;
@@ -70,8 +70,8 @@ if (!anchor) {
 const { x: X, z: Z } = anchor;
 console.log('anchor', JSON.stringify(anchor));
 
-await hook(() => window.__slimcity.setDayT(0.5));
-await hook(() => window.__slimcity.setSpeed(0));
+await hook(() => window.__cityvi.setDayT(0.5));
+await hook(() => window.__cityvi.setSpeed(0));
 await cmd('Sandbox', [{ kind: 'setSandbox', on: true }]);
 await cmd('Money', [{ kind: 'setUnlimitedMoney', on: true }]);
 await page.waitForTimeout(300);
@@ -140,26 +140,26 @@ await cmd('Bus line', [
   },
 ]);
 await page.waitForTimeout(1500);
-await hook(() => window.__slimcity.setSpeed(1));
+await hook(() => window.__cityvi.setSpeed(1));
 await page.waitForTimeout(2500);
-await hook(() => window.__slimcity.setSpeed(0));
+await hook(() => window.__cityvi.setSpeed(0));
 await page.waitForTimeout(600);
 
 const standing = await hook(() =>
-  window.__slimcity
+  window.__cityvi
     .readBuildings()
     .filter((b) => ['bus-depot', 'bus-garage', 'tram-depot', 'rail-yard'].includes(b.catalogId))
     .map((b) => `${b.catalogId}#${b.id}@${b.x},${b.z}r${b.rotation}`),
 );
 console.log('standing', JSON.stringify(standing));
-console.log('transit', JSON.stringify(await hook(() => window.__slimcity.readTransit())));
-console.log('parked', JSON.stringify(await hook(() => window.__slimcity.readDepotFleets())));
+console.log('transit', JSON.stringify(await hook(() => window.__cityvi.readTransit())));
+console.log('parked', JSON.stringify(await hook(() => window.__cityvi.readDepotFleets())));
 
-const T = await hook(() => window.__slimcity.tileMeters());
+const T = await hook(() => window.__cityvi.tileMeters());
 // Cars on the streets for scale: before the depots, the tram depot and the yard.
 await hook(
   ([tile, x, z]) =>
-    window.__slimcity.setVehicles([
+    window.__cityvi.setVehicles([
       { x: (x + 3) * tile, z: (z + 0.65) * tile, heading: Math.PI / 2, kind: 0 },
       { x: (x + 9) * tile, z: (z + 0.35) * tile, heading: -Math.PI / 2, kind: 0 },
       { x: (x + 13) * tile, z: (z + 10.35) * tile, heading: -Math.PI / 2, kind: 0 },
@@ -198,7 +198,7 @@ for (const [name, tx, tz, d, yaw, pitch] of views) {
   await shot(name);
 }
 
-await hook(() => window.__slimcity.setDayT(0.96));
+await hook(() => window.__cityvi.setDayT(0.96));
 await cmd('Phase', [{ kind: 'setUnlimitedMoney', on: true }]);
 await page.waitForTimeout(2000);
 for (const [name, tx, tz, d, yaw, pitch] of [
@@ -212,7 +212,7 @@ for (const [name, tx, tz, d, yaw, pitch] of [
 
 // A rail yard and a station beside a railway that lies 1.5 m below their levelled lots:
 // the lead, its bed, the turnout and the platform's edge must follow the line's ground.
-await hook(() => window.__slimcity.setDayT(0.5));
+await hook(() => window.__cityvi.setDayT(0.5));
 let slopeSite = null;
 for (let z = 40; z < N - 60 && !slopeSite; z++) {
   for (let x = 40; x < N - 60 && !slopeSite; x++) {
@@ -238,7 +238,7 @@ if (slopeSite) {
         const fall = Math.min(1, Math.max(0, (4 - r) / 2));
         for (let c = 0; c < w; c++) heights[r * w + c] = base - 1.5 * fall;
       }
-      window.__slimcity.cmd('Slope', [{ kind: 'terraformSet', x, z, w, h, heights }]);
+      window.__cityvi.cmd('Slope', [{ kind: 'terraformSet', x, z, w, h, heights }]);
     },
     [SX, SZ - 3, 44, 18, level],
   );

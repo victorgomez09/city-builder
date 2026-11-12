@@ -63,7 +63,7 @@ try {
   await page.addInitScript(() => {
     try {
       sessionStorage.setItem(
-        'slimcity.session',
+        'cityvi.session',
         JSON.stringify({ screen: 'playing', seed: 12345, mode: 'new' }),
       );
     } catch (e) {
@@ -76,7 +76,7 @@ try {
   // lays nothing.
   await page.addInitScript(() => {
     try {
-      const key = 'slimcity.settings';
+      const key = 'cityvi.settings';
       const saved = JSON.parse(localStorage.getItem(key) ?? '{}');
       localStorage.setItem(key, JSON.stringify({ ...saved, sandboxUnlockAll: true }));
     } catch (e) {
@@ -89,15 +89,15 @@ try {
   await page.waitForTimeout(3000);
 
   const call = (fn, ...a) => page.evaluate(fn, ...a);
-  const cmd = (l, c) => call(([x, y]) => window.__slimcity.cmd(x, y), [l, c]);
+  const cmd = (l, c) => call(([x, y]) => window.__cityvi.cmd(x, y), [l, c]);
   const cam = tileCamera(page);
 
-  await call(() => window.__slimcity.setSpeed(0));
+  await call(() => window.__cityvi.setSpeed(0));
   await cmd('Sandbox', [{ kind: 'setSandbox', on: true }]);
   await cmd('Money', [{ kind: 'setUnlimitedMoney', on: true }]);
   await page.waitForTimeout(300);
 
-  const g0 = await call(() => window.__slimcity.readGrid());
+  const g0 = await call(() => window.__cityvi.readGrid());
   const N = g0.size;
   const idx = (x, z) => z * N + x;
 
@@ -167,7 +167,7 @@ try {
       let n = 0;
       for (let y = 100; y < 800; y += 3) {
         for (let x = 300; x < 1200; x += 3) {
-          const t = window.__slimcity.screenToTile(x, y);
+          const t = window.__cityvi.screenToTile(x, y);
           if (t && t.x === tx && t.z === tz) {
             sx += x;
             sy += y;
@@ -180,7 +180,7 @@ try {
     [XL, S],
   );
   if (!px) throw new Error(`no pixel maps to the motorway tile (${XL},${S})`);
-  await call(() => window.__slimcity.setTool('interchange'));
+  await call(() => window.__cityvi.setTool('interchange'));
   await page.waitForTimeout(400);
   await page.mouse.move(px[0], px[1]);
   await page.waitForTimeout(500);
@@ -192,8 +192,8 @@ try {
   await page.waitForTimeout(2500);
 
   // --- Proof that the interchange stands ---------------------------------------
-  const g = await call(() => window.__slimcity.readGrid());
-  const junctions = await call(() => window.__slimcity.readJunctions());
+  const g = await call(() => window.__cityvi.readGrid());
+  const junctions = await call(() => window.__cityvi.readJunctions());
   const tierAt = (x, z) => g.roadTier[idx(x, z)];
   const maskAt = (x, z) => g.roadMask[idx(x, z)];
   const overAt = (x, z) => (g.overRoads ?? []).find((o) => o.x === x && o.z === z);
@@ -297,7 +297,7 @@ try {
   };
 
   if (failures.length === 0) {
-    await call(() => window.__slimcity.setDayT(0.5));
+    await call(() => window.__cityvi.setDayT(0.5));
     await page.waitForTimeout(500);
     const cx = XL + 1;
     // The ramp that meets the street west of the bridge, and where the street
@@ -316,16 +316,16 @@ try {
 
     // Night is last: the light follows the running clock, so the sim runs
     // while night comes on and is paused again before the frame.
-    await call(() => window.__slimcity.setSpeed(1));
-    await call(() => window.__slimcity.setDayT(0.96));
+    await call(() => window.__cityvi.setSpeed(1));
+    await call(() => window.__cityvi.setDayT(0.96));
     await page.waitForTimeout(2500);
     const T = await tileMeters(page);
-    const lamps = (await call(() => window.__slimcity.readLampPoles())).filter(
+    const lamps = (await call(() => window.__cityvi.readLampPoles())).filter(
       (p) => Math.abs(p.x / T - XL) <= 10 && Math.abs(p.z / T - S) <= 10,
     );
     console.log(`${lamps.length} lamp poles near the interchange`);
     if (lamps.length === 0) fail('no lamp poles stand near the interchange: the street is not powered');
-    await call(() => window.__slimcity.setSpeed(0));
+    await call(() => window.__cityvi.setSpeed(0));
     await page.waitForTimeout(600);
     await shot('diamond-night', cx, S, 230, 0.7, 0.8);
   }

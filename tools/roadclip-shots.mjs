@@ -55,11 +55,11 @@ page.on('pageerror', (e) => {
 await page.addInitScript(() => {
   try {
     sessionStorage.setItem(
-      'slimcity.session',
+      'cityvi.session',
       JSON.stringify({ screen: 'playing', seed: 12345, mode: 'new' }),
     );
     localStorage.setItem(
-      'slimcity.settings',
+      'cityvi.settings',
       JSON.stringify({ sandboxUnlockAll: true, unlimitedMoney: true }),
     );
   } catch (e) {
@@ -71,8 +71,8 @@ await page.waitForSelector('#viewport canvas', { timeout: 20000 });
 await page.waitForTimeout(4000);
 
 const call = (fn, ...a) => page.evaluate(fn, ...a);
-const cmd = (l, c) => call(([x, y]) => window.__slimcity.cmd(x, y), [l, c]);
-const readGrid = () => call(() => window.__slimcity.readGrid());
+const cmd = (l, c) => call(([x, y]) => window.__cityvi.cmd(x, y), [l, c]);
+const readGrid = () => call(() => window.__cityvi.readGrid());
 const cam = tileCamera(page);
 
 await cmd('Sandbox', [{ kind: 'setSandbox', on: true }]);
@@ -145,7 +145,7 @@ if (runs('grades') && (sites.get('steep') ?? []).length === 0) {
       const heights = new Float32Array(w * h);
       for (let row = 0; row < h; row++)
         for (let col = 0; col < w; col++) heights[row * w + col] = Math.min(col, span) * grade;
-      window.__slimcity.cmd('Steep slope', [{ kind: 'terraformSet', x, z, w, h, heights }]);
+      window.__cityvi.cmd('Steep slope', [{ kind: 'terraformSet', x, z, w, h, heights }]);
     },
     [RX, RZ - lanes * 4, W, H, GRADE, RUN_TILES],
   );
@@ -175,7 +175,7 @@ if (runs('grades') && (sites.get('steep') ?? []).length === 0) {
 const worstIntrusion = async (tiles) =>
   await call(
     ([ts, tile]) => {
-      const hook = window.__slimcity;
+      const hook = window.__cityvi;
       let worst = { m: -Infinity, at: null };
       const SAMPLES = 13;
       for (const t of ts) {
@@ -501,7 +501,7 @@ const paradeSite = (grid, alongX, ground, taken) => {
 const paradeIntrusion = async (tiles, alongX) =>
   await call(
     ([ts, tile, along, n, eps, out]) => {
-      const hook = window.__slimcity;
+      const hook = window.__cityvi;
       let worst = { m: -Infinity, at: null, where: null };
       let clipped = 0;
       for (const t of ts) {
@@ -595,7 +595,7 @@ if (runs('parade')) {
           const heights = new Float32Array(w * h);
           for (let row = 0; row < h; row++)
             for (let col = 0; col < w; col++) heights[row * w + col] = base + row * grade;
-          window.__slimcity.cmd('Parade slope', [{ kind: 'terraformSet', x, z, w, h, heights }]);
+          window.__cityvi.cmd('Parade slope', [{ kind: 'terraformSet', x, z, w, h, heights }]);
         },
         [site.x, site.z, site.w, site.h, parade.grade, site.lo],
       );
@@ -725,9 +725,9 @@ if (findings.length === 0) {
 // Midday, not midnight: a dark frame hides the very thing being looked for.
 // The override is applied with the next sim snapshot, so the clock stops
 // only once one has arrived — paused first, the frame stays dark.
-await call(() => window.__slimcity.setDayT(0.5));
+await call(() => window.__cityvi.setDayT(0.5));
 await page.waitForTimeout(1500);
-await call(() => window.__slimcity.setSpeed(0));
+await call(() => window.__cityvi.setSpeed(0));
 await dismissToasts();
 await page.waitForTimeout(500);
 const leftOver = await page.getByRole('button', { name: 'Dismiss notification' }).count();

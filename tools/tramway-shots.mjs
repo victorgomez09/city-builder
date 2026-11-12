@@ -58,7 +58,7 @@ page.on('pageerror', (e) => errors.push(e.message));
 await page.addInitScript(() => {
   try {
     sessionStorage.setItem(
-      'slimcity.session',
+      'cityvi.session',
       JSON.stringify({ screen: 'playing', seed: 12345, mode: 'new' }),
     );
   } catch (e) {
@@ -72,7 +72,7 @@ await hooksReady(page);
 await page.waitForTimeout(3000);
 
 const hook = (fn, arg) => page.evaluate(fn, arg);
-const cmd = (label, commands) => hook(([l, c]) => window.__slimcity.cmd(l, c), [label, commands]);
+const cmd = (label, commands) => hook(([l, c]) => window.__cityvi.cmd(l, c), [label, commands]);
 const camera = tileCamera(page);
 const shot = async (name, settle = 1800) => {
   await page.waitForTimeout(settle);
@@ -81,7 +81,7 @@ const shot = async (name, settle = 1800) => {
 };
 
 // A dry, flat strip to build the three roads across.
-const g0 = await hook(() => window.__slimcity.readGrid());
+const g0 = await hook(() => window.__cityvi.readGrid());
 const N = g0.size;
 const idx = (x, z) => z * N + x;
 let anchor = null;
@@ -105,7 +105,7 @@ if (!anchor) {
 const { x: X, z: Z } = anchor;
 console.log('anchor', JSON.stringify(anchor));
 
-await hook(() => window.__slimcity.setDayT(0.5));
+await hook(() => window.__cityvi.setDayT(0.5));
 await cmd('Sandbox', [{ kind: 'setSandbox', on: true }]);
 await cmd('Money', [{ kind: 'setUnlimitedMoney', on: true }]);
 await cmd('Profiles', [
@@ -176,13 +176,13 @@ for (const [i, r] of ROWS.entries()) {
 }
 await page.waitForTimeout(800);
 
-const grid = await hook(() => window.__slimcity.readGrid());
+const grid = await hook(() => window.__cityvi.readGrid());
 for (const r of ROWS) {
   const i = idx(X + 10, r.z);
   console.log(r.name, 'tier', grid.roadTier[i], 'profile', grid.roadProfile[i]);
 }
 const depots = await hook(() =>
-  window.__slimcity
+  window.__cityvi
     .readBuildings()
     .filter((b) => b.catalogId === 'tram-depot')
     .map((b) => `${b.catalogId}@${b.x},${b.z} state ${b.state}`),
@@ -190,22 +190,22 @@ const depots = await hook(() =>
 console.log('depots', JSON.stringify(depots));
 
 // Let the depots field their trams, then hold the city still for the shots.
-await hook(() => window.__slimcity.setSpeed(1));
+await hook(() => window.__cityvi.setSpeed(1));
 await page.waitForTimeout(6000);
-await hook(() => window.__slimcity.setSpeed(0));
+await hook(() => window.__cityvi.setSpeed(0));
 await page.waitForTimeout(1000);
 console.log(
   'transit render',
-  JSON.stringify(await hook(() => window.__slimcity.readTransitRender())),
+  JSON.stringify(await hook(() => window.__cityvi.readTransitRender())),
 );
-console.log('furniture', JSON.stringify(await hook(() => window.__slimcity.readFurnitureCounts())));
+console.log('furniture', JSON.stringify(await hook(() => window.__cityvi.readFurnitureCounts())));
 
-const T = await hook(() => window.__slimcity.tileMeters());
+const T = await hook(() => window.__cityvi.tileMeters());
 // A car in each road's eastbound lane beside the camera's subject, for scale.
 const placeCars = () =>
   hook(
     ([tile, x, rows]) =>
-      window.__slimcity.setVehicles(
+      window.__cityvi.setVehicles(
         rows.map(([z, across]) => ({
           x: (x + 11.5) * tile,
           z: (z + 0.5) * tile + across,
@@ -222,7 +222,7 @@ await placeCars();
 // A line's trams are drawn under the transit lens, as every line's vehicles
 // are, and the lens paints its own wedges and opens the Transit Lines panel
 // over the corner: it is on for the shots of the lines and off for the rest.
-const lens = (on) => hook((o) => window.__slimcity.setOverlay(o), on ? 'transit' : null);
+const lens = (on) => hook((o) => window.__cityvi.setOverlay(o), on ? 'transit' : null);
 const PITCH = 0.7;
 const views = [];
 for (const r of ROWS) {
@@ -333,7 +333,7 @@ for (const [name, tx, tz, d, yaw, pitch] of [
 
 // The night, before the trams pull in at 23:00: the clock is applied by the
 // next snapshot, which a command sends, and the cars go back after it.
-await hook(() => window.__slimcity.setDayT(0.9));
+await hook(() => window.__cityvi.setDayT(0.9));
 await cmd('Phase', [{ kind: 'setUnlimitedMoney', on: true }]);
 await page.waitForTimeout(2000);
 await placeCars();

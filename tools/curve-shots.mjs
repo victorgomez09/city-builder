@@ -61,9 +61,9 @@ const initSession = (session) =>
   context.addInitScript(
     ([s]) => {
       try {
-        sessionStorage.setItem('slimcity.session', JSON.stringify(s));
+        sessionStorage.setItem('cityvi.session', JSON.stringify(s));
         localStorage.setItem(
-          'slimcity.settings',
+          'cityvi.settings',
           JSON.stringify({ sandboxUnlockAll: true, unlimitedMoney: true }),
         );
       } catch (e) {
@@ -102,14 +102,14 @@ try {
     const list = (m.default ?? m).buildings;
     return Object.fromEntries(list.map((e) => [e.id, e.footprint.w]));
   });
-  const cmd = (l, c) => call(([x, y]) => window.__slimcity.cmd(x, y), [l, c]);
-  const readGrid = () => call(() => window.__slimcity.readGrid());
-  const readBuildings = () => call(() => window.__slimcity.readBuildings());
-  const stats = () => call(() => window.__slimcity.getStats());
-  const setSpeed = (s) => call((x) => window.__slimcity.setSpeed(x), s);
-  const setTool = (t) => call((x) => window.__slimcity.setTool(x), t);
+  const cmd = (l, c) => call(([x, y]) => window.__cityvi.cmd(x, y), [l, c]);
+  const readGrid = () => call(() => window.__cityvi.readGrid());
+  const readBuildings = () => call(() => window.__cityvi.readBuildings());
+  const stats = () => call(() => window.__cityvi.getStats());
+  const setSpeed = (s) => call((x) => window.__cityvi.setSpeed(x), s);
+  const setTool = (t) => call((x) => window.__cityvi.setTool(x), t);
   const cam = tileCamera(page);
-  const T = await call(() => window.__slimcity.tileMeters());
+  const T = await call(() => window.__cityvi.tileMeters());
   const shot = async (name, settle = 1500) => {
     await page.waitForTimeout(settle);
     await cleanShot(page, `${out}/${name}.png`);
@@ -119,8 +119,8 @@ try {
   await cmd('Sandbox', [{ kind: 'setSandbox', on: true }]);
   await cmd('Money', [{ kind: 'setUnlimitedMoney', on: true }]);
   await call(() => {
-    window.__slimcity.setSpeed(0);
-    window.__slimcity.setDayT(0.5);
+    window.__cityvi.setSpeed(0);
+    window.__cityvi.setDayT(0.5);
   });
 
   // Flat dry ground for the grid street, the bend and the zone bands round it.
@@ -276,7 +276,7 @@ try {
   await setTool('zone.resLow');
   await cam(bendCentre.x, bendCentre.z, 260, 0, OVERHEAD_PITCH);
   await shot('0-plat-from-above', 2000);
-  const framedPlat = await call(() => window.__slimcity.readFramedPlat());
+  const framedPlat = await call(() => window.__cityvi.readFramedPlat());
   console.log(
     'framed plat:',
     framedPlat.length,
@@ -309,9 +309,9 @@ try {
       console.log('shops zoned at poll', i);
       await setTool('zone.comLow');
       await page.waitForTimeout(1500);
-      const cut = await call(() => window.__slimcity.readFramedPlat());
+      const cut = await call(() => window.__cityvi.readFramedPlat());
       console.log('shop plat', JSON.stringify(cut.map((p) => `${p.side}@${Math.round(p.s * 10) / 10}:${p.lot}`)));
-      const cutFit = await call(() => window.__slimcity.readFramedPlatFit());
+      const cutFit = await call(() => window.__cityvi.readFramedPlatFit());
       console.log('shop land value', JSON.stringify(cutFit.parcels.map((p) => p.landValue)));
       await setTool('select');
     }
@@ -371,7 +371,7 @@ try {
   // The parcels still free on the second arc, by zone: where a run could stand.
   for (const [tool, name] of [['zone.comLow', 'shop'], ['zone.resMedium', 'walk-up']]) {
     await setTool(tool);
-    const free = await call(() => window.__slimcity.readFramedPlat());
+    const free = await call(() => window.__cityvi.readFramedPlat());
     console.log(
       `free ${name} parcels:`,
       JSON.stringify(free.map((p) => `side${p.side}@${Math.round(p.s)}`)),
@@ -416,7 +416,7 @@ try {
   await shot('3-bend-zoning-lens', 2500);
   // Each outline against the drawn road: its origin should stand on the kerb
   // line, the road's half width off the centre line, and be cut by a known land value.
-  const fit = await call(() => window.__slimcity.readFramedPlatFit());
+  const fit = await call(() => window.__cityvi.readFramedPlatFit());
   console.log('lens land value known:', fit.landValueKnown, 'kerb parcels:', fit.parcels.length);
   for (const p of fit.parcels) {
     const off = p.centreLineM === null || p.halfWidthM === null ? null : p.centreLineM - p.halfWidthM;
@@ -481,7 +481,7 @@ try {
       const list = [];
       for (let sy = 120; sy < h - 160; sy += 20)
         for (let sx = Math.round(w * 0.35); sx < w - 60; sx += 20) {
-          const t = window.__slimcity.screenToTile(sx, sy);
+          const t = window.__cityvi.screenToTile(sx, sy);
           if (t) list.push({ sx, sy, t });
         }
       return list;
@@ -625,10 +625,10 @@ try {
 
   // (9) A street lamp beside a framed drive, standing clear of its mouth: the
   // framed home whose drive cut lies nearest a lamp pole.
-  const poles = await call(() => window.__slimcity.readLampPoles());
+  const poles = await call(() => window.__cityvi.readLampPoles());
   let closest = null;
   for (const bl of framedNow.filter((b) => !isShop(b) && !isWalkUp(b))) {
-    const plan = await call((id) => window.__slimcity.readHousePlan(id), bl.id);
+    const plan = await call((id) => window.__cityvi.readHousePlan(id), bl.id);
     if (!plan) continue;
     for (const drive of plan.drives) {
       const cut = lotPoint(plan.frame, (drive.cut.u0 + drive.cut.u1) / 2, drive.cut.v0, plan.frame.mirror);

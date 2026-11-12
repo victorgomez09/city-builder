@@ -53,7 +53,7 @@ page.on('pageerror', (e) => errors.push(e.message));
 await page.addInitScript(() => {
   try {
     sessionStorage.setItem(
-      'slimcity.session',
+      'cityvi.session',
       JSON.stringify({ screen: 'playing', seed: 12345, mode: 'new' }),
     );
   } catch (e) {
@@ -67,7 +67,7 @@ await hooksReady(page);
 await page.waitForTimeout(3000);
 
 const hook = (fn, arg) => page.evaluate(fn, arg);
-const cmd = (label, commands) => hook(([l, c]) => window.__slimcity.cmd(l, c), [label, commands]);
+const cmd = (label, commands) => hook(([l, c]) => window.__cityvi.cmd(l, c), [label, commands]);
 const camera = tileCamera(page);
 const shot = async (name, settle = 1800) => {
   await page.waitForTimeout(settle);
@@ -81,7 +81,7 @@ const fail = async (why) => {
 };
 
 // A dry, flat strip for the two streets and everything on them.
-const g0 = await hook(() => window.__slimcity.readGrid());
+const g0 = await hook(() => window.__cityvi.readGrid());
 const N = g0.size;
 const idx = (x, z) => z * N + x;
 const dryFlat = (x, z, w, d) => {
@@ -103,7 +103,7 @@ if (!anchor) await fail('no dry strip found');
 const { x: X, z: Z } = anchor;
 console.log('anchor', JSON.stringify(anchor));
 
-await hook(() => window.__slimcity.setDayT(0.5));
+await hook(() => window.__cityvi.setDayT(0.5));
 await cmd('Sandbox', [{ kind: 'setSandbox', on: true }]);
 await cmd('Money', [{ kind: 'setUnlimitedMoney', on: true }]);
 await page.waitForTimeout(300);
@@ -117,7 +117,7 @@ const place = (catalogId, x, z, rotation = 2) =>
 const buildingAt = (x, z) =>
   hook(
     ([px, pz]) => {
-      const g = window.__slimcity.readGrid();
+      const g = window.__cityvi.readGrid();
       return g.buildingId[pz * g.size + px];
     },
     [x, z],
@@ -141,12 +141,12 @@ console.log('placed', JSON.stringify(RUNGS.map((r) => `${r.id}@${r.x},${r.z} id 
 if (RUNGS.some((r) => !r.building)) await fail('a rung did not land');
 
 // Let the first service pass find the parks, then hold the city still.
-await hook(() => window.__slimcity.setSpeed(4));
+await hook(() => window.__cityvi.setSpeed(4));
 await page.waitForTimeout(5000);
-await hook(() => window.__slimcity.setSpeed(0));
+await hook(() => window.__cityvi.setSpeed(0));
 await page.waitForTimeout(1000);
 
-const T = await hook(() => window.__slimcity.tileMeters());
+const T = await hook(() => window.__cityvi.tileMeters());
 const centre = (r) => [r.x + r.w / 2 - 0.5, r.z + r.d / 2 - 0.5];
 const district = RUNGS.find((r) => r.name === 'district');
 const sports = RUNGS.find((r) => r.name === 'sports');
@@ -164,14 +164,14 @@ for (const r of RUNGS) {
 // 2. The pitch beside the street, a car in the eastbound lane for scale.
 await hook(
   ([tile, x, z]) =>
-    window.__slimcity.setVehicles([
+    window.__cityvi.setVehicles([
       { x: (x + 0.5) * tile, z: (z + 0.5) * tile + 1.875, heading: Math.PI / 2, kind: 0 },
     ]),
   [T, sports.x + 1, Z],
 );
 await camera(sports.x + sports.w / 2 - 0.5, Z + 0.5, 110, 0, 0.45);
 await shot('pitch-scale');
-await hook(() => window.__slimcity.setVehicles([]));
+await hook(() => window.__cityvi.setVehicles([]));
 
 // 3. The district park at load 0.5 and at load 3, same camera and light. The
 // hook holds until a snapshot carries park loads, and no command is sent
@@ -179,11 +179,11 @@ await hook(() => window.__slimcity.setVehicles([]));
 const [dx, dz] = centre(district);
 for (const load of [0.5, 3]) {
   await camera(dx, dz, 420, 0, PITCH);
-  await hook(([id, l]) => window.__slimcity.setParkLoad(id, l), [district.building, load]);
+  await hook(([id, l]) => window.__cityvi.setParkLoad(id, l), [district.building, load]);
   await shot(`district-load-${load}`);
 }
 // The lawn back to fresh for everything after.
-await hook(([id]) => window.__slimcity.setParkLoad(id, 0), [district.building]);
+await hook(([id]) => window.__cityvi.setParkLoad(id, 0), [district.building]);
 
 // 4. The district park against the street, low along the shared edge.
 await camera(district.x + district.w / 2, Z + 0.5, 45, Math.PI / 2, 0.2);
@@ -209,10 +209,10 @@ await shot('plaza-towers');
 // the same ground: a street through its middle so each pocket has a road to
 // serve from, three to its north and three to its south.
 const overlayCamera = () => camera(dx, dz, 700, 0, 1.2);
-await hook((lens) => window.__slimcity.setOverlay(lens), LAND_VALUE_LENS);
+await hook((lens) => window.__cityvi.setOverlay(lens), LAND_VALUE_LENS);
 await overlayCamera();
 await shot('overlay-district');
-await hook(() => window.__slimcity.setOverlay(null));
+await hook(() => window.__cityvi.setOverlay(null));
 await cmd('Clear', [{ kind: 'bulldoze', tiles: [{ x: district.x, z: district.z }] }]);
 await page.waitForTimeout(600);
 const midZ = district.z + Math.floor(district.d / 2);
@@ -229,19 +229,19 @@ for (const p of pockets) pocketIds.push(await buildingAt(p.x, p.z));
 console.log('pockets', JSON.stringify(pocketIds));
 if (pocketIds.some((id) => !id)) await fail('a pocket park did not land');
 // The field settles over a few service passes.
-await hook(() => window.__slimcity.setSpeed(4));
+await hook(() => window.__cityvi.setSpeed(4));
 await page.waitForTimeout(6000);
-await hook(() => window.__slimcity.setSpeed(0));
-await hook((lens) => window.__slimcity.setOverlay(lens), LAND_VALUE_LENS);
+await hook(() => window.__cityvi.setSpeed(0));
+await hook((lens) => window.__cityvi.setOverlay(lens), LAND_VALUE_LENS);
 await overlayCamera();
 await shot('overlay-pockets');
-await hook(() => window.__slimcity.setOverlay(null));
+await hook(() => window.__cityvi.setOverlay(null));
 
 // A district park on a slope, where the map has a dry one that is not a
 // cliff: the gentlest-stepped 22-row patch with the widest rise across it.
 // The strip has been built on since the run began, so the search reads the grid
 // as it stands now, not g0.
-const g1 = await hook(() => window.__slimcity.readGrid());
+const g1 = await hook(() => window.__cityvi.readGrid());
 let slope = null;
 let bestRise = 0;
 const SLOPE_W = district.w + 2;
@@ -301,7 +301,7 @@ if (slope && bestRise >= 6) {
   console.log('slope', JSON.stringify(slope), 'rise', bestRise);
   await row(slope.z, slope.x, slope.x + SLOPE_W - 1);
   await page.waitForTimeout(1200);
-  const g2 = await hook(() => window.__slimcity.readGrid());
+  const g2 = await hook(() => window.__cityvi.readGrid());
   const faults = footprintFaults(g2, slope.x + 1, slope.z + 1, district.w, district.d);
   console.log(
     `district-slope: footprint faults after the road row: ${faults.length}`,

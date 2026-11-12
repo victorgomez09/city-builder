@@ -30,7 +30,7 @@ page.on('console', (m) => {
 await page.addInitScript(() => {
   try {
     sessionStorage.setItem(
-      'slimcity.session',
+      'cityvi.session',
       JSON.stringify({ screen: 'playing', seed: 12345, mode: 'new' }),
     );
   } catch (e) {
@@ -43,16 +43,16 @@ await page.waitForSelector('#viewport canvas', { timeout: 20000 });
 await page.waitForTimeout(4000);
 
 const ready = () =>
-  page.waitForFunction(() => !!window.__slimcity && !!window.__slimcity.cmd, null, {
+  page.waitForFunction(() => !!window.__cityvi && !!window.__cityvi.cmd, null, {
     timeout: 20000,
   });
 const call = async (fn, ...a) => {
   await ready();
   return page.evaluate(fn, ...a);
 };
-const cmd = (l, c) => call(([x, y]) => window.__slimcity.cmd(x, y), [l, c]);
-const readGrid = () => call(() => window.__slimcity.readGrid());
-const setSpeed = (s) => call((x) => window.__slimcity.setSpeed(x), s);
+const cmd = (l, c) => call(([x, y]) => window.__cityvi.cmd(x, y), [l, c]);
+const readGrid = () => call(() => window.__cityvi.readGrid());
+const setSpeed = (s) => call((x) => window.__cityvi.setSpeed(x), s);
 const cam = tileCamera(page);
 
 const g = await readGrid();
@@ -179,7 +179,7 @@ if (missing.length > 0) {
 
 // Pause, so nothing moves between shots, and pin midday so shadows read.
 await setSpeed(0);
-await call(() => window.__slimcity.setDayT(0.5));
+await call(() => window.__cityvi.setDayT(0.5));
 await page.waitForTimeout(500);
 
 const midOf = (c) => Math.round((c.from + c.to) / 2);

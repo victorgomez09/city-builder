@@ -81,7 +81,7 @@ try {
   await page.waitForTimeout(600);
 
   const engine = await page.evaluate(() => {
-    const runtime = window.__slimcity?.audio;
+    const runtime = window.__cityvi?.audio;
     if (!runtime) return { missing: true };
     const ctx = runtime.engine.context();
     return {
@@ -101,7 +101,7 @@ try {
 
   // Idempotency, in the real app: rescanning must not duplicate.
   const afterRescans = await page.evaluate(async () => {
-    const music = window.__slimcity.audio.music;
+    const music = window.__cityvi.audio.music;
     await music.scan();
     await music.scan();
     return music.state().tracks.length;
@@ -110,7 +110,7 @@ try {
 
   // Actually play it.
   const playback = await page.evaluate(async () => {
-    const music = window.__slimcity.audio.music;
+    const music = window.__cityvi.audio.music;
     music.play(0);
     await new Promise((r) => setTimeout(r, 1500));
     const state = music.state();
@@ -124,7 +124,7 @@ try {
 
   // Mute must reach the master gain.
   const muted = await page.evaluate(() => {
-    const engine = window.__slimcity.audio.engine;
+    const engine = window.__cityvi.audio.engine;
     engine.setMasterVolume(0.8, true);
     const value = engine.masterGainValue();
     engine.setMasterVolume(0.8, false);

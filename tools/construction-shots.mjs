@@ -35,7 +35,7 @@ page.on('pageerror', (e) => errors.push(e.message));
 await page.addInitScript(() => {
   try {
     sessionStorage.setItem(
-      'slimcity.session',
+      'cityvi.session',
       JSON.stringify({ screen: 'playing', seed: 12345, mode: 'new' }),
     );
   } catch (e) {
@@ -48,11 +48,11 @@ try {
   await page.waitForSelector('#viewport canvas', { timeout: 30000 });
   await hooksReady(page);
   const hook = (fn, arg) => page.evaluate(fn, arg);
-  const cmd = (label, commands) => hook(([l, c]) => window.__slimcity.cmd(l, c), [label, commands]);
+  const cmd = (label, commands) => hook(([l, c]) => window.__cityvi.cmd(l, c), [label, commands]);
   const camera = tileCamera(page);
 
   // Dry ground within a few metres of flat, for the street, its blocks and the utilities.
-  const g = await hook(() => window.__slimcity.readGrid());
+  const g = await hook(() => window.__cityvi.readGrid());
   const N = g.size;
   const idx = (x, z) => z * N + x;
   let anchor = null;
@@ -111,7 +111,7 @@ try {
   /** The buildings still going up in a block, by the block's name. */
   const goingUp = async () => {
     const standing = {};
-    for (const b of await hook(() => window.__slimcity.readBuildings())) {
+    for (const b of await hook(() => window.__cityvi.readBuildings())) {
       const block = blockOf(b);
       if (block && b.state === 0) standing[block.name] = (standing[block.name] ?? []).concat(b);
     }
@@ -119,16 +119,16 @@ try {
   };
   /** Runs held until every named block has a building going up, then pauses and shoots each. */
   const growHeldAndShoot = async (names) => {
-    await hook(() => window.__slimcity.holdConstruction(true));
-    await hook(() => window.__slimcity.setSpeed(4));
+    await hook(() => window.__cityvi.holdConstruction(true));
+    await hook(() => window.__cityvi.setSpeed(4));
     let standing = {};
     for (let s = 0; s < GROW_SECONDS; s++) {
       await page.waitForTimeout(1000);
       standing = await goingUp();
       if (names.every((n) => (standing[n]?.length ?? 0) >= 2) && s > 15) break;
     }
-    await hook(() => window.__slimcity.setSpeed(0));
-    await hook(() => window.__slimcity.setDayT(0.5));
+    await hook(() => window.__cityvi.setSpeed(0));
+    await hook(() => window.__cityvi.setDayT(0.5));
     // A paused sim posts a snapshot only when a command lands: this one carries the phase to the lighting.
     await cmd('Phase', [{ kind: 'setUnlimitedMoney', on: true }]);
     for (const name of names) {
@@ -156,15 +156,15 @@ try {
   // demand for them arrives, which the first people bring and soon outgrow. The hold goes
   // back on the moment both kinds have one going up, so those stay going up.
   for (const block of named('shop', 'works')) await zoneBlock(block);
-  await hook(() => window.__slimcity.holdConstruction(false));
-  await hook(() => window.__slimcity.setSpeed(2));
+  await hook(() => window.__cityvi.holdConstruction(false));
+  await hook(() => window.__cityvi.setSpeed(2));
   for (let s = 0; s < GROW_SECONDS * 2; s++) {
     await page.waitForTimeout(500);
     const standing = await goingUp();
     if (standing.shop?.length > 0 && standing.works?.length > 0) break;
   }
   await growHeldAndShoot(['shop', 'works']);
-  await hook(() => window.__slimcity.holdConstruction(false));
+  await hook(() => window.__cityvi.holdConstruction(false));
   console.log(errors.length === 0 ? 'no page errors' : `page errors: ${errors.join(' | ')}`);
 } finally {
   await browser.close();

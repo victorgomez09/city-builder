@@ -1,5 +1,5 @@
 /**
- * SlimCity terrain sculpting (landscaping & water):
+ * CityVI terrain sculpting (landscaping & water):
  * pure height-patch math for the four landscaping brushes (raise, lower,
  * level, smooth) plus the grid-side effects of committing an edit (water
  * mask re-derive, tree clearing on newly-submerged tiles). No three.js/DOM

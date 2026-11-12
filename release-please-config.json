@@ -3,7 +3,7 @@
   "packages": {
     ".": {
       "release-type": "node",
-      "package-name": "slimcity",
+      "package-name": "cityvi",
       "changelog-path": "CHANGELOG.md",
       "include-v-in-tag": true
     }

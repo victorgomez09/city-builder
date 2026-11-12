@@ -132,7 +132,7 @@ cap off), draw calls and triangles over a street-level view, the default
 oblique, a high overview and the oblique at night, then writes `result.json`
 and `result.md` beside one picture per view. The empty map is read first from
 the same views, so the buildings' cost is a difference. The renderer's counters
-come from the dev hook `window.__slimcity.renderInfo()`. The sim stays paused
+come from the dev hook `window.__cityvi.renderInfo()`. The sim stays paused
 throughout: a running sim clears a city that has no power, water or zones. A
 frame time on an empty map is a CPU-submission rate and reads far under what the
 GPU takes, so only the city's figures are a frame time.

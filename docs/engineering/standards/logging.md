@@ -7,13 +7,13 @@ structured log format. Grepping every non-test `.ts`/`.tsx` file under
 `src/main.ts`:
 
 ```ts
-console.warn('SlimCity: bloom pipeline unavailable, rendering without post-FX:', err);
+console.warn('CityVI: bloom pipeline unavailable, rendering without post-FX:', err);
 ```
 
 and
 
 ```ts
-console.error('SlimCity failed to boot:', err);
+console.error('CityVI failed to boot:', err);
 ```
 
 (A third hit, in `src/core/events.ts`, is inside a JSDoc example in a
@@ -37,7 +37,7 @@ the ~200 other source files.
 - **The command-ack/toast path** ([error-handling.md](error-handling.md))
   is how the player learns something failed — it's user-facing feedback,
   not a developer log.
-- **The `window.__slimcity` dev read-back surface**
+- **The `window.__cityvi` dev read-back surface**
   ([debugging.md](debugging.md)) is how a developer or a screenshot harness
   inspects live state — structural queries, not a log stream.
 - Playwright harnesses under `tools/*-shots.mjs` capture the browser's

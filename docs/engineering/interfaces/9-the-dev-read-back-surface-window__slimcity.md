@@ -1,6 +1,6 @@
-# 9. The dev read-back surface: `window.__slimcity`
+# 9. The dev read-back surface: `window.__cityvi`
 
-`src/main.ts` attaches a plain object to `window.__slimcity` behind an
+`src/main.ts` attaches a plain object to `window.__cityvi` behind an
 `import.meta.env.DEV` guard (two separate blocks: `src/main.ts:308-664`
 declares most of it; `src/main.ts:818-826` adds `screenToTile` and `audio`
 once they exist). **This is a test surface, not a product feature** — it is

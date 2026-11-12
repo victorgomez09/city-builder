@@ -28,7 +28,7 @@ page.on('pageerror', (e) => {
 await page.addInitScript(() => {
   try {
     sessionStorage.setItem(
-      'slimcity.session',
+      'cityvi.session',
       JSON.stringify({ screen: 'playing', seed: 12345, mode: 'new' }),
     );
   } catch (e) {
@@ -41,9 +41,9 @@ await page.waitForSelector('#viewport canvas', { timeout: 20000 });
 await page.waitForTimeout(4000);
 
 const call = (fn, ...a) => page.evaluate(fn, ...a);
-const cmd = (l, c) => call(([x, y]) => window.__slimcity.cmd(x, y), [l, c]);
-const readGrid = () => call(() => window.__slimcity.readGrid());
-const lampCount = () => call(() => window.__slimcity.readLampPoles().length);
+const cmd = (l, c) => call(([x, y]) => window.__cityvi.cmd(x, y), [l, c]);
+const readGrid = () => call(() => window.__cityvi.readGrid());
+const lampCount = () => call(() => window.__cityvi.readLampPoles().length);
 const cam = tileCamera(page);
 
 const g0 = await readGrid();
@@ -86,8 +86,8 @@ await cmd('Money', [{ kind: 'setUnlimitedMoney', on: true }]);
 // The pin only takes effect while the sim is running a snapshot, so it is set
 // while the sim runs and the clock is left alone.
 await call(() => {
-  window.__slimcity.setSpeed(1);
-  window.__slimcity.setDayT(3 / 24);
+  window.__cityvi.setSpeed(1);
+  window.__cityvi.setDayT(3 / 24);
 });
 await page.waitForTimeout(400);
 

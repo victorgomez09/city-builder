@@ -1,5 +1,5 @@
 /**
- * SlimCity shared contracts.
+ * CityVI shared contracts.
  *
  * This file is the API boundary between all modules.
  * Module agents code AGAINST these types and must not edit this file.

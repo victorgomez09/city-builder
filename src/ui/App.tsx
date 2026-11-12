@@ -180,7 +180,7 @@ export default function App() {
   );
 }
 
-/** Mounts the SlimCity UI overlay into `rootEl` (the `#ui-root` element). */
+/** Mounts the CityVI UI overlay into `rootEl` (the `#ui-root` element). */
 export function mountUi(rootEl: HTMLElement): void {
   createRoot(rootEl).render(<App />);
 }

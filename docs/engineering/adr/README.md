@@ -2,7 +2,7 @@
 
 A decision record captures **one choice, the pressure that forced it, and what
 it cost** — at the moment it was taken. It is a log entry, not a description of
-the system. If you want to know how SlimCity works today, read
+the system. If you want to know how CityVI works today, read
 the specs — start at the [documentation map](../../README.md); if you want to know _why it is that way and what else was
 on the table_, read here.
 

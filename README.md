@@ -1,4 +1,4 @@
-# SlimCity
+# CityVI
 
 <div align="center">
 
@@ -10,21 +10,21 @@
 [![License: AGPL v3+](https://img.shields.io/badge/License-AGPL%20v3%2B-blue.svg?style=for-the-badge)](./LICENSE)
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-FFDD00?style=for-the-badge&logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/russellbenzing)
 
-[![Play — Live Demo](https://img.shields.io/badge/Play-Live%20Demo-2ea44f?style=for-the-badge&logo=github&logoColor=white)](https://slimcity.netlify.app/)
-[![Release](https://img.shields.io/github/v/release/rbenzing/SlimCityGame?style=for-the-badge&label=Release)](https://github.com/rbenzing/SlimCityGame/releases)
-[![CI](https://img.shields.io/github/actions/workflow/status/rbenzing/SlimCityGame/ci.yml?branch=main&style=for-the-badge&label=CI)](https://github.com/rbenzing/SlimCityGame/actions/workflows/ci.yml)
+[![Play — Live Demo](https://img.shields.io/badge/Play-Live%20Demo-2ea44f?style=for-the-badge&logo=github&logoColor=white)](https://cityvi.netlify.app/)
+[![Release](https://img.shields.io/github/v/release/rbenzing/CityVIGame?style=for-the-badge&label=Release)](https://github.com/rbenzing/CityVIGame/releases)
+[![CI](https://img.shields.io/github/actions/workflow/status/rbenzing/CityVIGame/ci.yml?branch=main&style=for-the-badge&label=CI)](https://github.com/rbenzing/CityVIGame/actions/workflows/ci.yml)
 
 **A small-form-factor city builder in the browser — an engine showcase built on Three.js**
 
 🌐 **Browser-Native** • ⚡ **WebGPU + WebGL2 Fallback** • 🧠 **Deterministic Worker Sim** • 🧩 **Fully Instanced**
 
-[Play](https://slimcity.netlify.app/) • [Features](#-features) • [Quick Start](#-quick-start) • [Controls](#-controls) • [Releases](#-releases--deployment) • [Documentation](#-documentation) • [License](#-license)
+[Play](https://cityvi.netlify.app/) • [Features](#-features) • [Quick Start](#-quick-start) • [Controls](#-controls) • [Releases](#-releases--deployment) • [Documentation](#-documentation) • [License](#-license)
 
 </div>
 
 ---
 
-SlimCity is a familiar city-builder play grammar and UI layout at reduced scale:
+CityVI is a familiar city-builder play grammar and UI layout at reduced scale:
 milestone-gated zoning (low → medium-row → medium → mixed-use → high density,
 plus business & industry), demand-driven growth, a road hierarchy with
 statistical traffic in lanes, road-carried power & water, diffusing data fields,
@@ -119,9 +119,9 @@ version. Nobody edits the version by hand.
 - release-please keeps a rolling **release PR** with the next version + a
   generated `CHANGELOG.md`. Merging it tags `vX.Y.Z`, cuts a **GitHub Release**,
   and the workflow deploys the built SPA to **GitHub Pages**. The game is
-  played at [slimcity.netlify.app](https://slimcity.netlify.app/).
+  played at [cityvi.netlify.app](https://cityvi.netlify.app/).
 - The build's URL prefix comes from the `BASE_PATH` environment variable and
-  defaults to `/`. The Pages workflow sets `BASE_PATH=/SlimCityGame/`; a
+  defaults to `/`. The Pages workflow sets `BASE_PATH=/CityVIGame/`; a
   root-hosted deploy such as **Netlify** leaves it unset. `netlify.toml` carries
   the Netlify build command, publish directory (`dist`), and Node version, so
   connecting the repo needs no dashboard settings.
@@ -209,14 +209,14 @@ Released under the [GNU Affero General Public License v3.0 or later (AGPLv3+)](.
 
 ## 👤 About the Author
 
-Built by **Russell Benzing**. SlimCity is a personal project exploring how far a
+Built by **Russell Benzing**. CityVI is a personal project exploring how far a
 browser engine can be pushed toward a living, data-rich city simulation.
 
 ---
 
 ## 💬 Support
 
-If SlimCity is useful or fun to you, you can support the work:
+If CityVI is useful or fun to you, you can support the work:
 
 <div align="center">
 

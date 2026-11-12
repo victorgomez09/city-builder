@@ -31,7 +31,7 @@ describe('App', () => {
       id: 1,
       severity: 'info',
       title: 'Welcome',
-      body: 'to SlimCity',
+      body: 'to CityVI',
       tick: 0,
     });
     render(<App />);

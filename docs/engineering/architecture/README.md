@@ -1,6 +1,6 @@
 # Architecture overview
 
-SlimCity runs as three cooperating execution contexts inside one browser tab:
+CityVI runs as three cooperating execution contexts inside one browser tab:
 a deterministic simulation in a Web Worker, an imperative three.js render
 thread on the main thread, and a React DOM overlay on that same main thread.
 This document is the map of how those three are put together — what each

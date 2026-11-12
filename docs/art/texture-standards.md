@@ -1,6 +1,6 @@
 # Texture standards
 
-**Almost nothing in SlimCity is textured.** Every surface — terrain,
+**Almost nothing in CityVI is textured.** Every surface — terrain,
 buildings, roads, vehicles, props — is vertex-coloured `InstancedMesh`
 geometry against the calibrated material palette
 (`src/render/palette.ts`), not a UV-mapped image. `public/` holds no image

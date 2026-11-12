@@ -1,4 +1,4 @@
-# SlimCity documentation
+# CityVI documentation
 
 Seven disciplines, each with its own folder. Find your question below and the
 folder will have the rest.

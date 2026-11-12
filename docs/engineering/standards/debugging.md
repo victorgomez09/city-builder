@@ -8,7 +8,7 @@ traditional sense — both exist because of the standing project rule in
 is judged by looking at a screenshot, not by an assertion passing.** These
 tools are how that looking happens without doing it by hand every time.
 
-## `window.__slimcity`: the dev read-back surface
+## `window.__cityvi`: the dev read-back surface
 
 Wired in `src/main.ts`, gated by `import.meta.env.DEV` in two places (so it
 is entirely absent from a production build): once early, right after the
@@ -58,7 +58,7 @@ against a running `npm run dev` server. The shared shape, from
 `tools/visual-smoke.mjs`: launch headless Chromium with WebGPU flags
 enabled, capture `console`/`pageerror` events into a log, navigate to the
 app, wait for `#viewport canvas`, drive the game via keyboard hotkeys and
-`window.__slimcity.cmd`/`setCamera`/`setDayT`, and screenshot after each
+`window.__cityvi.cmd`/`setCamera`/`setDayT`, and screenshot after each
 step into `outDir`. Output lands in a matching `tools/shots-<name>/`
 directory, which is gitignored (`tools/shots-*/*.png` etc. in
 `.gitignore`) — the harness scripts are tracked, their captured images
@@ -112,7 +112,7 @@ same rule stated from the testing side in
 "how," that one is the "why."
 
 **Do not edit `src/` while a harness is running.** Vite hot-reloads the
-page, which drops `window.__slimcity` and the city built on it; the run
+page, which drops `window.__cityvi` and the city built on it; the run
 dies partway through with a hook that is suddenly undefined, and the shots
 it did write are of a half-built map.
 
@@ -220,7 +220,7 @@ Vitest either — jsdom has no WebAudio and no real playback, which is why
 the unit tests that do exist for audio drive fakes. `audio-check.mjs`
 generates its own throwaway WAV tone, drops it where the manifest expects
 player-supplied songs, and drives the real `AudioContext` through
-`window.__slimcity.audio` in a real browser to confirm the context
+`window.__cityvi.audio` in a real browser to confirm the context
 unlocks on a gesture, the ambient mix runs, mute reaches the master gain,
 and a dropped-in song is discovered and plays.
 
@@ -230,7 +230,7 @@ and a dropped-in song is discovered and plays.
   matching harness and look at its output before calling the change done,
   regardless of whether `npm test` is green.
 - Needing to verify sim-side state without a UI action to trigger it: reach
-  for `window.__slimcity.cmd(...)` plus the relevant `read*` method rather
+  for `window.__cityvi.cmd(...)` plus the relevant `read*` method rather
   than clicking through the UI by hand — it's deterministic and
   scriptable.
 - Adding a new harness: follow `tools/visual-smoke.mjs`'s shape (console

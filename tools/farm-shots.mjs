@@ -26,7 +26,7 @@ page.on('pageerror', (e) => errors.push(e.message));
 await page.addInitScript(() => {
   try {
     sessionStorage.setItem(
-      'slimcity.session',
+      'cityvi.session',
       JSON.stringify({ screen: 'playing', seed: 20260929, mode: 'new' }),
     );
   } catch (e) {
@@ -38,7 +38,7 @@ await page.goto(base, { waitUntil: 'domcontentloaded' });
 await page.waitForSelector('#viewport canvas', { timeout: 30000 });
 await hooksReady(page);
 const hook = (fn, arg) => page.evaluate(fn, arg);
-const cmd = (label, commands) => hook(([l, c]) => window.__slimcity.cmd(l, c), [label, commands]);
+const cmd = (label, commands) => hook(([l, c]) => window.__cityvi.cmd(l, c), [label, commands]);
 const camera = tileCamera(page);
 const shot = async (name) => {
   await page.waitForTimeout(1500);
@@ -47,11 +47,11 @@ const shot = async (name) => {
 };
 
 // Ground for the district: dry, and with some of every farmable grade in it.
-const g = await hook(() => window.__slimcity.readGrid());
+const g = await hook(() => window.__cityvi.readGrid());
 const N = g.size;
 const soilOf = await hook((n) => {
   const s = [];
-  for (let i = 0; i < n * n; i++) s.push(window.__slimcity.soilAt(i % n, Math.floor(i / n)));
+  for (let i = 0; i < n * n; i++) s.push(window.__cityvi.soilAt(i % n, Math.floor(i / n)));
   return s;
 }, N);
 const W = 44;
@@ -136,18 +136,18 @@ await cmd('Farmland', [
   { kind: 'paintZone', zone: ZONE.Agriculture, tiles: rect(X + 1, dirtZ + 1, W - 1, 8) },
 ]);
 
-await hook(() => window.__slimcity.setSpeed(4));
+await hook(() => window.__cityvi.setSpeed(4));
 let farms = [];
 for (let i = 0; i < 180; i++) {
   await page.waitForTimeout(1000);
-  const buildings = await hook(() => window.__slimcity.readBuildings());
+  const buildings = await hook(() => window.__cityvi.readBuildings());
   farms = buildings.filter((b) => b.catalogId.startsWith('farm-'));
   const kinds = new Set(farms.filter((b) => b.state === 1).map((b) => b.catalogId.split('-')[1]));
   if (kinds.size === 3 && farms.every((b) => b.state === 1) && i > 60) break;
 }
 // The sky follows the clock only while it runs, so the shots are taken at speed 1.
-await hook(() => window.__slimcity.setSpeed(1));
-const stats = await hook(() => window.__slimcity.getStats());
+await hook(() => window.__cityvi.setSpeed(1));
+const stats = await hook(() => window.__cityvi.getStats());
 console.log(
   'tick',
   stats.tick,
@@ -162,14 +162,14 @@ console.log(
   'farms',
   farms.map((b) => `${b.catalogId}@${b.x},${b.z} s${b.state} p${b.problems}`).join(' '),
 );
-console.log('kit', JSON.stringify(await hook(() => window.__slimcity.farmKit())));
+console.log('kit', JSON.stringify(await hook(() => window.__cityvi.farmKit())));
 if (!farms.some((b) => b.state === 1)) {
   console.log('FAIL: no farm building stands');
   await browser.close();
   process.exit(1);
 }
 
-await hook(() => window.__slimcity.setDayT(0.5));
+await hook(() => window.__cityvi.setDayT(0.5));
 await camera(X + W / 2, dirtZ, 700, Math.PI / 5, 0.95);
 await shot('district');
 for (const kind of ['crops', 'orchard', 'pasture']) {
@@ -186,18 +186,18 @@ for (const kind of ['crops', 'orchard', 'pasture']) {
   await camera(f.x + 3, f.z + 3, 120, -Math.PI / 3, 0.45);
   await shot(`${kind}-low`);
 }
-await hook(() => window.__slimcity.setOverlay('soil'));
+await hook(() => window.__cityvi.setOverlay('soil'));
 await camera(X + W / 2, dirtZ, 900, 0, 1.2);
 await shot('soil-lens');
-await hook(() => window.__slimcity.setOverlay(null));
-await hook(() => window.__slimcity.setTool('zone.agriculture'));
+await hook(() => window.__cityvi.setOverlay(null));
+await hook(() => window.__cityvi.setTool('zone.agriculture'));
 await camera(X + W / 2, dirtZ, 700, 0, 1.2);
 await shot('agriculture-grid');
-await hook(() => window.__slimcity.setTool('select'));
-await hook(() => window.__slimcity.setDayT(0.96));
+await hook(() => window.__cityvi.setTool('select'));
+await hook(() => window.__cityvi.setDayT(0.96));
 await camera(X + W / 2, dirtZ, 600, Math.PI / 5, 0.9);
 await shot('night');
-console.log('kit at night', JSON.stringify(await hook(() => window.__slimcity.farmKit())));
+console.log('kit at night', JSON.stringify(await hook(() => window.__cityvi.farmKit())));
 // A farmhouse up close after dark: its windows lit, and its truck parked by it.
 // South of the dirt road a farm's gate is on its north edge, and its house
 // stands in from the lot's north-west corner.
@@ -205,10 +205,10 @@ const home = farms.find((b) => b.state === 1 && b.z > dirtZ);
 if (home) {
   await camera(home.x + 0.4, home.z + 0.4, 45, Math.PI / 4, 0.5);
   await shot('farmhouse-night');
-  await hook(() => window.__slimcity.setDayT(0.5));
+  await hook(() => window.__cityvi.setDayT(0.5));
   await shot('farmhouse-day');
 }
-await hook(() => window.__slimcity.setDayT(0.5));
+await hook(() => window.__cityvi.setDayT(0.5));
 
 // Take the dirt road away from the farms at the east end and let them lapse:
 // three growth passes cut off abandons a farm, and ten more clear it away.
@@ -220,18 +220,18 @@ await cmd('Bulldoze', [
 const NO_ROAD = 4;
 for (let i = 0; i < 40; i++) {
   await page.waitForTimeout(250);
-  const now = await hook(() => window.__slimcity.readBuildings());
+  const now = await hook(() => window.__cityvi.readBuildings());
   if (now.some((b) => b.catalogId.startsWith('farm-') && b.state === 2)) break;
 }
-await hook(() => window.__slimcity.setSpeed(0));
-const cut = await hook(() => window.__slimcity.readGrid());
+await hook(() => window.__cityvi.setSpeed(0));
+const cut = await hook(() => window.__cityvi.readGrid());
 console.log(
   'dirt road east of the cut:',
   [X + W - 6, X + W - 2].map((x) => cut.roadTier[dirtZ * N + x]).join(','),
   'tick',
-  (await hook(() => window.__slimcity.getStats())).tick,
+  (await hook(() => window.__cityvi.getStats())).tick,
 );
-const after = await hook(() => window.__slimcity.readBuildings());
+const after = await hook(() => window.__cityvi.readBuildings());
 // A farm that grew a level since the list above was taken has a new id, so
 // the cut-off farms are found by where they stand and what they report.
 const lapsed = after.filter(

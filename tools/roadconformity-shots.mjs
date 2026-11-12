@@ -38,7 +38,7 @@ await unlimitedMoneyOption(page);
 await page.addInitScript(() => {
   try {
     sessionStorage.setItem(
-      'slimcity.session',
+      'cityvi.session',
       JSON.stringify({ screen: 'playing', seed: 12345, mode: 'new' }),
     );
   } catch (e) {
@@ -51,10 +51,10 @@ await hooksReady(page);
 await page.waitForTimeout(2500);
 
 const call = (fn, ...a) => page.evaluate(fn, ...a);
-const cmd = (l, c) => call(([x, y]) => window.__slimcity.cmd(x, y), [l, c]);
-const readGrid = () => call(() => window.__slimcity.readGrid());
-const paint = (x, z) => call(([a, c]) => window.__slimcity.readPaint(a, c), [x, z]);
-const drawn = (x, z) => call(([a, c]) => window.__slimcity.readDrawn(a, c), [x, z]);
+const cmd = (l, c) => call(([x, y]) => window.__cityvi.cmd(x, y), [l, c]);
+const readGrid = () => call(() => window.__cityvi.readGrid());
+const paint = (x, z) => call(([a, c]) => window.__cityvi.readPaint(a, c), [x, z]);
+const drawn = (x, z) => call(([a, c]) => window.__cityvi.readDrawn(a, c), [x, z]);
 const cam = tileCamera(page);
 
 const g0 = await readGrid();
@@ -90,7 +90,7 @@ await cmd('Sandbox', [{ kind: 'setSandbox', on: true }]);
 await cmd('Money', [{ kind: 'setUnlimitedMoney', on: true }]);
 // Pin midday. A shot taken at night is a shot nobody can read, and looking at
 // the shot is the whole point of taking it.
-await call(() => window.__slimcity.setDayT(0.5));
+await call(() => window.__cityvi.setDayT(0.5));
 await page.waitForTimeout(300);
 await logAlerts(page, 'roadconformity');
 
@@ -195,7 +195,7 @@ const classify = (c) => {
 const cornerMap = async (jx, jz, T, halfSpan, n) => {
   const x0 = jx * T - halfSpan;
   const z0 = jz * T - halfSpan;
-  const grid = await call(([a, c, d, e, f]) => window.__slimcity.readSurface(a, c, d, e, f), [
+  const grid = await call(([a, c, d, e, f]) => window.__cityvi.readSurface(a, c, d, e, f), [
     x0,
     z0,
     jx * T + halfSpan,
@@ -237,7 +237,7 @@ const cornerMap = async (jx, jz, T, halfSpan, n) => {
 const footwayConnects = async (jx, jz, T) => {
   const span = T * 1.5; // the junction tile plus a tile of each approach
   const n = 120; // 0.5 m cells at a 20 m tile
-  const grid = await call(([a, c, d, e, f]) => window.__slimcity.readSurface(a, c, d, e, f), [
+  const grid = await call(([a, c, d, e, f]) => window.__cityvi.readSurface(a, c, d, e, f), [
     jx * T + T / 2 - span,
     jz * T + T / 2 - span,
     jx * T + T / 2 + span,
@@ -354,7 +354,7 @@ for (let i = 0; i < SCENARIOS.length && i < plots.length; i++) {
   // gets the crossing and the bar, an arm running through gets neither, and a
   // signal holds every arm. Printed so a missing crossing is read against the
   // rule rather than called a defect on sight.
-  const junctions = await call(() => window.__slimcity.readJunctions());
+  const junctions = await call(() => window.__cityvi.readJunctions());
   console.log(
     '  junction   :',
     JSON.stringify(junctions.filter((j) => Math.abs(j.x - jx) <= 1 && Math.abs(j.z - jz) <= 1)),
@@ -364,7 +364,7 @@ for (let i = 0; i < SCENARIOS.length && i < plots.length; i++) {
   // for the sake of an alley is the thing to catch here, so the approach is
   // read tile by tile back from the junction rather than only at the box.
   const approachLine = async (label, ax, az) => {
-    const a = await call(([p, q]) => window.__slimcity.readApproach(p, q), [ax, az]);
+    const a = await call(([p, q]) => window.__cityvi.readApproach(p, q), [ax, az]);
     const d = await drawn(ax, az);
     console.log(
       `  ${label} approach:`,
@@ -386,13 +386,13 @@ for (let i = 0; i < SCENARIOS.length && i < plots.length; i++) {
   console.log('  N-1 paint  :', fmt(await paint(jx, jz - 1)));
   console.log('  N-2 paint  :', fmt(await paint(jx, jz - 2)));
 
-  const T = await call(() => window.__slimcity.tileMeters());
+  const T = await call(() => window.__cityvi.tileMeters());
 
   // A signal's arm is supposed to reach out over the lanes it holds. The head
   // is a few pixels across and the arm is foreshortened to nothing from
   // overhead, so it is measured against the arm road's own kerb: how far past
   // it the head hangs, and whether it reaches the lanes that stop for it.
-  const signals = await call(() => window.__slimcity.readSignals());
+  const signals = await call(() => window.__cityvi.readSignals());
   const near = signals.filter(
     (g) => Math.abs(g.tile.x - jx) <= 1 && Math.abs(g.tile.z - jz) <= 1,
   );

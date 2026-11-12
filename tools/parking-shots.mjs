@@ -107,10 +107,10 @@ await unlimitedMoneyOption(page);
 await page.addInitScript(
   ([session]) => {
     try {
-      sessionStorage.setItem('slimcity.session', JSON.stringify(session));
-      const saved = JSON.parse(localStorage.getItem('slimcity.settings') ?? '{}');
+      sessionStorage.setItem('cityvi.session', JSON.stringify(session));
+      const saved = JSON.parse(localStorage.getItem('cityvi.settings') ?? '{}');
       localStorage.setItem(
-        'slimcity.settings',
+        'cityvi.settings',
         JSON.stringify({ ...saved, sandboxUnlockAll: true, unlimitedMoney: true }),
       );
     } catch (e) {
@@ -126,16 +126,16 @@ try {
   await hooksReady(page);
   const cam = tileCamera(page);
   const send = (label, commands) =>
-    page.evaluate(([l, c]) => window.__slimcity.cmd(l, c), [label, commands]);
-  const readBuildings = () => page.evaluate(() => window.__slimcity.readBuildings());
+    page.evaluate(([l, c]) => window.__cityvi.cmd(l, c), [label, commands]);
+  const readBuildings = () => page.evaluate(() => window.__cityvi.readBuildings());
   await send('Sandbox', [{ kind: 'setSandbox', on: true }]);
   await send('Money', [{ kind: 'setUnlimitedMoney', on: true }]);
   await page.evaluate(() => {
-    window.__slimcity.setSpeed(0);
-    window.__slimcity.setDayT(0.5);
+    window.__cityvi.setSpeed(0);
+    window.__cityvi.setDayT(0.5);
   });
 
-  const g = await page.evaluate(() => window.__slimcity.readGrid());
+  const g = await page.evaluate(() => window.__cityvi.readGrid());
   const N = g.size;
   const idx = (x, z) => z * N + x;
   const flatDry = (x, z, h0) =>
@@ -229,9 +229,9 @@ try {
     const now = await readBuildings();
     for (const s of spots) {
       const b = now.find((n) => n.catalogId === s.id && n.x === s.x && n.z === s.z);
-      const p = await page.evaluate((id) => window.__slimcity.readParking(id), b.id);
+      const p = await page.evaluate((id) => window.__cityvi.readParking(id), b.id);
       const cars = s.street === 'kerb'
-        ? await page.evaluate((id) => window.__slimcity.readHouseCars(id).length, b.id)
+        ? await page.evaluate((id) => window.__cityvi.readHouseCars(id).length, b.id)
         : '';
       rows.push({
         catalogId: s.id,
@@ -249,9 +249,9 @@ try {
   let ran = 'the sim stayed paused';
   if (table.every((r) => !r.occupied)) {
     // Parked cars follow the sim's occupancy: run a few seconds, then pause again.
-    await page.evaluate(() => window.__slimcity.setSpeed(1));
+    await page.evaluate(() => window.__cityvi.setSpeed(1));
     await page.waitForTimeout(6000);
-    await page.evaluate(() => window.__slimcity.setSpeed(0));
+    await page.evaluate(() => window.__cityvi.setSpeed(0));
     await page.waitForTimeout(500);
     table = await parkingTable();
     ran = 'every lot read empty paused, so the sim ran at speed 1 for 6 s and was paused again';
@@ -264,8 +264,8 @@ try {
 
   // A paused sim posts a snapshot, which carries the pinned phase to the lighting, only when a command lands.
   await page.evaluate(() => {
-    window.__slimcity.setDayT(0.5);
-    window.__slimcity.cmd('Phase', [{ kind: 'setUnlimitedMoney', on: true }]);
+    window.__cityvi.setDayT(0.5);
+    window.__cityvi.cmd('Phase', [{ kind: 'setUnlimitedMoney', on: true }]);
   });
   await page.waitForTimeout(2000);
 
@@ -380,7 +380,7 @@ try {
   // shallow block is small (room for two) and zoned first; the deep block is
   // zoned once it has grown.
   await send('Shallow block', [{ kind: 'paintZone', zone: ZONE_COM_HIGH, tiles: shallowBlock }]);
-  await page.evaluate(() => window.__slimcity.setSpeed(4));
+  await page.evaluate(() => window.__cityvi.setSpeed(4));
   const downtown = async () =>
     (await readBuildings()).filter((b) => b.catalogId.startsWith('com-') && b.z > GZ && b.z < GZ + 8);
   let deepGrown = [];
@@ -396,7 +396,7 @@ try {
       await send('Deep block', [{ kind: 'paintZone', zone: ZONE_COM_HIGH, tiles: deepBlock }]);
     }
   }
-  await page.evaluate(() => window.__slimcity.setSpeed(0));
+  await page.evaluate(() => window.__cityvi.setSpeed(0));
   console.log(
     'grown deep block:',
     deepGrown.map((b) => `${b.catalogId}@${b.x},${b.z}`).join(' ') || 'nothing',
@@ -408,8 +408,8 @@ try {
   if (deepGrown.length === 0) fail('the deep downtown block grew nothing');
   await page.waitForTimeout(1000);
   await page.evaluate(() => {
-    window.__slimcity.setDayT(0.5);
-    window.__slimcity.cmd('Phase', [{ kind: 'setUnlimitedMoney', on: true }]);
+    window.__cityvi.setDayT(0.5);
+    window.__cityvi.cmd('Phase', [{ kind: 'setUnlimitedMoney', on: true }]);
   });
   await page.waitForTimeout(2000);
   await shoot('grown-blocks-above', GX + 24, GZ + 3.5, 420, 0, TOP_PITCH);

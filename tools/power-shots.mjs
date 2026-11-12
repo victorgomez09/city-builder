@@ -29,7 +29,7 @@ page.on('pageerror', (e) => errors.push(e.message));
 const session = (value) =>
   page.addInitScript((v) => {
     try {
-      sessionStorage.setItem('slimcity.session', JSON.stringify(v));
+      sessionStorage.setItem('cityvi.session', JSON.stringify(v));
     } catch (e) {
       void e;
     }
@@ -38,7 +38,7 @@ const session = (value) =>
 await page.addInitScript(() => {
   try {
     localStorage.setItem(
-      'slimcity.settings',
+      'cityvi.settings',
       JSON.stringify({ sandboxUnlockAll: true, unlimitedMoney: true }),
     );
   } catch (e) {
@@ -68,7 +68,7 @@ await session({ screen: 'playing', seed: 0, mode: 'load', saveId: saved.saveId }
 await page.goto(base, { waitUntil: 'domcontentloaded' });
 await page.waitForSelector('#viewport canvas', { timeout: 30000 });
 await hooksReady(page);
-await page.waitForFunction(() => window.__slimcity.getStats().population > 0, null, {
+await page.waitForFunction(() => window.__cityvi.getStats().population > 0, null, {
   timeout: 30000,
 });
 
@@ -81,16 +81,16 @@ const shot = async (name, settle = 1500, allowRefusal = undefined) => {
 };
 const yaw = Number(process.env.POWER_YAW ?? 0);
 
-await hook(() => window.__slimcity.setDayT(0.5));
-await hook(() => window.__slimcity.setSpeed(0));
+await hook(() => window.__cityvi.setDayT(0.5));
+await hook(() => window.__cityvi.setSpeed(0));
 await hook(() => {
-  window.__slimcity.cmd('Sandbox', [{ kind: 'setSandbox', on: true }]);
-  window.__slimcity.cmd('Money', [{ kind: 'setUnlimitedMoney', on: true }]);
+  window.__cityvi.cmd('Sandbox', [{ kind: 'setSandbox', on: true }]);
+  window.__cityvi.cmd('Money', [{ kind: 'setUnlimitedMoney', on: true }]);
 });
 await page.waitForTimeout(800);
 
-const T = await hook(() => window.__slimcity.tileMeters());
-const grid = await hook(() => window.__slimcity.readGrid());
+const T = await hook(() => window.__cityvi.tileMeters());
+const grid = await hook(() => window.__cityvi.readGrid());
 const N = grid.size;
 const at = (x, z) => z * N + x;
 const free = (x, z) =>
@@ -111,7 +111,7 @@ const place = (label, catalogId, x, z, rotation = 0) => {
   taken.push({ x, z });
   return hook(
     ([l, id, px, pz, r]) =>
-      window.__slimcity.cmd(l, [
+      window.__cityvi.cmd(l, [
         { kind: 'placeBuilding', catalogId: id, x: px, z: pz, rotation: r },
       ]),
     [label, catalogId, x, z, rotation],
@@ -120,7 +120,7 @@ const place = (label, catalogId, x, z, rotation = 0) => {
 const parkCar = (x, z, heading = Math.PI / 2) =>
   hook(
     ([cx, cz, h, tile]) =>
-      window.__slimcity.setVehicles([{ x: cx * tile, z: cz * tile, heading: h, kind: 0 }]),
+      window.__cityvi.setVehicles([{ x: cx * tile, z: cz * tile, heading: h, kind: 0 }]),
     [x, z, heading, T],
   );
 
@@ -155,7 +155,7 @@ let tower = freeRect(98, 78, 2, 2) && reactorRoad.every((t) => free(t.x, t.z)) ?
 if (tower) {
   await hook(
     (tiles) =>
-      window.__slimcity.cmd('Street by the reactor', [{ kind: 'buildRoad', tier: 1, tiles }]),
+      window.__cityvi.cmd('Street by the reactor', [{ kind: 'buildRoad', tier: 1, tiles }]),
     reactorRoad,
   );
   await place('Tower by the reactor', 'res-tower-1', tower.x, tower.z);
@@ -171,7 +171,7 @@ console.log(
 
 // 4. A solar farm beside houses and another turned a quarter.
 const houses = await hook(() =>
-  window.__slimcity.readBuildings().filter((b) => /^(house|res-low|res-)/.test(b.catalogId)),
+  window.__cityvi.readBuildings().filter((b) => /^(house|res-low|res-)/.test(b.catalogId)),
 );
 console.log('houses', houses.length, JSON.stringify([...new Set(houses.map((h) => h.catalogId))]));
 let farms = null;
@@ -206,7 +206,7 @@ for (const f of field) await place('Field farm', 'solar-farm', f.x, f.z, f.rotat
 
 await page.waitForTimeout(3500);
 const placed = await hook(() =>
-  window.__slimcity
+  window.__cityvi
     .readBuildings()
     .filter((b) =>
       ['solar-farm', 'gas-turbine', 'combined-cycle', 'nuclear-plant'].includes(b.catalogId),
@@ -231,7 +231,7 @@ await camera(cycle.x - 0.5, cycle.z + 1.5, 45, -Math.PI / 2 + 0.3, 0.3);
 await shot('2b-combined-cycle-car-for-scale', 2000);
 await camera(cycle.x + 1.5, cycle.z + 1.5, 120, Math.PI / 2, 0.45);
 await shot('2c-combined-cycle-from-behind', 2000);
-await hook(() => window.__slimcity.setVehicles([]));
+await hook(() => window.__cityvi.setVehicles([]));
 
 // Shot 3: the reactor from across the river, low, with the tower beside it, and its intake close.
 const reactorX = saved.t.reactor.x + 3;
@@ -294,25 +294,25 @@ for (let x = 160; x < 240 && !dry; x += 3)
 const dryRoad = [];
 for (let k = 0; k < 6; k++) dryRoad.push({ x: dry.x + k, z: dry.z + 5 });
 await hook(
-  (tiles) => window.__slimcity.cmd('Street by dry land', [{ kind: 'buildRoad', tier: 1, tiles }]),
+  (tiles) => window.__cityvi.cmd('Street by dry land', [{ kind: 'buildRoad', tier: 1, tiles }]),
   dryRoad,
 );
-await hook(() => window.__slimcity.setTool('plop.nuclear-plant'));
+await hook(() => window.__cityvi.setTool('plop.nuclear-plant'));
 // The ghost's footprint starts at the tile under the cursor, so aim the cursor at the dry corner.
 await camera(dry.x - 0.2, dry.z - 0.2, 200, yaw, 0.7);
 await page.waitForTimeout(800);
 await page.mouse.move(640, 400, { steps: 6 });
 await page.mouse.move(645, 402, { steps: 3 });
-const under = await hook(() => window.__slimcity.screenToTile(645, 402));
+const under = await hook(() => window.__cityvi.screenToTile(645, 402));
 if (!under || under.x !== dry.x || under.z !== dry.z)
   throw new Error(`the ghost is not over the dry land: cursor on ${JSON.stringify(under)}`);
 await shot('6-nuclear-ghost-over-dry-land', 1500);
-await hook(() => window.__slimcity.setTool('select'));
+await hook(() => window.__cityvi.setTool('select'));
 // The commit over the same dry land, which the world refuses for having no water beside it
 // (the street beside it is there, so the shore is the reason given).
 await hook(
   (d) =>
-    window.__slimcity.cmd('Reactor on dry land', [
+    window.__cityvi.cmd('Reactor on dry land', [
       { kind: 'placeBuilding', catalogId: 'nuclear-plant', x: d.x, z: d.z, rotation: 0 },
     ]),
   dry,
@@ -320,15 +320,15 @@ await hook(
 await page.waitForTimeout(1200);
 const afterDry = await hook(
   (d) =>
-    window.__slimcity.readBuildings().filter((b) => b.catalogId === 'nuclear-plant' && b.x === d.x),
+    window.__cityvi.readBuildings().filter((b) => b.catalogId === 'nuclear-plant' && b.x === d.x),
   dry,
 );
 console.log('reactor on dry land stands after the commit:', afterDry.length > 0);
 await shot('6b-nuclear-commit-over-dry-land', 500, /^Reactor on dry land failed It must stand on a shore\.$/);
 
 // Shot 7: night. None of the new kits lights.
-await hook(() => window.__slimcity.setSpeed(1));
-await hook(() => window.__slimcity.setDayT(0.96));
+await hook(() => window.__cityvi.setSpeed(1));
+await hook(() => window.__cityvi.setDayT(0.96));
 await camera(turbine.x + 3, turbine.z + 1, 110, yaw + 0.3, 0.5);
 await shot('7a-turbine-night', 2500);
 await camera(farms.a.x + 7, farms.a.z + 3, 150, yaw, 0.55);

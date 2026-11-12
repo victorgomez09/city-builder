@@ -1,5 +1,5 @@
 /**
- * SlimCity district paint: a per-tile
+ * CityVI district paint: a per-tile
  * district id layer, painted/erased exactly like world/grid.ts's setZones
  * paints zones — pure, no three.js/DOM, worker-owned (GridState.district,
  * src/shared/types.ts).

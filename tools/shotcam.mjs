@@ -18,13 +18,13 @@
  * a cold one, which is the worse of the two failures because it looks random.
  */
 export const hooksReady = (page) =>
-  page.waitForFunction(() => !!window.__slimcity && !!window.__slimcity.cmd, null, {
+  page.waitForFunction(() => !!window.__cityvi && !!window.__cityvi.cmd, null, {
     timeout: 20000,
   });
 
 const ready = (page) =>
   page.waitForFunction(
-    () => !!window.__slimcity && !!window.__slimcity.setCamera && !!window.__slimcity.tileMeters,
+    () => !!window.__cityvi && !!window.__cityvi.setCamera && !!window.__cityvi.tileMeters,
     null,
     { timeout: 20000 },
   );
@@ -49,8 +49,8 @@ export function tileCamera(page) {
     }
     return page.evaluate(
       ([x, z, d, yy, pp]) => {
-        const T = window.__slimcity.tileMeters();
-        window.__slimcity.setCamera((x + 0.5) * T, (z + 0.5) * T, d, yy, pp);
+        const T = window.__cityvi.tileMeters();
+        window.__cityvi.setCamera((x + 0.5) * T, (z + 0.5) * T, d, yy, pp);
       },
       [tx, tz, distance, yaw, pitch],
     );
@@ -82,7 +82,7 @@ export async function closeUp(page, scale = 2) {
 /**
  * The toasts on screen, as `{ title, body }`.
  *
- * `__slimcity.cmd` returns nothing, so the only sign that the game refused a
+ * `__cityvi.cmd` returns nothing, so the only sign that the game refused a
  * command is the toast it raises.
  */
 export const readToasts = (page) =>
@@ -189,7 +189,7 @@ export async function logAlerts(page, label) {
 export const unlimitedMoneyOption = (page) =>
   page.addInitScript(() => {
     try {
-      const key = 'slimcity.settings';
+      const key = 'cityvi.settings';
       const saved = JSON.parse(localStorage.getItem(key) ?? '{}');
       localStorage.setItem(key, JSON.stringify({ ...saved, unlimitedMoney: true }));
     } catch (e) {
@@ -200,5 +200,5 @@ export const unlimitedMoneyOption = (page) =>
 /** The app's tile size in metres, for harnesses that measure as well as look. */
 export async function tileMeters(page) {
   await ready(page);
-  return page.evaluate(() => window.__slimcity.tileMeters());
+  return page.evaluate(() => window.__cityvi.tileMeters());
 }

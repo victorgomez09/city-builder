@@ -16,7 +16,7 @@ because reviewers keep upholding them.
 | [testing.md](testing.md)                           | Vitest conventions, unit vs. integration, determinism tests, and the standing screenshot-verification rule for render work |
 | [logging.md](logging.md)                           | What little logging convention exists, and where it doesn't                                                                |
 | [error-handling.md](error-handling.md)             | The command-ack/reason pattern, fail-soft storage access, what has no convention yet                                       |
-| [debugging.md](debugging.md)                       | `window.__slimcity` dev read-backs and the `tools/*-shots.mjs` visual harnesses                                            |
+| [debugging.md](debugging.md)                       | `window.__cityvi` dev read-backs and the `tools/*-shots.mjs` visual harnesses                                            |
 
 ## How these relate to the rest of `docs/engineering/`
 

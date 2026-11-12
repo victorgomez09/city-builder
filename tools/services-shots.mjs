@@ -61,10 +61,10 @@ page.on('pageerror', (e) => {
 await page.addInitScript(() => {
   try {
     sessionStorage.setItem(
-      'slimcity.session',
+      'cityvi.session',
       JSON.stringify({ screen: 'playing', seed: 12345, mode: 'new' }),
     );
-    localStorage.setItem('slimcity.settings', JSON.stringify({ sandboxUnlockAll: true, unlimitedMoney: true }));
+    localStorage.setItem('cityvi.settings', JSON.stringify({ sandboxUnlockAll: true, unlimitedMoney: true }));
   } catch (e) {
     void e;
   }
@@ -74,10 +74,10 @@ await page.waitForSelector('#viewport canvas', { timeout: 20000 });
 await page.waitForTimeout(4000);
 
 const call = (fn, ...a) => page.evaluate(fn, ...a);
-const cmd = (l, c) => call(([x, y]) => window.__slimcity.cmd(x, y), [l, c]);
-const readGrid = () => call(() => window.__slimcity.readGrid());
-const stats = () => call(() => window.__slimcity.getStats());
-const setSpeed = (s) => call((x) => window.__slimcity.setSpeed(x), s);
+const cmd = (l, c) => call(([x, y]) => window.__cityvi.cmd(x, y), [l, c]);
+const readGrid = () => call(() => window.__cityvi.readGrid());
+const stats = () => call(() => window.__cityvi.getStats());
+const setSpeed = (s) => call((x) => window.__cityvi.setSpeed(x), s);
 const cam = tileCamera(page);
 
 const g = await readGrid();
@@ -121,7 +121,7 @@ await call(
     const heights = new Float32Array(w * h);
     for (let row = 0; row < h; row++)
       for (let col = 0; col < w; col++) heights[row * w + col] = row >= gridD + 5 ? bed : plateau;
-    window.__slimcity.cmd('Level', [{ kind: 'terraformSet', x, z, w, h, heights }]);
+    window.__cityvi.cmd('Level', [{ kind: 'terraformSet', x, z, w, h, heights }]);
   },
   [X, Z, SITE_W, SITE_D, GRID_D, PLATEAU, POND_BED],
 );
@@ -276,7 +276,7 @@ await cmd('Works pipe', [{ kind: 'layWaterPipe', tiles: [{ x: X + 29, z: Z + 65 
 const standing = () =>
   call(
     (origins) => {
-      const g2 = window.__slimcity.readGrid();
+      const g2 = window.__cityvi.readGrid();
       return origins.filter(([x, z]) => g2.buildingId[z * g2.size + x] !== 0).length;
     },
     [...UTILITIES, ...SERVICES, ...SEWAGE].map((p) => [p.x, p.z]),
@@ -293,7 +293,7 @@ if (placed < EXPECTED) {
   );
   const absent = await call(
     (list) => {
-      const g2 = window.__slimcity.readGrid();
+      const g2 = window.__cityvi.readGrid();
       return list.filter(([, x, z]) => g2.buildingId[z * g2.size + x] === 0);
     },
     [...UTILITIES, ...SERVICES, ...SEWAGE].map((p) => [p.catalogId, p.x, p.z]),
@@ -326,7 +326,7 @@ const answered = async (readBack) => {
   }
   return answer;
 };
-const readCounts = () => call(() => window.__slimcity.snapshotCounts());
+const readCounts = () => call(() => window.__cityvi.snapshotCounts());
 const GROWTH_CAP_MS = 15 * 60 * 1000;
 // A city that gains under 1% in two minutes has stopped growing: waiting out
 // the cap would time nothing more.
@@ -360,7 +360,7 @@ for (let i = 0; i < 1200; i++) {
     const mem = await answered(
       call(() => ({
         heap: performance.memory ? performance.memory.usedJSHeapSize : 0,
-        info: window.__slimcity.renderInfo?.() ?? {},
+        info: window.__cityvi.renderInfo?.() ?? {},
       })),
     );
     console.log(
@@ -400,7 +400,7 @@ await page.waitForTimeout(800);
 // serve, which is why this harness grows a city instead.
 await page.waitForTimeout(2000);
 
-const load = await call(() => window.__slimcity.getStats?.() ?? null);
+const load = await call(() => window.__cityvi.getStats?.() ?? null);
 console.log('funding after starve:', JSON.stringify(load?.serviceFunding));
 
 // Does money actually relieve a service? The design says funding buys reach AND
@@ -417,7 +417,7 @@ const readLoad = () =>
       }),
     ),
   );
-await call((f) => window.__slimcity.setOverlay(f), FIELD_HEALTH);
+await call((f) => window.__cityvi.setOverlay(f), FIELD_HEALTH);
 // The sim has to be RUNNING for any of this to mean anything: coverage is
 // recomputed on a service pass, so against a paused city every sample below
 // reads back the same stale byte and the sweep looks perfectly flat.
@@ -436,8 +436,8 @@ await setSpeed(0);
 await page.waitForTimeout(600);
 
 // The health lens opens the panel, which is one of its two documented gates.
-await call((f) => window.__slimcity.setOverlay(f), FIELD_HEALTH);
-await call(() => window.__slimcity.setDayT(0.45));
+await call((f) => window.__cityvi.setOverlay(f), FIELD_HEALTH);
+await call(() => window.__cityvi.setDayT(0.45));
 await cam(X + 15, Z + 15, 260, 0, 0.75);
 await page.waitForTimeout(1200);
 await cleanShot(page, `${out}/panel-open.png`);

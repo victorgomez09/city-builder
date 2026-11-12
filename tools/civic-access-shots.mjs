@@ -41,9 +41,9 @@ page.on('pageerror', (e) => console.log('[pageerror]', e.message));
 await page.addInitScript(
   ([session]) => {
     try {
-      sessionStorage.setItem('slimcity.session', JSON.stringify(session));
+      sessionStorage.setItem('cityvi.session', JSON.stringify(session));
       localStorage.setItem(
-        'slimcity.settings',
+        'cityvi.settings',
         JSON.stringify({ sandboxUnlockAll: true, unlimitedMoney: true }),
       );
     } catch (e) {
@@ -59,16 +59,16 @@ try {
   await hooksReady(page);
   const cam = tileCamera(page);
   const send = (label, commands) =>
-    page.evaluate(([l, c]) => window.__slimcity.cmd(l, c), [label, commands]);
+    page.evaluate(([l, c]) => window.__cityvi.cmd(l, c), [label, commands]);
   await send('Sandbox', [{ kind: 'setSandbox', on: true }]);
   await send('Money', [{ kind: 'setUnlimitedMoney', on: true }]);
   await page.evaluate(() => {
-    window.__slimcity.setSpeed(0);
-    window.__slimcity.setDayT(0.5);
+    window.__cityvi.setSpeed(0);
+    window.__cityvi.setDayT(0.5);
   });
 
   // Flat dry ground for the street and the buildings on either side of it.
-  const g = await page.evaluate(() => window.__slimcity.readGrid());
+  const g = await page.evaluate(() => window.__cityvi.readGrid());
   const N = g.size;
   const idx = (x, z) => z * N + x;
   const flatDry = (x, z, h0) =>
@@ -112,7 +112,7 @@ try {
   await place('fire-station', X + 1, road + 1, 2);
   await page.waitForTimeout(3000);
 
-  const standing = await page.evaluate(() => window.__slimcity.readBuildings());
+  const standing = await page.evaluate(() => window.__cityvi.readBuildings());
   console.log(
     'standing',
     JSON.stringify(standing.map((b) => `${b.catalogId}@${b.x},${b.z}r${b.rotation}:${b.state}`)),
@@ -129,8 +129,8 @@ try {
   };
   const setPhase = async (dayT) => {
     await page.evaluate((t) => {
-      window.__slimcity.setDayT(t);
-      window.__slimcity.cmd('Phase', [{ kind: 'setUnlimitedMoney', on: true }]);
+      window.__cityvi.setDayT(t);
+      window.__cityvi.cmd('Phase', [{ kind: 'setUnlimitedMoney', on: true }]);
     }, dayT);
     await page.waitForTimeout(2000);
   };

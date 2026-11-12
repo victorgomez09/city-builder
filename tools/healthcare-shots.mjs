@@ -52,9 +52,9 @@ page.on('console', (m) => {
 await page.addInitScript(
   ([session]) => {
     try {
-      sessionStorage.setItem('slimcity.session', JSON.stringify(session));
+      sessionStorage.setItem('cityvi.session', JSON.stringify(session));
       localStorage.setItem(
-        'slimcity.settings',
+        'cityvi.settings',
         JSON.stringify({ sandboxUnlockAll: true, unlimitedMoney: true }),
       );
     } catch (e) {
@@ -71,16 +71,16 @@ try {
   await hooksReady(page);
   const cam = tileCamera(page);
   const send = (label, commands) =>
-    page.evaluate(([l, c]) => window.__slimcity.cmd(l, c), [label, commands]);
+    page.evaluate(([l, c]) => window.__cityvi.cmd(l, c), [label, commands]);
   await send('Sandbox', [{ kind: 'setSandbox', on: true }]);
   await send('Money', [{ kind: 'setUnlimitedMoney', on: true }]);
   await page.evaluate(() => {
-    window.__slimcity.setSpeed(0);
-    window.__slimcity.setDayT(0.5);
+    window.__cityvi.setSpeed(0);
+    window.__cityvi.setDayT(0.5);
   });
 
   // Flat dry ground for the street and everything along it.
-  const g = await page.evaluate(() => window.__slimcity.readGrid());
+  const g = await page.evaluate(() => window.__cityvi.readGrid());
   const N = g.size;
   const idx = (x, z) => z * N + x;
   const dry = (x, z, h0) =>
@@ -111,7 +111,7 @@ try {
   await page.evaluate(
     ([x, z, w, h, level]) => {
       const heights = new Float32Array(w * h).fill(level);
-      window.__slimcity.cmd('Level site', [{ kind: 'terraformSet', x, z, w, h, heights }]);
+      window.__cityvi.cmd('Level site', [{ kind: 'terraformSet', x, z, w, h, heights }]);
     },
     [X - 2, Z0 - 1, STREET_TILES + 4, ROWS + 2, h0],
   );
@@ -132,7 +132,7 @@ try {
   }
   await page.waitForTimeout(3000);
 
-  const standing = await page.evaluate(() => window.__slimcity.readBuildings());
+  const standing = await page.evaluate(() => window.__cityvi.readBuildings());
   console.log(
     'standing',
     JSON.stringify(standing.map((b) => `${b.catalogId}@${b.x},${b.z}:${b.state}`)),
@@ -142,11 +142,11 @@ try {
     throw new Error(`not standing: ${missing.map((s) => s.id).join(', ')}`);
   }
   const hospital = standing.find((b) => b.catalogId === 'hospital');
-  const parking = await page.evaluate((id) => window.__slimcity.readParking(id), hospital.id);
+  const parking = await page.evaluate((id) => window.__cityvi.readParking(id), hospital.id);
   console.log('hospital parking', JSON.stringify(parking));
   if (!parking) throw new Error('readParking has no row for the hospital');
 
-  const T = await page.evaluate(() => window.__slimcity.tileMeters());
+  const T = await page.evaluate(() => window.__cityvi.tileMeters());
   // World metres of a point in a subject's local frame (rotation 0: local +Z is south, to the street).
   const centre = (s) => ({ x: (X + s.dx + s.w / 2) * T, z: (road - s.d + s.d / 2) * T });
   const at = (s, lx, lz) => {
@@ -159,7 +159,7 @@ try {
   const hearse = at(crem, 0, crem.d * 10 + 3);
   const car = at(clin, 0, clin.d * 10 + 6);
   await page.evaluate(
-    ([list]) => window.__slimcity.setVehicles(list),
+    ([list]) => window.__cityvi.setVehicles(list),
     [
       [
         { ...amb, heading: Math.PI, kind: AMBULANCE },
@@ -198,8 +198,8 @@ try {
   await shoot('crematorium-above', ...tile({ x: cc.x, z: cc.z + 8 }), 70, 0, OVERHEAD_PITCH);
 
   await page.evaluate((t) => {
-    window.__slimcity.setDayT(t);
-    window.__slimcity.cmd('Phase', [{ kind: 'setUnlimitedMoney', on: true }]);
+    window.__cityvi.setDayT(t);
+    window.__cityvi.cmd('Phase', [{ kind: 'setUnlimitedMoney', on: true }]);
   }, NIGHT);
   await page.waitForTimeout(2000);
   await shoot('hospital-night', ...tile({ x: hc.x, z: hc.z + 10 }), 150, 0.35);

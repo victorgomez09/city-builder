@@ -62,7 +62,7 @@ try {
   await page.addInitScript(() => {
     try {
       sessionStorage.setItem(
-        'slimcity.session',
+        'cityvi.session',
         JSON.stringify({ screen: 'playing', seed: 12345, mode: 'new' }),
       );
     } catch (e) {
@@ -76,15 +76,15 @@ try {
   await page.waitForTimeout(3000);
 
   const call = (fn, ...a) => page.evaluate(fn, ...a);
-  const cmd = (l, c) => call(([x, y]) => window.__slimcity.cmd(x, y), [l, c]);
+  const cmd = (l, c) => call(([x, y]) => window.__cityvi.cmd(x, y), [l, c]);
   const cam = tileCamera(page);
 
-  await call(() => window.__slimcity.setSpeed(0));
+  await call(() => window.__cityvi.setSpeed(0));
   await cmd('Sandbox', [{ kind: 'setSandbox', on: true }]);
   await cmd('Money', [{ kind: 'setUnlimitedMoney', on: true }]);
   await page.waitForTimeout(300);
 
-  const g0 = await call(() => window.__slimcity.readGrid());
+  const g0 = await call(() => window.__cityvi.readGrid());
   const N = g0.size;
   const idx = (x, z) => z * N + x;
 
@@ -210,7 +210,7 @@ try {
     // The Roundabout tool lays the block's one missing corner as a street, then
     // the ring. The avenue's corner is laid as the street it crosses.
     const corner = [{ x: bx + 1, z: bz + 1 }];
-    const gridNow = await call(() => window.__slimcity.readGrid());
+    const gridNow = await call(() => window.__cityvi.readGrid());
     const missing = corner.filter((t) => !gridNow.roadTier[idx(t.x, t.z)]);
     const ring = [
       ...(missing.length > 0
@@ -243,7 +243,7 @@ try {
 
   // Prove each laid roundabout stands before it is shot.
   await page.waitForTimeout(1500);
-  const junctions = await call(() => window.__slimcity.readJunctions());
+  const junctions = await call(() => window.__cityvi.readJunctions());
   for (const c of laid) {
     const tiles = [
       [c.bx, c.bz],
@@ -253,7 +253,7 @@ try {
     ];
     // A corner with only two arms (the laid one) is a bend, not a junction, so
     // it has no control to read; it has to be a street tile of the ring.
-    const grid = await call(() => window.__slimcity.readGrid());
+    const grid = await call(() => window.__cityvi.readGrid());
     const controls = tiles.map(
       ([x, z]) => junctions.find((j) => j.x === x && j.z === z)?.control ?? 'none-read',
     );
@@ -274,7 +274,7 @@ try {
 
   if (pageErrors.length > 0) fail(`page errors: ${pageErrors.join(' | ')}`);
 
-  await call(() => window.__slimcity.setDayT(0.5));
+  await call(() => window.__cityvi.setDayT(0.5));
   await page.waitForTimeout(500);
   const shot = async (name, tx, tz, d, yaw, pitch) => {
     await cam(tx, tz, d, yaw, pitch);
@@ -299,20 +299,20 @@ try {
   // night comes on and is paused again before the frame.
   const four = laid.find((c) => c.name === 'fourway' && c.laid !== false);
   if (four) {
-    await call(() => window.__slimcity.setSpeed(1));
-    await call(() => window.__slimcity.setDayT(0.96));
+    await call(() => window.__cityvi.setSpeed(1));
+    await call(() => window.__cityvi.setDayT(0.96));
     await page.waitForTimeout(2500);
     const T = await tileMeters(page);
-    const lamps = (await call(() => window.__slimcity.readLampPoles())).filter(
+    const lamps = (await call(() => window.__cityvi.readLampPoles())).filter(
       (p) => Math.abs(p.x / T - four.bx) <= ARM && Math.abs(p.z / T - four.bz) <= ARM,
     );
-    const turbine = (await call(() => window.__slimcity.readBuildings())).filter(
+    const turbine = (await call(() => window.__cityvi.readBuildings())).filter(
       (q) => q.catalogId === 'wind-turbine',
     );
     console.log(`fourway: ${lamps.length} lamp poles near the ring, ${turbine.length} turbine(s)`);
     if (turbine.length === 0) fail('fourway: no wind turbine stands');
     if (lamps.length === 0) fail('fourway: no lamp poles stand, so the street is not powered');
-    await call(() => window.__slimcity.setSpeed(0));
+    await call(() => window.__cityvi.setSpeed(0));
     await page.waitForTimeout(600);
     await shot('fourway-night', four.bx + 0.5, four.bz + 0.5, 110, 0.7, 0.75);
   }

@@ -1,6 +1,6 @@
 # Your music goes here
 
-Drop `.mp3` or `.wav` files into this folder and they show up in SlimCity's
+Drop `.mp3` or `.wav` files into this folder and they show up in CityVI's
 music player (Options → Audio → Music, or the now-playing chip in the status
 strip). Hit **Rescan** in the panel and new files appear — no restart needed.
 

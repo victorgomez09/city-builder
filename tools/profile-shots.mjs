@@ -41,7 +41,7 @@ await unlimitedMoneyOption(page);
 await page.addInitScript(() => {
   try {
     sessionStorage.setItem(
-      'slimcity.session',
+      'cityvi.session',
       JSON.stringify({ screen: 'playing', seed: 12345, mode: 'new' }),
     );
   } catch (e) {
@@ -53,8 +53,8 @@ await page.waitForSelector('#viewport canvas', { timeout: 20000 });
 await page.waitForTimeout(4000);
 
 const call = (fn, ...a) => page.evaluate(fn, ...a);
-const cmd = (l, c) => call(([x, y]) => window.__slimcity.cmd(x, y), [l, c]);
-const readGrid = () => call(() => window.__slimcity.readGrid());
+const cmd = (l, c) => call(([x, y]) => window.__cityvi.cmd(x, y), [l, c]);
+const readGrid = () => call(() => window.__cityvi.readGrid());
 const cam = tileCamera(page);
 const T = await tileMeters(page);
 
@@ -134,7 +134,7 @@ for (const k of ['preset', 'parked', 'bare']) {
 // Lamps stand at the kerb of the road they light. On the parked row that kerb
 // is 6 m out (12 m of carriageway), on the preset 3.75 m — a pole placed for
 // the preset would stand in the parking lane.
-const poles = await call(() => window.__slimcity.readLampPoles());
+const poles = await call(() => window.__cityvi.readLampPoles());
 const rowPoles = (z) =>
   poles
     .filter((p) => Math.abs(p.z - (z + 0.5) * T) < T / 2 && p.x > (X + 2) * T && p.x < (X + 14) * T)
@@ -156,8 +156,8 @@ if (parkedPoles.some((v) => v < 6.0 || v > 6.0 + 1.875))
   failures.push('parked-row lamps not at the 6 m kerb');
 
 await cmd('Speed', []);
-await call(() => window.__slimcity.setSpeed(0));
-await call(() => window.__slimcity.setDayT(0.5));
+await call(() => window.__cityvi.setSpeed(0));
+await call(() => window.__cityvi.setDayT(0.5));
 await logAlerts(page, 'profile');
 const shot = async (name, tx, tz, d, yaw, pitch) => {
   await cam(tx, tz, d, yaw, pitch);

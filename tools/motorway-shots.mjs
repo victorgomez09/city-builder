@@ -32,10 +32,10 @@ page.on('pageerror', (e) => console.log('[pageerror]', e.message));
 await page.addInitScript(() => {
   try {
     sessionStorage.setItem(
-      'slimcity.session',
+      'cityvi.session',
       JSON.stringify({ screen: 'playing', seed: 12345, mode: 'new' }),
     );
-    localStorage.setItem('slimcity.settings', JSON.stringify({ sandboxUnlockAll: true, unlimitedMoney: true }));
+    localStorage.setItem('cityvi.settings', JSON.stringify({ sandboxUnlockAll: true, unlimitedMoney: true }));
   } catch (e) {
     void e;
   }
@@ -45,12 +45,12 @@ await page.waitForSelector('#viewport canvas', { timeout: 20000 });
 await page.waitForTimeout(4000);
 
 const call = (fn, ...a) => page.evaluate(fn, ...a);
-const cmd = (l, c) => call(([x, y]) => window.__slimcity.cmd(x, y), [l, c]);
-const readGrid = () => call(() => window.__slimcity.readGrid());
+const cmd = (l, c) => call(([x, y]) => window.__cityvi.cmd(x, y), [l, c]);
+const readGrid = () => call(() => window.__cityvi.readGrid());
 const cam = tileCamera(page);
 
 const g = await call(() => {
-  const r = window.__slimcity.readGrid();
+  const r = window.__cityvi.readGrid();
   return { size: r.size, water: Array.from(r.water), height: Array.from(r.height) };
 });
 const N = g.size;
@@ -110,7 +110,7 @@ if (tierAt(X + 4, Z + 8) !== HIGHWAY || tierAt(X + 6, Z + 8) !== HIGHWAY) {
   console.log('MOTORWAY DID NOT LAY — the shots below show nothing worth reading');
 }
 
-await call(() => window.__slimcity.setDayT(0.45));
+await call(() => window.__cityvi.setDayT(0.45));
 await page.waitForTimeout(600);
 
 const restore = await closeUp(page, 3);

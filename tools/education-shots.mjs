@@ -24,7 +24,7 @@ page.on('pageerror', (e) => errors.push(e.message));
 const session = (value) =>
   page.addInitScript((v) => {
     try {
-      sessionStorage.setItem('slimcity.session', JSON.stringify(v));
+      sessionStorage.setItem('cityvi.session', JSON.stringify(v));
     } catch (e) {
       void e;
     }
@@ -61,7 +61,7 @@ await session({ screen: 'playing', seed: 0, mode: 'load', saveId: saved.saveId }
 await page.goto(base, { waitUntil: 'domcontentloaded' });
 await page.waitForSelector('#viewport canvas', { timeout: 30000 });
 await hooksReady(page);
-await page.waitForFunction(() => window.__slimcity.getStats().population > 0, null, {
+await page.waitForFunction(() => window.__cityvi.getStats().population > 0, null, {
   timeout: 30000,
 });
 
@@ -73,11 +73,11 @@ const shot = async (name, settle = 1500) => {
   console.log('shot', name);
 };
 
-await hook(() => window.__slimcity.setDayT(0.5));
-await hook(() => window.__slimcity.setSpeed(0));
+await hook(() => window.__cityvi.setDayT(0.5));
+await hook(() => window.__cityvi.setSpeed(0));
 await hook(() => {
-  window.__slimcity.cmd('Sandbox', [{ kind: 'setSandbox', on: true }]);
-  window.__slimcity.cmd('Money', [{ kind: 'setUnlimitedMoney', on: true }]);
+  window.__cityvi.cmd('Sandbox', [{ kind: 'setSandbox', on: true }]);
+  window.__cityvi.cmd('Money', [{ kind: 'setUnlimitedMoney', on: true }]);
 });
 
 // The elementary school stands at (91,116) and a campus turned a quarter is put
@@ -86,7 +86,7 @@ const elementary = { x: 91, z: 116 };
 const turned = { x: 123, z: 104 };
 // A short two-lane stub off the bus lane runs up to the campus's west edge.
 await hook(() =>
-  window.__slimcity.cmd('Campus stub', [
+  window.__cityvi.cmd('Campus stub', [
     {
       kind: 'buildRoad',
       tier: 1,
@@ -96,7 +96,7 @@ await hook(() =>
 );
 await hook(
   (t) =>
-    window.__slimcity.cmd('Turned campus', [
+    window.__cityvi.cmd('Turned campus', [
       // Its front is the west edge, where the stub meets it.
       { kind: 'placeBuilding', catalogId: 'high-school', x: t.x, z: t.z, rotation: 3 },
     ]),
@@ -106,7 +106,7 @@ await hook(
 // clinic, park and police station on the alley's west kerb, the fire station
 // on the one-way street's east kerb.
 await hook(() =>
-  window.__slimcity.cmd('College neighbours', [
+  window.__cityvi.cmd('College neighbours', [
     // Each front faces its kerb: east to the alley, west to the one-way street.
     { kind: 'placeBuilding', catalogId: 'clinic', x: 68, z: 108, rotation: 1 },
     { kind: 'placeBuilding', catalogId: 'police-station', x: 68, z: 112, rotation: 1 },
@@ -119,7 +119,7 @@ await hook(() =>
 // avenue here, the library keeps its face to main street.
 await hook(
   ([lib, el]) =>
-    window.__slimcity.cmd('Face the street', [
+    window.__cityvi.cmd('Face the street', [
       { kind: 'bulldoze', tiles: [lib, el] },
       { kind: 'placeBuilding', catalogId: 'library', x: lib.x, z: lib.z, rotation: 2 },
       { kind: 'placeBuilding', catalogId: 'school', x: el.x, z: el.z, rotation: 3 },
@@ -128,7 +128,7 @@ await hook(
 );
 await page.waitForTimeout(2500);
 const placed = await hook(() =>
-  window.__slimcity
+  window.__cityvi
     .readBuildings()
     .filter((b) =>
       ['school', 'middle-school', 'high-school', 'college', 'library'].includes(b.catalogId),
@@ -137,7 +137,7 @@ const placed = await hook(() =>
 );
 console.log('education buildings', JSON.stringify(placed));
 
-const T = await hook(() => window.__slimcity.tileMeters());
+const T = await hook(() => window.__cityvi.tileMeters());
 const yaw = Number(process.env.EDU_YAW ?? 0);
 // The camera looks at the front of each turned building: yaw 0 is from the south,
 // so the library (door north, to main street) is seen from the north and the
@@ -149,7 +149,7 @@ const elYaw = yaw - Math.PI / 2;
 const parkCar = (x, z, heading) =>
   hook(
     ([cx, cz, tile, h]) =>
-      window.__slimcity.setVehicles([{ x: cx * tile, z: cz * tile, heading: h, kind: 0 }]),
+      window.__cityvi.setVehicles([{ x: cx * tile, z: cz * tile, heading: h, kind: 0 }]),
     [x, z, T, heading],
   );
 await parkCar(elementary.x - 0.5, elementary.z + 1, 0);
@@ -162,7 +162,7 @@ await camera(saved.library.x + 1, saved.library.z + 0.5, 70, libYaw, 0.55);
 await shot('a3-library-with-car', 2000);
 await camera(saved.library.x + 1, saved.library.z + 0.5, 100, libYaw + 0.6, 0.4);
 await shot('a4-library-three-quarter', 2000);
-await hook(() => window.__slimcity.setVehicles([]));
+await hook(() => window.__cityvi.setVehicles([]));
 
 // The middle and high schools side by side, then each close.
 await camera(65.5, 104, 190, yaw, 0.7);
@@ -191,12 +191,12 @@ await shot('a5-library-door-close', 2500);
 await restore();
 
 // One coverage lens over the campuses.
-await hook(() => window.__slimcity.setOverlay(10));
+await hook(() => window.__cityvi.setOverlay(10));
 // The Services panel stands over the left quarter whenever a service lens is on,
 // so the camera aims west of the campuses to put them in the clear right of it.
 await camera(62, 106, 200, yaw, 0.7);
 await shot('e-high-school-lens-over-campuses');
-await hook(() => window.__slimcity.setOverlay(null));
+await hook(() => window.__cityvi.setOverlay(null));
 
 // A campus turned a quarter: the lot swings with its street side.
 await camera(turned.x + 1.5, turned.z + 2, 130, yaw + 0.3, 0.6);
@@ -205,8 +205,8 @@ await camera(turned.x + 1.5, turned.z + 2, 90, yaw + 0.9, 0.35);
 await shot('f2-high-school-turned-low');
 
 // Night: the windows, gym bands, clerestory and door panes are the lit face of each building.
-await hook(() => window.__slimcity.setSpeed(1));
-await hook(() => window.__slimcity.setDayT(0.96));
+await hook(() => window.__cityvi.setSpeed(1));
+await hook(() => window.__cityvi.setDayT(0.96));
 await camera(65.5, 106, 190, yaw, 0.65);
 await shot('d-campuses-night', 2500);
 await camera(elementary.x + 1, elementary.z + 1.5, 100, elYaw + 0.3, 0.5);

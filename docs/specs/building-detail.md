@@ -76,7 +76,7 @@
 - `src/render/busshelter.ts` `buildBusShelterGeometry`; `src/render/transit.ts` `TransitRenderer.apply` — the shared shelter.
 - `src/render/lots.ts`, `src/shared/lotlayout.ts` — merged lot mesh, drive-through, trailer stalls, car parks.
 - `src/render/terrain.ts`, `src/render/roadsmesh.ts` — the chunk-mesh shape lots follow.
-- `src/render/geometrybudget.test.ts` — the tiers; `tools/frame-budget.mjs` and `window.__slimcity.renderInfo()` — the frame measurement.
+- `src/render/geometrybudget.test.ts` — the tiers; `tools/frame-budget.mjs` and `window.__cityvi.renderInfo()` — the frame measurement.
 - `tools/house-shots.mjs`, `storefront-shots.mjs`, `industry-shots.mjs`, `apartment-shots.mjs`, `ploppable-shots.mjs`, `earliest-kits-shots.mjs`, `nightlook-shots.mjs` — the shots.
 - `src/main.ts` — builds `hasStopBuilding` from the snapshot.
 - `UtilityKitRenderer` in `src/render/utilitykits.ts` — one `InstancedMesh` per part kind, the civic pattern.
@@ -142,7 +142,7 @@ A tier counts everything on the lot: body, roof, parts, paving, yard, trees, car
 
 No save-sized city existed and growth is tick-driven, so `tools/frame-budget.mjs` builds a synthetic Metropolis by command. Sandbox mode lets the place command take any catalog entry; streets go over dry ground, about nine thousand zoned buildings in the catalog's real mix plus one of every kit, with the sim paused, because a running sim clears a city with no power or zones.
 
-It reads frame time with the browser's frame cap off, and draw calls and triangles from `window.__slimcity.renderInfo()`, over four fixed views by day and night, against the empty map. A cheaper CPU side lets the browser queue frames, so it reports the 95th percentile of eight-frame averages, not single frames.
+It reads frame time with the browser's frame cap off, and draw calls and triangles from `window.__cityvi.renderInfo()`, over four fixed views by day and night, against the empty map. A cheaper CPU side lets the browser queue frames, so it reports the 95th percentile of eight-frame averages, not single frames.
 
 A slice that moves the frame past the standard's figure shrinks its parts, not the budget. If the house tier fails at the Metropolis, the recipe loses its smallest parts first (shutters, sills) and keeps roof, porch and garage. Ten thousand bodies with six parts is sixty thousand slots across a few dozen buckets, inside the stated ~300 calls.
 

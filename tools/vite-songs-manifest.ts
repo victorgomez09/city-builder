@@ -35,7 +35,7 @@ export function songsManifestPlugin(): Plugin {
   let publicDir = 'public';
 
   return {
-    name: 'slimcity-songs-manifest',
+    name: 'cityvi-songs-manifest',
 
     configResolved(config) {
       publicDir = config.publicDir;

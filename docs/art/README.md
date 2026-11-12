@@ -1,6 +1,6 @@
 # In-world art direction
 
-This folder is the art bible: the visual language everything in SlimCity is
+This folder is the art bible: the visual language everything in CityVI is
 built to — buildings, streets, props, vehicles, and the standards an asset must
 meet. How that language is actually rendered — lighting, terrain, water,
 vegetation, the pipeline — is in

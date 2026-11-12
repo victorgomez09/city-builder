@@ -1,6 +1,6 @@
 # Layout
 
-SlimCity's UI grammar is bottom-heavy, the genre's familiar shape: the top
+CityVI's UI grammar is bottom-heavy, the genre's familiar shape: the top
 corners carry only small circular utility buttons, and everything
 load-bearing lives in two stacked bars at the bottom of the screen.
 
