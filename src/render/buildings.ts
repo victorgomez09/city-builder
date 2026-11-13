@@ -848,7 +848,24 @@ export class BuildingInstancer {
       : solidWall.mul(PARAPET_DARKEN);
     const wallExpression = select(isParapet, parapetColor, withEntrance);
 
-    const dayColorNode = select(isWall, wallExpression, roofColorNode);
+    // Roof surface procedural detailing: perimeter coping border flashing and roll seam / aggregate variation
+    const isRoofEdge = uvNode.x
+      .lessThan(0.035)
+      .or(uvNode.x.greaterThan(0.965))
+      .or(uvNode.y.lessThan(0.035))
+      .or(uvNode.y.greaterThan(0.965));
+    const copingColor = roofColorNode.mul(0.76);
+    const seamX = fract(uvNode.x.mul(cols).mul(1.5));
+    const isRollSeam = seamX.lessThan(0.035);
+    const roofSeed = floor(uvNode.x.mul(14.0))
+      .mul(29.0)
+      .add(floor(uvNode.y.mul(14.0)).mul(41.0))
+      .add(buildingIdAttr.mul(17.0));
+    const aggregateTone = mix(0.95, 1.05, hash(roofSeed));
+    const texturedRoof = select(isRollSeam, roofColorNode.mul(0.88), roofColorNode.mul(aggregateTone));
+    const roofExpression = select(isRoofEdge, copingColor, texturedRoof);
+
+    const dayColorNode = select(isWall, wallExpression, roofExpression);
     material.colorNode = dayColorNode.mul(nightTintNode(this.nightFactorUniform));
 
     return material;

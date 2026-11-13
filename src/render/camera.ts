@@ -9,7 +9,14 @@
 import * as THREE from 'three';
 import type { CameraState } from '../shared/types';
 import { MAP_SIZE, TILE_METERS } from '../shared/constants';
-import { cameraPosition, clampState, dampTowards, panDelta, zoomToCursor } from './cameramath';
+import {
+  CAMERA_PAN_MARGIN_METERS,
+  cameraPosition,
+  clampState,
+  dampTowards,
+  panDelta,
+  zoomToCursor,
+} from './cameramath';
 
 const ROTATE_SPEED = 0.006; // radians per pixel of drag
 const ZOOM_SPEED = 0.0011; // exponential factor per wheel deltaY unit
@@ -21,7 +28,8 @@ const KEY_PAN_PX_PER_SEC = 900; // synthetic screen-pixel pan speed for WASD/edg
 // scroll/clamp-at-boundary doesn't read as a discrete "jump the map".
 const PAN_LAMBDA = 8;
 
-const clampToMap = (v: number, mapMeters: number): number => Math.min(mapMeters, Math.max(0, v));
+const clampToMap = (v: number, mapMeters: number): number =>
+  Math.min(mapMeters + CAMERA_PAN_MARGIN_METERS, Math.max(-CAMERA_PAN_MARGIN_METERS, v));
 
 const MIDDLE_BUTTON = 1;
 const RIGHT_BUTTON = 2;

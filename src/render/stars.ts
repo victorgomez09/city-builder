@@ -10,7 +10,7 @@ import * as THREE from 'three';
 
 export const STAR_COUNT = 900;
 /** Meters: comfortably outside the map/fog/camera range so stars read as "at infinity". */
-export const STAR_FIELD_RADIUS = 6000;
+export const STAR_FIELD_RADIUS = 25000;
 /** Fixed seed: stars are decorative background, not tied to any game entity id. */
 export const STAR_SEED = 918_273_645;
 

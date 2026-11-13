@@ -120,6 +120,7 @@ export function StatusStrip(): JSX.Element {
   const monthlyExpenses = useCityStore((s) => s.stats.monthlyExpenses);
   const unlimitedMoney = useCityStore((s) => s.settings.unlimitedMoney);
   const happiness = useCityStore((s) => s.stats.happiness);
+  const weather = useCityStore((s) => s.weather);
   const previousMonthPopulation = useCityStore((s) => s.previousMonthPopulation);
   const previousMonthFunds = useCityStore((s) => s.previousMonthFunds);
   const setOverlay = useCityStore((s) => s.setOverlay);
@@ -150,9 +151,11 @@ export function StatusStrip(): JSX.Element {
         </span>
       </div>
       <Divider />
-      <div className="flex shrink-0 items-center gap-1 text-white/80">
+      <div className="flex shrink-0 items-center gap-1.5 text-white/80">
         <Icon name={seasonIcon} className="h-3.5 w-3.5" />
         <span>{season}</span>
+        <span className="text-white/40">•</span>
+        <span className="capitalize">{weather}</span>
       </div>
       <Divider />
       <div className="flex-1 text-center font-semibold tracking-wide">{CITY_NAME}</div>

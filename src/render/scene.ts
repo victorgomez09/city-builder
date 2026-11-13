@@ -12,6 +12,7 @@ import { MAP_SIZE, TILE_METERS } from '../shared/constants';
 import { StarField } from './stars';
 import { SkyDome, SunBillboard } from './sky';
 import { sunDirection } from './sun';
+import type { WeatherAtmosphere } from './weather';
 
 // ---------------------------------------------------------------------------
 // Renderer bootstrap
@@ -291,7 +292,7 @@ export function timeOfDayColors(t: number): TimeOfDayColors {
     hemiSkyColor: [...kf.hemiSkyColor],
     hemiGroundColor: [...kf.hemiGroundColor],
     hemiIntensity: kf.hemiIntensity,
-    fogColor: [...backgroundColor],
+    fogColor: [...skyHorizonColor],
     backgroundColor,
     skyZenithColor,
     skyHorizonColor,
@@ -309,6 +310,8 @@ export interface WorldScene {
   setTimeOfDay(t: number): void;
   /** Slews the (limited-span) sun shadow frustum to centre on a world XZ point — the camera target — so shadows stay resolved where the player is looking. */
   setShadowFocus(x: number, z: number): void;
+  /** Modulates atmospheric fog, sun/ambient lighting, sky and sun disc by dynamic weather. */
+  setWeatherAtmosphere(atmo: WeatherAtmosphere): void;
 }
 
 /** Builds the lit THREE.Scene: hemisphere ambient, shadow-casting sun, fog, sky background. */
@@ -354,13 +357,16 @@ export function createWorldScene(): WorldScene {
   scene.add(sun.target);
   scene.add(sun);
 
-  const fog = new THREE.Fog(0x8fc7f0, mapMeters * 0.35, mapMeters * 1.4);
+  const fog = new THREE.Fog(0x8fc7f0, mapMeters * 0.65, mapMeters * 2.8);
   scene.fog = fog;
   // sky.ts's gradient dome is the sole background visual —
   // no flat scene.background assignment here (single owner).
 
   const stars = new StarField(scene);
+  stars.points.position.copy(mapCenter);
   const sky = new SkyDome(scene);
+  sky.mesh.position.copy(mapCenter);
+  sky.mesh.updateMatrix();
   const sunBillboard = new SunBillboard(scene);
 
   const sunDistance = mapMeters * 1.4;
@@ -432,27 +438,71 @@ export function createWorldScene(): WorldScene {
     placeSun();
   };
 
-  const setTimeOfDay = (t: number): void => {
-    const c = timeOfDayColors(t);
+  let lastDayT = 0.5;
+  let lastAtmosphere: WeatherAtmosphere | null = null;
+
+  const applyAtmosphere = (): void => {
+    const c = timeOfDayColors(lastDayT);
+    const atmo = lastAtmosphere;
 
     sunDir = c.sunDirection;
     placeSun();
-    sun.color.setRGB(c.sunColor[0], c.sunColor[1], c.sunColor[2]);
-    sun.intensity = c.sunIntensity;
-    sun.shadow.intensity = c.shadowIntensity;
 
-    hemi.color.setRGB(c.hemiSkyColor[0], c.hemiSkyColor[1], c.hemiSkyColor[2]);
-    hemi.groundColor.setRGB(c.hemiGroundColor[0], c.hemiGroundColor[1], c.hemiGroundColor[2]);
-    hemi.intensity = c.hemiIntensity;
+    const sunIntensityMult = atmo ? atmo.sunIntensityMultiplier : 1.0;
+    const sunShadowMult = atmo ? atmo.sunShadowMultiplier : 1.0;
+    const sunTint = atmo ? atmo.sunColorTint : ([1, 1, 1] as const);
 
-    fog.color.setRGB(c.fogColor[0], c.fogColor[1], c.fogColor[2]);
+    sun.color.setRGB(
+      c.sunColor[0] * sunTint[0],
+      c.sunColor[1] * sunTint[1],
+      c.sunColor[2] * sunTint[2],
+    );
+    sun.intensity = c.sunIntensity * sunIntensityMult;
+    sun.shadow.intensity = c.shadowIntensity * sunShadowMult;
+
+    const hemiIntensityMult = atmo ? atmo.hemiIntensityMultiplier : 1.0;
+    const hemiTint = atmo ? atmo.hemiColorTint : ([1, 1, 1] as const);
+
+    hemi.color.setRGB(
+      c.hemiSkyColor[0] * hemiTint[0],
+      c.hemiSkyColor[1] * hemiTint[1],
+      c.hemiSkyColor[2] * hemiTint[2],
+    );
+    hemi.groundColor.setRGB(
+      c.hemiGroundColor[0] * hemiTint[0],
+      c.hemiGroundColor[1] * hemiTint[1],
+      c.hemiGroundColor[2] * hemiTint[2],
+    );
+    hemi.intensity = c.hemiIntensity * hemiIntensityMult;
+
+    const fogNear = atmo ? mapMeters * atmo.fogNearRatio : mapMeters * 0.65;
+    const fogFar = atmo ? mapMeters * atmo.fogFarRatio : mapMeters * 2.8;
+    const fogTint = atmo ? atmo.fogColorTint : ([1, 1, 1] as const);
+
+    fog.near = fogNear;
+    fog.far = fogFar;
+    fog.color.setRGB(
+      c.fogColor[0] * fogTint[0],
+      c.fogColor[1] * fogTint[1],
+      c.fogColor[2] * fogTint[2],
+    );
 
     stars.setNightFactor(c.nightFactor);
-    sky.setTimeOfDay(t);
-    sunBillboard.setTimeOfDay(t);
+    sky.setTimeOfDay(lastDayT, atmo ? atmo.skyColorTint : undefined);
+    sunBillboard.setTimeOfDay(lastDayT, atmo ? atmo.sunVisibility : 1);
+  };
+
+  const setTimeOfDay = (t: number): void => {
+    lastDayT = t;
+    applyAtmosphere();
+  };
+
+  const setWeatherAtmosphere = (atmo: WeatherAtmosphere): void => {
+    lastAtmosphere = atmo;
+    applyAtmosphere();
   };
 
   setTimeOfDay(0.5);
 
-  return { scene, setTimeOfDay, setShadowFocus };
+  return { scene, setTimeOfDay, setShadowFocus, setWeatherAtmosphere };
 }

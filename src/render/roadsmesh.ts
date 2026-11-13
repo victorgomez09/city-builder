@@ -6515,6 +6515,27 @@ export class RoadMeshRenderer {
   }
 
   /**
+   * Modulates road pavement color by nightFactor, wetness (darkened wet asphalt),
+   * and snowCover (frosty winter dusting).
+   */
+  setEnvironment(nightFactor: number, wetness = 0, snowCover = 0): void {
+    const base = roadNightTint(nightFactor);
+    const wetMult = 1.0 - Math.min(1, Math.max(0, wetness)) * 0.22;
+    const r = base[0] * wetMult;
+    const g = base[1] * wetMult;
+    const b = base[2] * wetMult;
+    const effectiveSnow = Math.min(1, Math.max(0, snowCover)) * 0.6;
+    const snowR = 0.94;
+    const snowG = 0.96;
+    const snowB = 1.0;
+    this.material.color.setRGB(
+      r + (snowR - r) * effectiveSnow,
+      g + (snowG - g) * effectiveSnow,
+      b + (snowB - b) * effectiveSnow,
+    );
+  }
+
+  /**
    * The night tint, on top of the Lambert lighting's own darkening. Scales
    * material.color (a multiplier on lit vertex color), so it deepens the
    * pavement at night without touching per-tile colors, keeping the lamp
@@ -6522,7 +6543,7 @@ export class RoadMeshRenderer {
    * its full lit color.
    */
   setNightFactor(nightFactor: number): void {
-    this.material.color.setRGB(...roadNightTint(nightFactor));
+    this.setEnvironment(nightFactor, 0, 0);
   }
 
   /** Adds to `dirty` every chunk with road in it that tile (x, z) can change the drawing of. */

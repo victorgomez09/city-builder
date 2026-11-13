@@ -12,7 +12,8 @@
 
 import * as THREE from 'three';
 import { MeshStandardNodeMaterial, type MeshLambertNodeMaterial } from 'three/webgpu';
-import { uniform } from 'three/tsl';
+import { float, mix, uniform, vec3, vertexColor } from 'three/tsl';
+import { createNoise2D, type NoiseFunction2D } from 'simplex-noise';
 import { nightBodyMaterial, nightTintNode } from './nightlook';
 import type { MapData, TilePoint } from '../shared/types';
 import {
@@ -53,6 +54,45 @@ const SNOW_COLOR: readonly [number, number, number] = [0.93, 0.95, 0.98];
 export const SNOW_MIN_HEIGHT = 400;
 /** Vertical transition range in meters over which snow reaches full coverage. */
 export const SNOW_BLEND_RANGE = 50;
+
+// ---------------------------------------------------------------------------
+// Seasonal ground grass/terrain tints
+// ---------------------------------------------------------------------------
+export const TERRAIN_WINTER_TINT: readonly [number, number, number] = [0.9, 0.94, 0.98];
+export const TERRAIN_SPRING_TINT: readonly [number, number, number] = [1.02, 1.08, 0.94];
+export const TERRAIN_SUMMER_TINT: readonly [number, number, number] = [1.0, 1.0, 1.0];
+export const TERRAIN_AUTUMN_TINT: readonly [number, number, number] = [1.08, 0.96, 0.8];
+
+const TERRAIN_SEASON_KEYFRAMES: ReadonlyArray<
+  readonly [number, readonly [number, number, number]]
+> = [
+  [1, TERRAIN_WINTER_TINT],
+  [4, TERRAIN_SPRING_TINT],
+  [7, TERRAIN_SUMMER_TINT],
+  [10, TERRAIN_AUTUMN_TINT],
+];
+
+/**
+ * Calculates continuous seasonal ground tint for any calendar month [1..12].
+ */
+export function terrainSeasonalTint(month: number): [number, number, number] {
+  const wrapped = ((((month - 1) % 12) + 12) % 12) + 1; // canonical [1, 13)
+  const count = TERRAIN_SEASON_KEYFRAMES.length;
+  for (let i = 0; i < count; i++) {
+    const [m0, c0] = TERRAIN_SEASON_KEYFRAMES[i]!;
+    const [m1raw, c1] = TERRAIN_SEASON_KEYFRAMES[(i + 1) % count]!;
+    const m1 = m1raw > m0 ? m1raw : m1raw + 12;
+    if (wrapped >= m0 && wrapped <= m1) {
+      const t = (wrapped - m0) / (m1 - m0);
+      return [
+        c0[0] + (c1[0] - c0[0]) * t,
+        c0[1] + (c1[1] - c0[1]) * t,
+        c0[2] + (c1[2] - c0[2]) * t,
+      ];
+    }
+  }
+  return [1, 1, 1];
+}
 
 // Water rendering — terrain-side seabed/shoreline treatment. The water
 // SURFACE itself (translucent plane, waves, glint) is water.ts's; this is
@@ -97,6 +137,142 @@ const SKIRT_DIRT_VARIATION_SEED = 4271;
 /** Max +/- per-channel delta the dirt variation noise applies around the anchor. */
 const SKIRT_DIRT_VARIATION_RANGE = 0.06;
 
+// ---------------------------------------------------------------------------
+// Endless backdrop terrain & continuous 360-degree horizon (LOD rings)
+// ---------------------------------------------------------------------------
+
+/** Distance in meters the continuous backdrop terrain extends outward from the playable parcel. */
+export const BACKDROP_REACH_METERS = 16000;
+
+/** Distance in meters from the parcel boundary across which terrain maintains 100% full micro-definition like in-parcel ground. */
+export const BACKDROP_NEAR_ZONE_METERS = 2500;
+
+/** Distance in meters from the parcel boundary where micro-noise and fine textures fully diffuse into smooth regional tones. */
+export const BACKDROP_DIFFUSE_FAR_METERS = 8000;
+
+/** Distance in meters from the parcel boundary where procedural natural 2D rolling relief begins to emerge. */
+export const BACKDROP_RELIEF_START_METERS = 20;
+
+/** Distance in meters from the parcel boundary where procedural macro relief reaches full undulating amplitude. */
+export const BACKDROP_RELIEF_FULL_METERS = 350;
+
+/** Number of perimeter segments per straight edge of the inner boundary (256 segments across 5120m = 20m quad width, matching city tile resolution 1:1). */
+export const BACKDROP_SEGMENTS_PER_SIDE = 256;
+
+/** Number of radial segments per corner arc (16 segments across 90-degree corner). */
+export const BACKDROP_CORNER_SEGMENTS = 16;
+
+/** Concentric LOD radial offsets (meters) with smooth isotropic geometric progression from parcel edge to horizon. */
+export const BACKDROP_RING_RADII: readonly number[] = [
+  0,
+  10,
+  20,
+  32,
+  46,
+  62,
+  80,
+  100,
+  122,
+  146,
+  172,
+  200,
+  230,
+  262,
+  296,
+  332,
+  370,
+  410,
+  452,
+  496,
+  542,
+  590,
+  640,
+  692,
+  746,
+  802,
+  860,
+  920,
+  982,
+  1050,
+  1125,
+  1205,
+  1290,
+  1380,
+  1475,
+  1575,
+  1680,
+  1790,
+  1910,
+  2040,
+  2180,
+  2330,
+  2490,
+  2660,
+  2840,
+  3030,
+  3230,
+  3450,
+  3690,
+  3950,
+  4230,
+  4530,
+  4860,
+  5220,
+  5610,
+  6030,
+  6490,
+  6990,
+  7540,
+  8150,
+  8820,
+  9560,
+  10380,
+  11300,
+  12340,
+  13520,
+  14700,
+  BACKDROP_REACH_METERS, // Ring 67: 16000m horizon edge
+];
+
+/** Transition distance (meters) over which boundary edge elevation smoothly blends into macro procedural landscape. */
+export const BACKDROP_BLEND_METERS = 800;
+
+export interface DetailLevels {
+  /** 2.8m - 4m micro-grain (sand grain, rock crag, lawn micro). Attenuated in near buffer to prevent Gouraud interpolation streaks. */
+  readonly micro: number;
+  /** 10m - 24m patches (dry grass, rock boulders, dunes). Preserved across near/mid buffer. */
+  readonly mid: number;
+  /** 30m - 96m broad variation (grass hues, regional tones). Active across entire panorama. */
+  readonly macro: number;
+}
+
+/**
+ * Multiscale anti-aliased detail levels:
+ * Filters out high-frequency spatial noise before the local quad size exceeds its Nyquist wavelength,
+ * completely eliminating anisotropic stretching/streaks while preserving full definition near the city.
+ */
+export function backdropDetailLevels(dist: number): DetailLevels {
+  const micro = dist <= 80 ? 1.0 : dist >= 350 ? 0.0 : 1.0 - quinticStep(80, 350, dist);
+  const mid = dist <= 250 ? 1.0 : dist >= 1600 ? 0.0 : 1.0 - quinticStep(250, 1600, dist);
+  const macro = dist <= 3000 ? 1.0 : dist >= 8500 ? 0.0 : 1.0 - quinticStep(3000, 8500, dist);
+  return { micro, mid, macro };
+}
+
+export function backdropDetailFactor(dist: number): number {
+  return backdropDetailLevels(dist).mid;
+}
+
+/** Deterministic PRNG for backdrop macro noise. */
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return function random(): number {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 const clamp01 = (v: number): number => Math.min(1, Math.max(0, v));
 const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
 const lerp3 = (
@@ -125,6 +301,8 @@ function hash01(ix: number, iz: number, seed: number): number {
 
 /** Quintic smoothstep (Perlin's improved fade curve) — smooths the value-noise lattice interpolation. */
 const fade = (t: number): number => t * t * t * (t * (t * 6 - 15) + 10);
+const quinticStep = (edge0: number, edge1: number, x: number): number =>
+  fade(clamp01((x - edge0) / (edge1 - edge0)));
 
 /**
  * Deterministic, smoothed 2D value noise in [0,1) at world (x, z) meters,
@@ -165,11 +343,11 @@ export function seabedDepthColor(
   worldX: number = 0,
   worldZ: number = 0,
 ): [number, number, number] {
-  const t = clamp01(depth / MAX_WATER_DEPTH_VIS);
+  const t = fade(clamp01(depth / MAX_WATER_DEPTH_VIS));
   const base = lerp3(SEABED_SHALLOW_COLOR, SEABED_DEEP_COLOR, t);
   if (depth < 4) {
     const ripple = valueNoise2D(worldX, worldZ, 6.0, 7723);
-    const shallowFactor = 1 - depth / 4;
+    const shallowFactor = fade(clamp01(1 - depth / 4));
     const mod = 1 + (ripple - 0.5) * 0.14 * shallowFactor;
     return [clamp01(base[0] * mod), clamp01(base[1] * mod), clamp01(base[2] * mod)];
   }
@@ -177,26 +355,32 @@ export function seabedDepthColor(
 }
 
 /**
- * Shoreline foam/sand band weight (0..1, peaking at 1 exactly at SEA_LEVEL,
- * fading to 0 at SHORELINE_BAND_METERS away on either side): vertices within
- * SHORELINE_BAND_METERS of SEA_LEVEL get a sand/foam lightening band.
+ * Shoreline foam/sand band weight (0..1, peaking at 0.75 exactly at SEA_LEVEL,
+ * smoothly fading to 0 at SHORELINE_BAND_METERS away on either side with zero tangent):
+ * vertices within SHORELINE_BAND_METERS of SEA_LEVEL get a soft foam highlight.
  */
 export function shorelineBandWeight(height: number): number {
   const dist = Math.abs(height - SEA_LEVEL);
-  return clamp01(1 - dist / SHORELINE_BAND_METERS);
+  if (dist >= SHORELINE_BAND_METERS) return 0;
+  const t = dist / SHORELINE_BAND_METERS;
+  return (1 - t * t * (3 - 2 * t)) * 0.75;
 }
 
 /**
  * Procedural beach and coastal sand texture:
  * Blends from compacted wet sand at the shoreline to warm sunlit dry sand,
  * with deterministic fine grain and coastal ripple noise.
+ * `detail` (0..1) allows seamless distance attenuation of micro-grain to prevent aliasing.
  */
 export function sandColorAt(
   worldX: number,
   worldZ: number,
   height: number,
+  detail: number | DetailLevels = 1.0,
 ): [number, number, number] {
-  const wetT = clamp01((height - SEA_LEVEL) / 1.5);
+  const micro = typeof detail === 'number' ? detail : detail.micro;
+  const mid = typeof detail === 'number' ? detail : detail.mid;
+  const wetT = quinticStep(0, 1.8, height - SEA_LEVEL);
   const baseSand = lerp3(WET_SAND_COLOR, DRY_SAND_COLOR, wetT);
 
   // Micro-grain noise (fine sand particles and pebbles)
@@ -204,7 +388,10 @@ export function sandColorAt(
   // Coastal ripple noise (wind and tide ripples across dunes)
   const duneNoise = valueNoise2D(worldX, worldZ, 12, 5231);
 
-  const factor = 0.92 + grainNoise * 0.12 + (duneNoise - 0.5) * 0.08;
+  const factor =
+    1.0 +
+    (grainNoise - 0.5) * 0.12 * micro +
+    (duneNoise - 0.5) * 0.08 * (0.35 + 0.65 * mid);
   return [
     clamp01(baseSand[0] * factor),
     clamp01(baseSand[1] * factor),
@@ -214,8 +401,8 @@ export function sandColorAt(
 
 /** 3-hue grass blend (fresh green / olive / yellow-green) from a single low-frequency noise value in [0,1). */
 function grassHueBlend(n: number): [number, number, number] {
-  if (n < 0.5) return lerp3(GRASS_HUE_FRESH, GRASS_HUE_OLIVE, n / 0.5);
-  return lerp3(GRASS_HUE_OLIVE, GRASS_HUE_YELLOW, (n - 0.5) / 0.5);
+  if (n < 0.5) return lerp3(GRASS_HUE_FRESH, GRASS_HUE_OLIVE, fade(n / 0.5));
+  return lerp3(GRASS_HUE_OLIVE, GRASS_HUE_YELLOW, fade((n - 0.5) / 0.5));
 }
 
 /**
@@ -227,10 +414,10 @@ function grassHueBlend(n: number): [number, number, number] {
  * inputs rather than snapping across a moving threshold.
  */
 function dryPatchWeight(patchNoise: number, treeDensity: number, height: number): number {
-  const signal = clamp01((patchNoise - 0.55) / 0.45);
+  const signal = fade(clamp01((patchNoise - 0.55) / 0.45));
   const sparseT = 1 - clamp01(treeDensity / 255);
-  const elevT = clamp01(
-    (height - SEA_LEVEL - SAND_BAND_METERS) / (GRASS_MAX_HEIGHT - SAND_BAND_METERS),
+  const elevT = fade(
+    clamp01((height - SEA_LEVEL - SAND_BAND_METERS) / (GRASS_MAX_HEIGHT - SAND_BAND_METERS)),
   );
   const bias = clamp01(sparseT * 0.6 + elevT * 0.4 + 0.15);
   return signal * bias;
@@ -242,6 +429,7 @@ function dryPatchWeight(patchNoise: number, treeDensity: number, height: number)
  * frequency noise (patchier where trees are sparse / elevation is high), and
  * a uniform "mown" fresh-green override on tiles within 1 of a road. Pure;
  * exported for direct testing and composed into vertexColorFor.
+ * `detail` provides continuous multiscale progressive diffusion with distance.
  */
 export function groundCoverTint(
   worldX: number,
@@ -249,10 +437,13 @@ export function groundCoverTint(
   treeDensity: number,
   height: number,
   nearRoad: boolean,
+  detail: number | DetailLevels = 1.0,
 ): [number, number, number] {
+  const micro = typeof detail === 'number' ? detail : detail.micro;
+  const mid = typeof detail === 'number' ? detail : detail.mid;
   if (nearRoad) {
     const lawnMicro = valueNoise2D(worldX, worldZ, 4, 1847);
-    const lawnFactor = 0.96 + lawnMicro * 0.08;
+    const lawnFactor = 1.0 + (lawnMicro - 0.5) * 0.08 * micro;
     return [
       clamp01(MOWN_GREEN_COLOR[0] * lawnFactor),
       clamp01(MOWN_GREEN_COLOR[1] * lawnFactor),
@@ -262,12 +453,14 @@ export function groundCoverTint(
   const hueNoise = valueNoise2D(worldX, worldZ, GRASS_HUE_CELL_METERS, GRASS_HUE_SEED);
   const patchNoise = valueNoise2D(worldX, worldZ, DRY_PATCH_CELL_METERS, DRY_PATCH_SEED);
   const base = grassHueBlend(hueNoise);
-  const patchT = dryPatchWeight(patchNoise, treeDensity, height);
+  const patchT = dryPatchWeight(patchNoise, treeDensity, height) * (0.3 + 0.7 * mid);
   const tinted = lerp3(base, DRY_PATCH_COLOR, patchT);
 
   // Subtle organic micro-noise (fine grass blade / soil variation):
-  const micro = valueNoise2D(worldX, worldZ, 5, 3141);
-  const microFactor = 0.93 + micro * 0.14;
+  // At micro = 1.0, provides full definition matching in-parcel terrain.
+  // Smoothly diffuses before quad spacing exceeds Nyquist limit to prevent directional stretching:
+  const bladeNoise = valueNoise2D(worldX, worldZ, 5, 3141);
+  const microFactor = 1.0 + (bladeNoise - 0.5) * 0.14 * micro;
   return [
     clamp01(tinted[0] * microFactor),
     clamp01(tinted[1] * microFactor),
@@ -279,21 +472,26 @@ export function groundCoverTint(
  * Procedural geological rock texture:
  * Sedimentary horizontal strata, mineral variations, and micro-fractures blending
  * dark basalt/slate, weathered mountain granite, and sunlit limestone layers.
+ * `detail` attenuates fine crags and micro-noise with distance.
  */
 export function rockColorAt(
   worldX: number,
   worldZ: number,
   height: number,
+  detail: number | DetailLevels = 1.0,
 ): [number, number, number] {
+  const micro = typeof detail === 'number' ? detail : detail.micro;
+  const mid = typeof detail === 'number' ? detail : detail.mid;
   const strataNoise = valueNoise2D(worldX, worldZ, 32, 4821);
   const microNoise = valueNoise2D(worldX, worldZ, 7, 9217);
   const cragNoise = valueNoise2D(worldX, worldZ, 2.8, 3317);
   const strataBand = Math.sin(height * 0.35 + strataNoise * 3.2) * 0.5 + 0.5;
 
-  const baseStone = lerp3(ROCK_DARK_SLATE, ROCK_GRANITE, microNoise);
+  const blendedMicro = lerp(0.5, microNoise, mid);
+  const baseStone = lerp3(ROCK_DARK_SLATE, ROCK_GRANITE, blendedMicro);
   const stratified = lerp3(baseStone, ROCK_LIGHT_STONE, strataBand * 0.45);
 
-  const cragFactor = 0.93 + cragNoise * 0.14;
+  const cragFactor = 1.0 + (cragNoise - 0.5) * 0.14 * micro;
   return [
     clamp01(stratified[0] * cragFactor),
     clamp01(stratified[1] * cragFactor),
@@ -310,6 +508,7 @@ export function rockColorAt(
  * - a shoreline foam band is blended in wherever height sits within
  *   SHORELINE_BAND_METERS of SEA_LEVEL, on either side.
  * - dense tree cover darkens the final color (canopy-shadow read).
+ * - `detail` seamlessly diffuses spatial noise with distance to eliminate anisotropic stretching.
  */
 export function vertexColorFor(
   height: number,
@@ -318,31 +517,48 @@ export function vertexColorFor(
   worldX: number,
   worldZ: number,
   nearRoad: boolean,
+  detail: number | DetailLevels = 1.0,
 ): [number, number, number] {
+  const micro = typeof detail === 'number' ? detail : detail.micro;
+  const mid = typeof detail === 'number' ? detail : detail.mid;
+  const macro = typeof detail === 'number' ? detail : detail.macro;
   let rgb: [number, number, number];
 
   if (height < SEA_LEVEL) {
     rgb = seabedDepthColor(SEA_LEVEL - height, worldX, worldZ);
   } else {
-    // Soft organic dune perturbation along the shoreline: avoids flat contour knife-edges
-    const duneWobble = (valueNoise2D(worldX, worldZ, 14, 6199) - 0.5) * 1.4;
-    const sandT = clamp01((height + duneWobble - SEA_LEVEL) / SAND_BAND_METERS);
-    const sand = sandColorAt(worldX, worldZ, height);
-    const cover = groundCoverTint(worldX, worldZ, treeDensity, height, nearRoad);
+    // Multi-frequency organic dune & coastal vegetation shaping:
+    // 1. Broad undulating dune formations (30m wavelength)
+    const broadDune = (valueNoise2D(worldX, worldZ, 30, 6199) - 0.5) * 2.4 * macro;
+    // 2. Finer vegetation tongues and sandy hollows (10m wavelength)
+    const finePatch = (valueNoise2D(worldX, worldZ, 10, 8377) - 0.5) * 1.3 * mid;
+    const coastalNoise = broadDune + finePatch;
+
+    // Progressive transition from beach sand to inland ground cover:
+    // Pure sand foreshore near sea level, then a gentle, progressive S-curve blend
+    // across the dune band centered on SAND_BAND_METERS, eliminating hard cut lines.
+    const sandT = quinticStep(
+      SEA_LEVEL + 0.6,
+      SEA_LEVEL + SAND_BAND_METERS + 2.0,
+      height + coastalNoise,
+    );
+    const sand = sandColorAt(worldX, worldZ, height, { micro, mid, macro });
+    const cover = groundCoverTint(worldX, worldZ, treeDensity, height, nearRoad, { micro, mid, macro });
     rgb = lerp3(sand, cover, sandT);
 
-    // Multi-criteria rock blending:
-    // 1. Cliffs where slope exceeds buildable limit
-    const rockNoise = (valueNoise2D(worldX, worldZ, 18, 4423) - 0.5) * 1.2;
-    const slopeRock = clamp01(
-      (slope + rockNoise * 0.5 - (MAX_BUILD_SLOPE - 0.8)) / ROCK_BLEND_RANGE,
+    // Multi-criteria rock blending with smoothstep
+    const rockNoise = (valueNoise2D(worldX, worldZ, 18, 4423) - 0.5) * 1.2 * mid;
+    const slopeRock = quinticStep(
+      MAX_BUILD_SLOPE - 1.0,
+      MAX_BUILD_SLOPE - 1.0 + ROCK_BLEND_RANGE,
+      slope + rockNoise * 0.5,
     );
-    // 2. High altitude transition (rock emerges naturally above 38m, dominates above 65m)
-    const altitudeRock = clamp01((height + rockNoise * 4 - 38) / 28);
+    // 2. High altitude transition (rock emerges naturally above 36m, dominates above 68m)
+    const altitudeRock = quinticStep(36, 68, height + rockNoise * 4);
     const rockT = Math.max(slopeRock, altitudeRock * 0.9);
 
     if (rockT > 0) {
-      const rockRgb = rockColorAt(worldX, worldZ, height);
+      const rockRgb = rockColorAt(worldX, worldZ, height, { micro, mid, macro });
       rgb = lerp3(rgb, rockRgb, rockT);
     }
 
@@ -350,13 +566,14 @@ export function vertexColorFor(
     // Above SNOW_MIN_HEIGHT, snow appears on summits and gentle high-altitude ledges,
     // perturbed organically along gullies and ridges.
     if (height > SNOW_MIN_HEIGHT - 25) {
-      const snowWobble = (valueNoise2D(worldX, worldZ, 22, 7331) - 0.5) * 35;
+      const snowWobble = (valueNoise2D(worldX, worldZ, 22, 7331) - 0.5) * 35 * (0.4 + 0.6 * mid);
       const effectiveSnowMin = SNOW_MIN_HEIGHT + snowWobble;
       if (height > effectiveSnowMin) {
-        const snowAltitude = clamp01((height - effectiveSnowMin) / SNOW_BLEND_RANGE);
-        const snowSlopeFactor = clamp01(1 - (slope - 2) / 6.0);
+        const snowAltitude = quinticStep(0, SNOW_BLEND_RANGE, height - effectiveSnowMin);
+        const snowSlopeFactor = quinticStep(8, 2, slope);
         const fineSnow = valueNoise2D(worldX, worldZ, 6, 2911);
-        const snowT = clamp01(snowAltitude * snowSlopeFactor * (0.65 + fineSnow * 0.45));
+        const fineSnowMod = lerp(0.85, 0.65 + fineSnow * 0.45, micro);
+        const snowT = clamp01(snowAltitude * snowSlopeFactor * fineSnowMod);
         rgb = lerp3(rgb, SNOW_COLOR, snowT);
       }
     }
@@ -459,8 +676,19 @@ export class TerrainRenderer {
   private readonly skirtMaterial: MeshLambertNodeMaterial;
   /** 0 (day) .. 1 (night): what the ground's colour shades by. */
   private readonly nightFactorUniform = uniform(0);
+  /** 0 (dry) .. 1 (drenched): wetness from rain / storms. */
+  private readonly wetnessUniform = uniform(0);
+  /** 0 (none) .. 1 (full blanket): snow cover accumulation. */
+  private readonly snowCoverUniform = uniform(0);
+  /** RGB tint for the current calendar month / season. */
+  private readonly seasonTintUniform = uniform(new THREE.Vector3(1, 1, 1));
+
   private chunks: (ChunkEntry | null)[];
   private skirts: Record<SkirtSide, SkirtEntry | null>;
+  private backdropMesh: THREE.Mesh | null = null;
+  private dirtyBackdrop = false;
+  private readonly backdropNoise: NoiseFunction2D;
+  private readonly backdropRidgeNoise: NoiseFunction2D;
   private map: MapData | null = null;
   private quality: TerrainQuality = 'high';
   private subdivisionsPerTile = TERRAIN_QUALITY_SUBDIVISIONS.high;
@@ -476,14 +704,39 @@ export class TerrainRenderer {
     this.subdivisionsPerTile = TERRAIN_QUALITY_SUBDIVISIONS[quality] ?? 4;
     this.chunks = new Array<ChunkEntry | null>(CHUNKS_PER_SIDE * CHUNKS_PER_SIDE).fill(null);
     this.skirts = { west: null, east: null, north: null, south: null };
-    // The ground carries the one night tint every sunlit surface does, so it
-    // reads no brighter than the bodies standing on it after dark.
+    this.backdropNoise = createNoise2D(mulberry32(0x517cc1b7));
+    this.backdropRidgeNoise = createNoise2D(mulberry32(0x9e3779b9));
+
+    // Environmental surface shading: seasonal vegetation tint, wetness darkening + specular sheen,
+    // snow accumulation overlay, and night tint.
+    const vCol = vertexColor();
+    const seasonalColor = vCol.mul(this.seasonTintUniform);
+    // Water reduces diffuse scattering, deepening and saturating wet soil/grass/rock
+    const wetDarken = mix(vec3(1, 1, 1), vec3(0.74, 0.74, 0.77), this.wetnessUniform);
+    const dayGround = seasonalColor.mul(wetDarken);
+    // Snow accumulation overlay
+    const snowGround = mix(dayGround, vec3(0.96, 0.97, 1.0), this.snowCoverUniform);
+    const nightTint = nightTintNode(this.nightFactorUniform);
+
     this.material = new MeshStandardNodeMaterial({
-      vertexColors: true,
+      vertexColors: false,
       roughness: 0.9,
       metalness: 0.05,
     });
-    this.material.colorNode = nightTintNode(this.nightFactorUniform);
+    this.material.colorNode = snowGround.mul(nightTint);
+
+    // Wetness drops roughness (puddle sheen / specular shine), snow is soft matte
+    this.material.roughnessNode = mix(
+      float(0.9).sub(this.wetnessUniform.mul(0.45)),
+      float(0.85),
+      this.snowCoverUniform,
+    );
+    this.material.metalnessNode = mix(
+      float(0.05).add(this.wetnessUniform.mul(0.2)),
+      float(0.02),
+      this.snowCoverUniform,
+    );
+
     // Skirt: DoubleSide so the perimeter reads correctly regardless of which
     // way the camera happens to be facing it from.
     this.skirtMaterial = nightBodyMaterial(this.nightFactorUniform, {
@@ -516,6 +769,22 @@ export class TerrainRenderer {
     for (const side of SKIRT_SIDES) {
       this.refreshSkirt(side);
     }
+    this.refreshBackdrop();
+  }
+
+  /** Updates environment uniforms: nightFactor, wetness (rain), snowCover, and calendar month (season). */
+  setEnvironment(
+    nightFactor: number,
+    wetness = 0,
+    snowCover = 0,
+    month = 7,
+  ): void {
+    this.nightFactorUniform.value = clamp01(nightFactor);
+    this.wetnessUniform.value = clamp01(wetness);
+    this.snowCoverUniform.value = clamp01(snowCover);
+
+    const [sr, sg, sb] = terrainSeasonalTint(month);
+    this.seasonTintUniform.value.set(sr, sg, sb);
   }
 
   /** 0 (day) .. 1 (night): how far the ground shades toward the night tint. */
@@ -531,9 +800,11 @@ export class TerrainRenderer {
     this.map = map;
     this.dirtyChunks.clear();
     this.dirtySides.clear();
+    this.dirtyBackdrop = false;
     this.roadTiles = new Set();
     this.disposeChunks();
     this.disposeSkirts();
+    this.disposeBackdrop();
 
     for (let cz = 0; cz < CHUNKS_PER_SIDE; cz++) {
       for (let cx = 0; cx < CHUNKS_PER_SIDE; cx++) {
@@ -545,9 +816,14 @@ export class TerrainRenderer {
 
     for (const side of SKIRT_SIDES) {
       const mesh = this.buildSkirtMesh(side);
+      // Continuous backdrop terrain extends beyond the parcel; skirts are kept dormant
+      mesh.visible = false;
       this.skirts[side] = { mesh };
       this.scene.add(mesh);
     }
+
+    this.backdropMesh = this.buildBackdropMesh();
+    this.scene.add(this.backdropMesh);
   }
 
   /**
@@ -573,6 +849,127 @@ export class TerrainRenderer {
   }
 
   /**
+   * Evaluates the Hermite-interpolated surface elevation along the exact playable perimeter [0..mapMeters].
+   * Clamped to ensure zero out-of-bounds sampling and airtight boundary seam alignment.
+   */
+  private sampleBoundaryHeight(x: number, z: number): number {
+    if (!this.map) return 0;
+    const mapMeters = this.map.size * TILE_METERS;
+    const cx = Math.min(mapMeters, Math.max(0, x));
+    const cz = Math.min(mapMeters, Math.max(0, z));
+    const gx = cx / TILE_METERS;
+    const gz = cz / TILE_METERS;
+    const ix = Math.floor(gx);
+    const iz = Math.floor(gz);
+    const u = gx - ix;
+    const v = gz - iz;
+    if (u === 0 && v === 0) return this.cornerHeight(ix, iz);
+
+    const su = u * u * (3 - 2 * u);
+    const sv = v * v * (3 - 2 * v);
+    const h00 = this.cornerHeight(ix, iz);
+    const h10 = this.cornerHeight(ix + 1, iz);
+    const h01 = this.cornerHeight(ix, iz + 1);
+    const h11 = this.cornerHeight(ix + 1, iz + 1);
+
+    const top = h00 + (h10 - h00) * su;
+    const bottom = h01 + (h11 - h01) * su;
+    return top + (bottom - top) * sv;
+  }
+
+  /**
+   * Computes the directional outward slope (dh/ddist) of the terrain at the city boundary.
+   * Samples 10m inside the boundary to establish C1 tangent slope continuity across the boundary.
+   */
+  private boundaryOutwardSlope(edgeX: number, edgeZ: number): number {
+    const map = this.map;
+    if (!map) return 0;
+    const mapMeters = map.size * TILE_METERS;
+    const step = 10;
+
+    const edgeH = this.sampleBoundaryHeight(edgeX, edgeZ);
+    let insideH = edgeH;
+
+    if (edgeZ <= 0) {
+      insideH = this.sampleBoundaryHeight(edgeX, step);
+    } else if (edgeZ >= mapMeters) {
+      insideH = this.sampleBoundaryHeight(edgeX, mapMeters - step);
+    } else if (edgeX <= 0) {
+      insideH = this.sampleBoundaryHeight(step, edgeZ);
+    } else if (edgeX >= mapMeters) {
+      insideH = this.sampleBoundaryHeight(mapMeters - step, edgeZ);
+    }
+
+    const slope = (edgeH - insideH) / step;
+    return Math.min(0.12, Math.max(-0.12, slope));
+  }
+
+  /**
+   * Procedural terrain elevation beyond the playable city parcel.
+   * Seamlessly continues boundary edge elevation and tangent slope outward without flat shelves or walls,
+   * gradually introducing gentle rolling hills at mid-distance and majestic mountain silhouettes far away.
+   */
+  backdropHeightAt(x: number, z: number): number {
+    const map = this.map;
+    if (!map) return 0;
+    const mapMeters = map.size * TILE_METERS;
+
+    const edgeX = Math.min(mapMeters, Math.max(0, x));
+    const edgeZ = Math.min(mapMeters, Math.max(0, z));
+    const edgeHeight = this.sampleBoundaryHeight(edgeX, edgeZ);
+
+    const dx = x < 0 ? -x : x > mapMeters ? x - mapMeters : 0;
+    const dz = z < 0 ? -z : z > mapMeters ? z - mapMeters : 0;
+    const dist = Math.hypot(dx, dz);
+    if (dist <= 0) return edgeHeight;
+
+    // 1. Water edges: maintain ocean / river mouth basin outward smoothly:
+    if (edgeHeight < SEA_LEVEL) {
+      return Math.min(SEA_LEVEL - 1.5, edgeHeight - Math.min(10, (dist / 1500) * 4));
+    }
+
+    // 2. Outward tangent slope continuity (C1 continuation of the city's ground angle):
+    // Near the parcel (dist <= 20m), tangent continuation is exact; it then gently curves into 2D terrain:
+    const outwardSlope = this.boundaryOutwardSlope(edgeX, edgeZ);
+    const tangentDecay = 1.0 - quinticStep(20, 300, dist);
+    const tangentOffset = outwardSlope * dist * tangentDecay;
+
+    // 3. Multi-octave natural 2D rolling relief (anchored to zero at edgeX, edgeZ):
+    // Relief begins gently right from the boundary (20m to 350m) so ground topography is genuinely 2D organic
+    // rather than an extruded 1D slope, completely eliminating stretching along the radial axis:
+    const n1 = this.backdropNoise(x * 0.0004, z * 0.0004);
+    const n1Edge = this.backdropNoise(edgeX * 0.0004, edgeZ * 0.0004);
+    const rolling = (n1 - n1Edge) * 18;
+
+    const n2 = this.backdropNoise(x * 0.0009 + 17.3, z * 0.0009 + 31.7);
+    const n2Edge = this.backdropNoise(edgeX * 0.0009 + 17.3, edgeZ * 0.0009 + 31.7);
+    const foothills = (n2 - n2Edge) * 10;
+
+    const reliefWeight = quinticStep(
+      BACKDROP_RELIEF_START_METERS,
+      BACKDROP_RELIEF_FULL_METERS,
+      dist,
+    );
+
+    // 4. Distant mountain ridges (only emerge far away on the skyline, dist > 5000m):
+    const mountainWeight = quinticStep(5000, 11000, dist);
+    const r1 = 1.0 - Math.abs(this.backdropRidgeNoise(x * 0.00035 + 53.1, z * 0.00035 + 89.2));
+    const mountains = r1 * r1 * 120 * mountainWeight;
+
+    let height = edgeHeight + tangentOffset + (rolling + foothills) * reliefWeight + mountains;
+    height = Math.max(SEA_LEVEL + 0.8, height);
+
+    // 5. Horizon elevation taper: as distance approaches BACKDROP_REACH_METERS (dist > 8500m),
+    // mountains gently subside into sea-level coastal plains and ocean:
+    if (dist > 8500) {
+      const taperT = quinticStep(8500, BACKDROP_REACH_METERS, dist);
+      height = lerp(height, SEA_LEVEL + 1.5, taperT);
+    }
+
+    return height;
+  }
+
+  /**
    * World-space surface height in meters, matching the *triangulated* terrain
    * mesh exactly (not a bilinear approximation that only agrees at corners).
    * Each terrain quad is split by PlaneGeometry along the u+v=1 diagonal into
@@ -584,6 +981,10 @@ export class TerrainRenderer {
    */
   heightAt(x: number, z: number): number {
     if (!this.map) return 0;
+    const mapMeters = this.map.size * TILE_METERS;
+    if (x < 0 || x > mapMeters || z < 0 || z > mapMeters) {
+      return this.backdropHeightAt(x, z);
+    }
     const gx = x / TILE_METERS;
     const gz = z / TILE_METERS;
     const ix = Math.floor(gx);
@@ -605,6 +1006,23 @@ export class TerrainRenderer {
     const top = h00 + (h10 - h00) * su;
     const bottom = h01 + (h11 - h01) * su;
     return top + (bottom - top) * sv;
+  }
+
+  /**
+   * Continuous analytical terrain surface normal at (x, z):
+   * derives normal from the continuous central height gradient, guaranteeing
+   * bit-for-bit identical normals across mesh boundaries (eliminating lighting creases).
+   */
+  surfaceNormalAt(x: number, z: number): [number, number, number] {
+    const eps = 0.5;
+    const hL = this.heightAt(x - eps, z);
+    const hR = this.heightAt(x + eps, z);
+    const hD = this.heightAt(x, z - eps);
+    const hU = this.heightAt(x, z + eps);
+    const dhdx = (hR - hL) / (2 * eps);
+    const dhdz = (hU - hD) / (2 * eps);
+    const len = Math.hypot(dhdx, 1, dhdz);
+    return [-dhdx / len, 1 / len, -dhdz / len];
   }
 
   /**
@@ -643,6 +1061,9 @@ export class TerrainRenderer {
     if (xLo <= size - 1 && size - 1 <= xHi) this.dirtySides.add('east');
     if (zLo <= 0 && 0 <= zHi) this.dirtySides.add('north');
     if (zLo <= size - 1 && size - 1 <= zHi) this.dirtySides.add('south');
+    if (xLo <= 1 || xHi >= size - 2 || zLo <= 1 || zHi >= size - 2) {
+      this.dirtyBackdrop = true;
+    }
   }
 
   /**
@@ -717,6 +1138,10 @@ export class TerrainRenderer {
       }
       this.dirtySides.clear();
     }
+    if (this.map && this.dirtyBackdrop && this.backdropMesh) {
+      this.refreshBackdrop();
+      this.dirtyBackdrop = false;
+    }
   }
 
   private refreshChunk(cx: number, cz: number): void {
@@ -775,7 +1200,63 @@ export class TerrainRenderer {
     position.needsUpdate = true;
     geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     geometry.computeVertexNormals();
+
+    // Stitch boundary vertices along the map perimeter to exact analytical surface normals:
+    const mapMeters = mapSize * TILE_METERS;
+    const normals = geometry.attributes.normal;
+    if (normals) {
+      for (let i = 0; i < count; i++) {
+        const wx = position.getX(i);
+        const wz = position.getZ(i);
+        if (
+          wx <= 0.001 ||
+          wx >= mapMeters - 0.001 ||
+          wz <= 0.001 ||
+          wz >= mapMeters - 0.001
+        ) {
+          const [nx, ny, nz] = this.surfaceNormalAt(wx, wz);
+          normals.setXYZ(i, nx, ny, nz);
+        }
+      }
+      normals.needsUpdate = true;
+    }
+
     return geometry;
+  }
+
+  /**
+   * Continuous bilinear Hermite interpolation of tree density from the tile grid.
+   * Eliminates sharp stair-stepped shading lines along 20m tile boundaries.
+   */
+  private treeDensityAt(
+    worldX: number,
+    worldZ: number,
+    trees: Uint8Array | null,
+    mapSize: number,
+  ): number {
+    if (!trees) return 0;
+    const gx = worldX / TILE_METERS - 0.5;
+    const gz = worldZ / TILE_METERS - 0.5;
+    const x0 = Math.floor(gx);
+    const z0 = Math.floor(gz);
+    const u = gx - x0;
+    const v = gz - z0;
+    const su = u * u * (3 - 2 * u);
+    const sv = v * v * (3 - 2 * v);
+
+    const cx0 = clampInt(x0, 0, mapSize - 1);
+    const cx1 = clampInt(x0 + 1, 0, mapSize - 1);
+    const cz0 = clampInt(z0, 0, mapSize - 1);
+    const cz1 = clampInt(z0 + 1, 0, mapSize - 1);
+
+    const t00 = trees[cz0 * mapSize + cx0] ?? 0;
+    const t10 = trees[cz0 * mapSize + cx1] ?? 0;
+    const t01 = trees[cz1 * mapSize + cx0] ?? 0;
+    const t11 = trees[cz1 * mapSize + cx1] ?? 0;
+
+    const top = t00 + (t10 - t00) * su;
+    const bottom = t01 + (t11 - t01) * su;
+    return top + (bottom - top) * sv;
   }
 
   /**
@@ -795,7 +1276,7 @@ export class TerrainRenderer {
     const slope = this.slopeAt(worldX, worldZ);
     const tileX = clampInt(Math.floor(worldX / TILE_METERS), 0, mapSize - 1);
     const tileZ = clampInt(Math.floor(worldZ / TILE_METERS), 0, mapSize - 1);
-    const density = trees ? (trees[tileZ * mapSize + tileX] ?? 0) : 0;
+    const density = this.treeDensityAt(worldX, worldZ, trees, mapSize);
     const nearRoad = this.isNearRoad(tileX, tileZ);
     return vertexColorFor(h, slope, density, worldX, worldZ, nearRoad);
   }
@@ -918,6 +1399,235 @@ export class TerrainRenderer {
     return false;
   }
 
+  /**
+   * Deterministic surface vertex color for the backdrop terrain:
+   * blends seamlessly from parcel boundary tree density and slope shading
+   * into procedural beaches, inland grass/soil, slope rock, stratified cliffs,
+   * snowcaps on distant high-altitude peaks, and tree canopy shading.
+   * Progressively diffuses micro-detail with distance to eliminate aliasing/distortion.
+   */
+  backdropColorAt(wx: number, wz: number, h: number): [number, number, number] {
+    const map = this.map;
+    const mapSize = map?.size ?? MAP_SIZE;
+    const mapMeters = mapSize * TILE_METERS;
+
+    const edgeX = Math.min(mapMeters, Math.max(0, wx));
+    const edgeZ = Math.min(mapMeters, Math.max(0, wz));
+    const dx = wx < 0 ? -wx : wx > mapMeters ? wx - mapMeters : 0;
+    const dz = wz < 0 ? -wz : wz > mapMeters ? wz - mapMeters : 0;
+    const dist = Math.hypot(dx, dz);
+
+    let slope: number;
+    if (dist <= 60) {
+      // In the immediate perimeter (dist <= 60m), match the exact slope calculation used inside the city parcel:
+      slope = this.slopeAt(wx, wz);
+    } else {
+      // Symmetrically sample 2D slope matching local mesh scale:
+      const slopeStep = Math.max(TILE_METERS, Math.min(100, dist * 0.04));
+      const hN = this.backdropHeightAt(wx, wz - slopeStep);
+      const hS = this.backdropHeightAt(wx, wz + slopeStep);
+      const hE = this.backdropHeightAt(wx + slopeStep, wz);
+      const hW = this.backdropHeightAt(wx - slopeStep, wz);
+      slope =
+        Math.max(Math.abs(h - hN), Math.abs(h - hS), Math.abs(h - hE), Math.abs(h - hW)) *
+        (TILE_METERS / slopeStep);
+    }
+
+    // 2D organic woodland density: seam-locked to edgeDensity at dist = 0,
+    // seamlessly transitioning across 20m-160m into 2D isotropic procedural woodlands:
+    const edgeDensity = this.treeDensityAt(edgeX, edgeZ, map?.trees ?? null, mapSize);
+    const treeNoise = valueNoise2D(wx, wz, 160, 5431);
+    const slopeFactor = quinticStep(10, 4, slope);
+    const altFactor = quinticStep(SEA_LEVEL, SEA_LEVEL + 1.5, h) * quinticStep(75, 45, h);
+    const treeSignal = clamp01((treeNoise - 0.40) * 2.5);
+    const proceduralDensity = Math.round(treeSignal * slopeFactor * altFactor * 190);
+    const blendT = quinticStep(20, 160, dist);
+    let treeDensity = Math.round(lerp(edgeDensity, proceduralDensity, blendT));
+    if (dist > 2200) {
+      const taper = quinticStep(3500, 2200, dist);
+      treeDensity = Math.round(treeDensity * taper);
+    }
+
+    // Road manicured mown grass band extends 80m past dead-end boundary roads:
+    const tileX = clampInt(Math.floor(edgeX / TILE_METERS), 0, mapSize - 1);
+    const tileZ = clampInt(Math.floor(edgeZ / TILE_METERS), 0, mapSize - 1);
+    const nearRoad = dist <= 80 && this.isNearRoad(tileX, tileZ);
+
+    // Multiscale anti-aliased detail levels:
+    const details = backdropDetailLevels(dist);
+
+    return vertexColorFor(h, slope, treeDensity, wx, wz, nearRoad, details);
+  }
+
+  private buildBackdropMesh(): THREE.Mesh {
+    const geometry = this.makeBackdropGeometry();
+    const mesh = new THREE.Mesh(geometry, this.material);
+    mesh.name = 'terrain-backdrop';
+    mesh.receiveShadow = true;
+    mesh.castShadow = false;
+    mesh.userData['underground'] = 'keep';
+    return mesh;
+  }
+
+  /**
+   * Non-shearing 8-sector concentric LOD rings expanding outward from the 5120m playable parcel to 16000m horizon.
+   * Straight edges project perpendicularly with zero lateral shear, while corners expand in smooth quarter-circle fans.
+   * Ring 0 anchors exactly onto boundary edge coordinates, guaranteeing zero gaps.
+   */
+  private makeBackdropGeometry(): THREE.BufferGeometry {
+    const map = this.map;
+    const mapSize = map?.size ?? MAP_SIZE;
+    const mapMeters = mapSize * TILE_METERS;
+    const ringCount = BACKDROP_RING_RADII.length;
+    // Perimeter segment count scales with quality subdivisions so Ring 0 vertices align 1:1 with chunk boundaries:
+    const N = mapSize * this.subdivisionsPerTile;
+    const C = 16 * this.subdivisionsPerTile;
+    const perimeterCount = 4 * N + 4 * C;
+    const totalVertices = ringCount * perimeterCount;
+
+    const positions = new Float32Array(totalVertices * 3);
+    const colors = new Float32Array(totalVertices * 3);
+
+    for (let ringIdx = 0; ringIdx < ringCount; ringIdx++) {
+      const r = BACKDROP_RING_RADII[ringIdx]!;
+      const ringBase = ringIdx * perimeterCount;
+      let p = 0;
+
+      // Sector 1: South edge (s = 0 .. N-1) - pure orthogonal projection along -Z
+      for (let s = 0; s < N; s++, p++) {
+        const wx = (s / N) * mapMeters;
+        const wz = -r;
+        this.setBackdropVertex(ringBase + p, ringIdx, wx, wz, positions, colors);
+      }
+
+      // Sector 2: South-East corner (c = 0 .. C-1) - smooth circular quarter-arc
+      for (let c = 0; c < C; c++, p++) {
+        const theta = (c / C) * (Math.PI / 2);
+        const wx = mapMeters + r * Math.sin(theta);
+        const wz = -r * Math.cos(theta);
+        this.setBackdropVertex(ringBase + p, ringIdx, wx, wz, positions, colors);
+      }
+
+      // Sector 3: East edge (s = 0 .. N-1) - pure orthogonal projection along +X
+      for (let s = 0; s < N; s++, p++) {
+        const wx = mapMeters + r;
+        const wz = (s / N) * mapMeters;
+        this.setBackdropVertex(ringBase + p, ringIdx, wx, wz, positions, colors);
+      }
+
+      // Sector 4: North-East corner (c = 0 .. C-1) - smooth circular quarter-arc
+      for (let c = 0; c < C; c++, p++) {
+        const theta = (c / C) * (Math.PI / 2);
+        const wx = mapMeters + r * Math.cos(theta);
+        const wz = mapMeters + r * Math.sin(theta);
+        this.setBackdropVertex(ringBase + p, ringIdx, wx, wz, positions, colors);
+      }
+
+      // Sector 5: North edge (s = 0 .. N-1) - pure orthogonal projection along +Z
+      for (let s = 0; s < N; s++, p++) {
+        const wx = mapMeters - (s / N) * mapMeters;
+        const wz = mapMeters + r;
+        this.setBackdropVertex(ringBase + p, ringIdx, wx, wz, positions, colors);
+      }
+
+      // Sector 6: North-West corner (c = 0 .. C-1) - smooth circular quarter-arc
+      for (let c = 0; c < C; c++, p++) {
+        const theta = (c / C) * (Math.PI / 2);
+        const wx = -r * Math.sin(theta);
+        const wz = mapMeters + r * Math.cos(theta);
+        this.setBackdropVertex(ringBase + p, ringIdx, wx, wz, positions, colors);
+      }
+
+      // Sector 7: West edge (s = 0 .. N-1) - pure orthogonal projection along -X
+      for (let s = 0; s < N; s++, p++) {
+        const wx = -r;
+        const wz = mapMeters - (s / N) * mapMeters;
+        this.setBackdropVertex(ringBase + p, ringIdx, wx, wz, positions, colors);
+      }
+
+      // Sector 8: South-West corner (c = 0 .. C-1) - smooth circular quarter-arc
+      for (let c = 0; c < C; c++, p++) {
+        const theta = (c / C) * (Math.PI / 2);
+        const wx = -r * Math.cos(theta);
+        const wz = -r * Math.sin(theta);
+        this.setBackdropVertex(ringBase + p, ringIdx, wx, wz, positions, colors);
+      }
+    }
+
+    const indices: number[] = [];
+    for (let ringIdx = 0; ringIdx < ringCount - 1; ringIdx++) {
+      const innerBase = ringIdx * perimeterCount;
+      const outerBase = (ringIdx + 1) * perimeterCount;
+
+      for (let p = 0; p < perimeterCount; p++) {
+        const nextP = (p + 1) % perimeterCount;
+
+        const i00 = innerBase + p;
+        const i10 = innerBase + nextP;
+        const i01 = outerBase + p;
+        const i11 = outerBase + nextP;
+
+        indices.push(i00, i10, i01);
+        indices.push(i10, i11, i01);
+      }
+    }
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    geometry.setIndex(indices);
+    geometry.computeVertexNormals();
+
+    // Stitch Ring 0 vertices to exact analytical surface normals, guaranteeing bit-for-bit
+    // normal equality with chunk boundary vertices (eliminating lighting creases):
+    const normals = geometry.attributes.normal;
+    if (normals) {
+      for (let p = 0; p < perimeterCount; p++) {
+        const wx = positions[p * 3]!;
+        const wz = positions[p * 3 + 2]!;
+        const [nx, ny, nz] = this.surfaceNormalAt(wx, wz);
+        normals.setXYZ(p, nx, ny, nz);
+      }
+      normals.needsUpdate = true;
+    }
+
+    return geometry;
+  }
+
+  private setBackdropVertex(
+    vi: number,
+    ringIdx: number,
+    wx: number,
+    wz: number,
+    positions: Float32Array,
+    colors: Float32Array,
+  ): void {
+    const h = ringIdx === 0 ? this.sampleBoundaryHeight(wx, wz) : this.backdropHeightAt(wx, wz);
+    const [cr, cg, cb] = this.backdropColorAt(wx, wz, h);
+
+    positions[vi * 3] = wx;
+    positions[vi * 3 + 1] = h;
+    positions[vi * 3 + 2] = wz;
+
+    colors[vi * 3] = cr;
+    colors[vi * 3 + 1] = cg;
+    colors[vi * 3 + 2] = cb;
+  }
+
+  private refreshBackdrop(): void {
+    if (!this.backdropMesh) return;
+    this.backdropMesh.geometry.dispose();
+    this.backdropMesh.geometry = this.makeBackdropGeometry();
+  }
+
+  private disposeBackdrop(): void {
+    if (this.backdropMesh) {
+      this.scene.remove(this.backdropMesh);
+      this.backdropMesh.geometry.dispose();
+      this.backdropMesh = null;
+    }
+  }
+
   private disposeChunks(): void {
     for (const entry of this.chunks) {
       if (entry) {
@@ -926,6 +1636,7 @@ export class TerrainRenderer {
       }
     }
     this.chunks = new Array<ChunkEntry | null>(CHUNKS_PER_SIDE * CHUNKS_PER_SIDE).fill(null);
+    this.disposeBackdrop();
   }
 
   private disposeSkirts(): void {

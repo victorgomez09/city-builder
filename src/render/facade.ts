@@ -239,8 +239,8 @@ export const GROUND_FLOOR_METERS = FLOOR_HEIGHT_METERS;
 /** Top 0.4m darker band. */
 export const PARAPET_METERS = 0.4;
 
-/** Palette preset: "clamp saturation low" for every wall, family hue aside. */
-export const MAX_WALL_SATURATION = 0.18;
+/** Palette preset: "clamp saturation" for walls to preserve architectural color while maintaining lighting headroom. */
+export const MAX_WALL_SATURATION = 0.38;
 /** Keeps even dark catalog colors off pure black — industrial stays a "rare dark accent", not ink. */
 export const MIN_WALL_LIGHTNESS = 0.32;
 /** Keeps pale catalog colors off blown-out white. */
@@ -248,11 +248,14 @@ export const MAX_WALL_LIGHTNESS = 0.92;
 /** Deterministic per-instance hue jitter ±4% from building id. */
 export const HUE_JITTER_FRACTION = 0.04;
 
-/** Roof plate tinted distinctly from walls (pale/dark/warm rotation by id hash). */
+/** Roof plate tinted distinctly from walls (rotation by id hash). */
 export const ROOF_PALETTE: readonly RGB[] = [
-  materialUnit('whiteBrick'), // pale
-  materialUnit('brightBitumen'), // dark
-  materialUnit('clayRoof'), // warm
+  materialUnit('whiteMembrane'), // clean cool white membrane
+  materialUnit('clayRoof'), // warm terracotta tile
+  materialUnit('slateRoof'), // deep slate blue
+  materialUnit('brightBitumen'), // dark bitumen
+  materialUnit('greyMembrane'), // industrial grey
+  materialUnit('stoneBrick'), // warm gravel ballast
 ];
 /** Minimum RGB distance a roof color must clear from the wall color ("distinct from walls"). */
 export const MIN_ROOF_WALL_DISTANCE = 0.12;

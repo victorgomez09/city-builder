@@ -25,7 +25,7 @@ import { sunDirection } from './sun';
 // ---------------------------------------------------------------------------
 
 /** Meters — comfortably beyond CAMERA_MAX_DISTANCE, inside STAR_FIELD_RADIUS (stars.ts): the atmosphere reads closer than the stars. */
-export const SKY_DOME_RADIUS = 5000;
+export const SKY_DOME_RADIUS = 24000;
 const SKY_DOME_WIDTH_SEGMENTS = 24;
 const SKY_DOME_HEIGHT_SEGMENTS = 16;
 /** Drawn first among opaque objects (very low renderOrder) so later geometry cleanly overdraws it; depthWrite stays off (see class doc). */
@@ -69,18 +69,29 @@ export class SkyDome {
     this.mesh = new THREE.Mesh(geometry, material);
     this.mesh.renderOrder = SKY_DOME_RENDER_ORDER;
     this.mesh.frustumCulled = false;
-    this.mesh.matrixAutoUpdate = false;
+    this.mesh.matrixAutoUpdate = true;
     this.mesh.userData['underground'] = 'keep';
     scene.add(this.mesh);
 
     this.setTimeOfDay(0.5);
   }
 
-  /** Repaints every vertex from the current time-of-day's zenith/horizon colors. */
-  setTimeOfDay(t: number): void {
+  /** Repaints every vertex from the current time-of-day's zenith/horizon colors, modulated optionally by skyTint. */
+  setTimeOfDay(t: number, skyTint?: readonly [number, number, number]): void {
     const c = timeOfDayColors(t);
-    const zenith = c.skyZenithColor;
-    const horizon = c.skyHorizonColor;
+    const tr = skyTint ? skyTint[0] : 1;
+    const tg = skyTint ? skyTint[1] : 1;
+    const tb = skyTint ? skyTint[2] : 1;
+    const zenith: [number, number, number] = [
+      c.skyZenithColor[0] * tr,
+      c.skyZenithColor[1] * tg,
+      c.skyZenithColor[2] * tb,
+    ];
+    const horizon: [number, number, number] = [
+      c.skyHorizonColor[0] * tr,
+      c.skyHorizonColor[1] * tg,
+      c.skyHorizonColor[2] * tb,
+    ];
 
     const position = this.mesh.geometry.getAttribute('position');
     const count = position.count;
@@ -262,8 +273,8 @@ export class SunBillboard {
     this.setTimeOfDay(0.5);
   }
 
-  /** Repositions, resizes, retints and re-opacifies both sprites for time t. */
-  setTimeOfDay(t: number): void {
+  /** Repositions, resizes, retints and re-opacifies both sprites for time t, modulated by visibilityMultiplier. */
+  setTimeOfDay(t: number, visibilityMultiplier = 1): void {
     const direction = sunDirection(t);
     const visual = sunVisual(t);
 
@@ -280,7 +291,7 @@ export class SunBillboard {
 
     this.discMaterial.color.setRGB(visual.color[0], visual.color[1], visual.color[2]);
     this.glowMaterial.color.setRGB(visual.color[0], visual.color[1], visual.color[2]);
-    this.discMaterial.opacity = visual.opacity;
-    this.glowMaterial.opacity = visual.opacity * GLOW_OPACITY_FACTOR;
+    this.discMaterial.opacity = visual.opacity * visibilityMultiplier;
+    this.glowMaterial.opacity = visual.opacity * GLOW_OPACITY_FACTOR * visibilityMultiplier;
   }
 }

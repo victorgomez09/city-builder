@@ -23,7 +23,7 @@ import type { MeshLambertNodeMaterial } from 'three/webgpu';
 import { uniform } from 'three/tsl';
 import { nightBodyMaterial } from './nightlook';
 import { MapData, TilePoint } from '../shared/types';
-import { TILE_METERS } from '../shared/constants';
+import { SEA_LEVEL, TILE_METERS } from '../shared/constants';
 import { setInstanceCount } from './groundquad';
 
 export type TreeSpecies = 'broadleaf' | 'pine' | 'poplar' | 'shrub';
@@ -183,6 +183,7 @@ function latticeHash(ix: number, iz: number, seed: number): number {
   return h / 4294967296;
 }
 
+const clamp01 = (v: number): number => Math.min(1, Math.max(0, v));
 /** Quintic smoothstep (Perlin's improved fade curve) — smooths the value-noise lattice interpolation. */
 const fade = (t: number): number => t * t * t * (t * (t * 6 - 15) + 10);
 
@@ -972,6 +973,81 @@ export class TreeRenderer {
 
           bySpecies[species].push({
             tileKey: idx,
+            worldX: tileCenterX + offset[0],
+            worldZ: tileCenterZ + offset[1],
+            scale,
+            yaw,
+            leanAxisAngle,
+            leanMagnitude,
+            colorMultiplier: hueValueJitter(hueJitter, valueJitter),
+          });
+        }
+      }
+    }
+
+    // Near & mid backdrop tree buffer: continues parcel edge forests seamlessly across the immediate landscape
+    // and naturally blends into procedural countryside woodlands across 80 tiles (1600m):
+    const bufferTiles = 80;
+    for (let z = -bufferTiles; z < map.size + bufferTiles; z++) {
+      for (let x = -bufferTiles; x < map.size + bufferTiles; x++) {
+        if (x >= 0 && x < map.size && z >= 0 && z < map.size) continue;
+
+        const edgeX = Math.min(map.size - 1, Math.max(0, x));
+        const edgeZ = Math.min(map.size - 1, Math.max(0, z));
+        const edgeIdx = edgeZ * map.size + edgeX;
+
+        const dx = x < 0 ? -x : x >= map.size ? x - (map.size - 1) : 0;
+        const dz = z < 0 ? -z : z >= map.size ? z - (map.size - 1) : 0;
+        const distTiles = Math.hypot(dx, dz);
+        if (distTiles > bufferTiles) continue;
+
+        const tileCenterX = (x + 0.5) * TILE_METERS;
+        const tileCenterZ = (z + 0.5) * TILE_METERS;
+        const elevation = this.heightAt(tileCenterX, tileCenterZ);
+        if (elevation < SEA_LEVEL + 0.8) continue;
+
+        const edgeDensity = (map.water[edgeIdx] ?? 0) !== 0 ? 0 : (map.trees[edgeIdx] ?? 0);
+
+        // Procedural natural woodland clumps across the countryside:
+        const naturalNoise = valueNoise2D(x, z, CLUSTER_NOISE_CELL_TILES * 2, seed + 8831);
+        const proceduralDensity =
+          elevation < 70 ? Math.round(clamp01((naturalNoise - 0.40) * 2.5) * 190) : 0;
+
+        // Smooth 2D organic transition: 0-2 tiles (0-40m) preserves edge density,
+        // 2-8 tiles (40m-160m) blends smoothly into 2D procedural countryside woodlands,
+        // 55-80 tiles (1100m-1600m) gently tapers off towards alpine heights:
+        const tBlend = Math.min(1, Math.max(0, (distTiles - 2) / 6));
+        let density = Math.round(edgeDensity * (1 - tBlend) + proceduralDensity * tBlend);
+        if (distTiles > 55) {
+          const tTaper = Math.min(1, Math.max(0, (bufferTiles - distTiles) / (bufferTiles - 55)));
+          density = Math.round(density * fade(tTaper));
+        }
+
+        if (density <= TREE_DENSITY_THRESHOLD) continue;
+        const count = treeCountForTile(density, x, z, seed);
+        if (count === 0) continue;
+
+        const nearWater = isNearWater(map, edgeX, edgeZ, WATER_PROXIMITY_TILES);
+        const species = speciesFor(elevation, nearWater, density, x, z, seed);
+        const maturity = standMaturity(x, z, seed);
+        const placedOffsets: Array<[number, number]> = [];
+
+        for (let i = 0; i < count; i++) {
+          const offset = sampleTileOffset(rng, placedOffsets, minSeparationMeters);
+          placedOffsets.push(offset);
+
+          const isSaplingOutlier = count > 1 && rng() < SAPLING_OUTLIER_PROBABILITY;
+          const [scaleMin, scaleMax] = scaleRangeForStand(maturity, isSaplingOutlier);
+          const scale = scaleMin + rng() * (scaleMax - scaleMin);
+
+          const yaw = rng() * Math.PI * 2;
+          const leanAxisAngle = rng() * Math.PI * 2;
+          const leanMagnitude = rng() * LEAN_MAX_RADIANS;
+          const hueJitter = rng() * 2 - 1;
+          const valueJitter = rng() * 2 - 1;
+
+          bySpecies[species].push({
+            tileKey: -1,
             worldX: tileCenterX + offset[0],
             worldZ: tileCenterZ + offset[1],
             scale,

@@ -98,6 +98,80 @@ export function phaseWarp(x: number, z: number): number {
 export const SHALLOW_WATER_COLOR: readonly [number, number, number] = [0.498, 0.663, 0.788];
 export const DEEP_WATER_COLOR: readonly [number, number, number] = [0.369, 0.553, 0.702];
 
+/** Concentric LOD ring offsets for outer water extending smoothly to the 16000m horizon. Synchronized with BACKDROP_RING_RADII. */
+const OUTER_WATER_RING_RADII: readonly number[] = [
+  0,
+  10,
+  20,
+  32,
+  46,
+  62,
+  80,
+  100,
+  122,
+  146,
+  172,
+  200,
+  230,
+  262,
+  296,
+  332,
+  370,
+  410,
+  452,
+  496,
+  542,
+  590,
+  640,
+  692,
+  746,
+  802,
+  860,
+  920,
+  982,
+  1050,
+  1125,
+  1205,
+  1290,
+  1380,
+  1475,
+  1575,
+  1680,
+  1790,
+  1910,
+  2040,
+  2180,
+  2330,
+  2490,
+  2660,
+  2840,
+  3030,
+  3230,
+  3450,
+  3690,
+  3950,
+  4230,
+  4530,
+  4860,
+  5220,
+  5610,
+  6030,
+  6490,
+  6990,
+  7540,
+  8150,
+  8820,
+  9560,
+  10380,
+  11300,
+  12340,
+  13520,
+  14700,
+  16000,
+];
+const OUTER_WATER_SEGMENTS = 256;
+const OUTER_WATER_CORNER_SEGMENTS = 16;
+
 /** Water SURFACE color at a given depth (meters below SEA_LEVEL), saturating at MAX_WATER_DEPTH_VIS. Pure. */
 export function depthColor(depth: number): [number, number, number] {
   const t = clamp01(depth / MAX_WATER_DEPTH_VIS);
@@ -403,6 +477,7 @@ function findDirectionalLight(scene: THREE.Scene): THREE.DirectionalLight | null
  */
 export class WaterRenderer {
   private readonly mesh: THREE.Mesh;
+  private readonly outerMesh: THREE.Mesh;
   private readonly material: MeshStandardNodeMaterial;
   private readonly timeUniform = uniform(0);
   private readonly nightFactorUniform = uniform(0);
@@ -462,6 +537,14 @@ export class WaterRenderer {
     this.mesh.receiveShadow = true;
     this.mesh.castShadow = false;
     scene.add(this.mesh);
+
+    this.outerMesh = new THREE.Mesh(this.makeOuterWaterGeometry(), this.material);
+    this.outerMesh.name = 'water-backdrop';
+    this.outerMesh.userData['underground'] = 'keep';
+    this.outerMesh.position.y = SEA_LEVEL;
+    this.outerMesh.receiveShadow = true;
+    this.outerMesh.castShadow = false;
+    scene.add(this.outerMesh);
   }
 
   /** Dynamically updates the water surface mesh resolution to match quality settings. */
@@ -499,6 +582,9 @@ export class WaterRenderer {
 
     this.mesh.geometry.dispose();
     this.mesh.geometry = geometry;
+
+    this.outerMesh.geometry.dispose();
+    this.outerMesh.geometry = this.makeOuterWaterGeometry();
 
     if (this.lastFouling) {
       this.setFouling(this.lastFouling);
@@ -569,6 +655,133 @@ export class WaterRenderer {
 
   setVisible(visible: boolean): void {
     this.mesh.visible = visible;
+    if (this.outerMesh) {
+      this.outerMesh.visible = visible;
+    }
+  }
+
+  /**
+   * Non-shearing 8-sector concentric annular LOD rings expanding outer water from parcel boundaries to 16000m horizon.
+   */
+  private makeOuterWaterGeometry(): THREE.BufferGeometry {
+    const sizeMeters = this.sizeTiles * TILE_METERS;
+    const ringCount = OUTER_WATER_RING_RADII.length;
+    const N = OUTER_WATER_SEGMENTS;
+    const C = OUTER_WATER_CORNER_SEGMENTS;
+    const perimeterCount = 4 * N + 4 * C;
+    const totalVertices = ringCount * perimeterCount;
+
+    const positions = new Float32Array(totalVertices * 3);
+    const depths = new Float32Array(totalVertices);
+    const fouls = new Float32Array(totalVertices);
+
+    for (let ringIdx = 0; ringIdx < ringCount; ringIdx++) {
+      const r = OUTER_WATER_RING_RADII[ringIdx]!;
+      const ringBase = ringIdx * perimeterCount;
+      let p = 0;
+
+      // Sector 1: South edge (s = 0 .. N-1)
+      for (let s = 0; s < N; s++, p++) {
+        const wx = (s / N) * sizeMeters;
+        const wz = -r;
+        this.setOuterWaterVertex(ringBase + p, wx, wz, positions, depths, fouls);
+      }
+
+      // Sector 2: South-East corner (c = 0 .. C-1)
+      for (let c = 0; c < C; c++, p++) {
+        const theta = (c / C) * (Math.PI / 2);
+        const wx = sizeMeters + r * Math.sin(theta);
+        const wz = -r * Math.cos(theta);
+        this.setOuterWaterVertex(ringBase + p, wx, wz, positions, depths, fouls);
+      }
+
+      // Sector 3: East edge (s = 0 .. N-1)
+      for (let s = 0; s < N; s++, p++) {
+        const wx = sizeMeters + r;
+        const wz = (s / N) * sizeMeters;
+        this.setOuterWaterVertex(ringBase + p, wx, wz, positions, depths, fouls);
+      }
+
+      // Sector 4: North-East corner (c = 0 .. C-1)
+      for (let c = 0; c < C; c++, p++) {
+        const theta = (c / C) * (Math.PI / 2);
+        const wx = sizeMeters + r * Math.cos(theta);
+        const wz = sizeMeters + r * Math.sin(theta);
+        this.setOuterWaterVertex(ringBase + p, wx, wz, positions, depths, fouls);
+      }
+
+      // Sector 5: North edge (s = 0 .. N-1)
+      for (let s = 0; s < N; s++, p++) {
+        const wx = sizeMeters - (s / N) * sizeMeters;
+        const wz = sizeMeters + r;
+        this.setOuterWaterVertex(ringBase + p, wx, wz, positions, depths, fouls);
+      }
+
+      // Sector 6: North-West corner (c = 0 .. C-1)
+      for (let c = 0; c < C; c++, p++) {
+        const theta = (c / C) * (Math.PI / 2);
+        const wx = -r * Math.sin(theta);
+        const wz = sizeMeters + r * Math.cos(theta);
+        this.setOuterWaterVertex(ringBase + p, wx, wz, positions, depths, fouls);
+      }
+
+      // Sector 7: West edge (s = 0 .. N-1)
+      for (let s = 0; s < N; s++, p++) {
+        const wx = -r;
+        const wz = sizeMeters - (s / N) * sizeMeters;
+        this.setOuterWaterVertex(ringBase + p, wx, wz, positions, depths, fouls);
+      }
+
+      // Sector 8: South-West corner (c = 0 .. C-1)
+      for (let c = 0; c < C; c++, p++) {
+        const theta = (c / C) * (Math.PI / 2);
+        const wx = -r * Math.cos(theta);
+        const wz = -r * Math.sin(theta);
+        this.setOuterWaterVertex(ringBase + p, wx, wz, positions, depths, fouls);
+      }
+    }
+
+    const indices: number[] = [];
+    for (let ringIdx = 0; ringIdx < ringCount - 1; ringIdx++) {
+      const innerBase = ringIdx * perimeterCount;
+      const outerBase = (ringIdx + 1) * perimeterCount;
+
+      for (let p = 0; p < perimeterCount; p++) {
+        const nextP = (p + 1) % perimeterCount;
+
+        const i00 = innerBase + p;
+        const i10 = innerBase + nextP;
+        const i01 = outerBase + p;
+        const i11 = outerBase + nextP;
+
+        indices.push(i00, i10, i01);
+        indices.push(i10, i11, i01);
+      }
+    }
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute('waterDepth', new THREE.BufferAttribute(depths, 1));
+    geometry.setAttribute('waterFoul', new THREE.BufferAttribute(fouls, 1));
+    geometry.setIndex(indices);
+    geometry.computeVertexNormals();
+    return geometry;
+  }
+
+  private setOuterWaterVertex(
+    vi: number,
+    wx: number,
+    wz: number,
+    positions: Float32Array,
+    depths: Float32Array,
+    fouls: Float32Array,
+  ): void {
+    positions[vi * 3] = wx;
+    positions[vi * 3 + 1] = 0;
+    positions[vi * 3 + 2] = wz;
+
+    depths[vi] = Math.max(0, SEA_LEVEL - this.heightAt(wx, wz));
+    fouls[vi] = 0;
   }
 
   /** Accumulated animation clock, in seconds. For tests/introspection. */

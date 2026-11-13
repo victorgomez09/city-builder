@@ -326,12 +326,18 @@ export class CloudLayer {
     this.applyFrame(0, 0.5);
   }
 
-  /** Advances the slow uniform drift and repaints the pool for (tick, timeOfDay). */
-  update(dtMs: number, tick: number, timeOfDay: number): void {
+  /** Advances the slow uniform drift and repaints the pool for (tick, timeOfDay), modulated by weather. */
+  update(
+    dtMs: number,
+    tick: number,
+    timeOfDay: number,
+    weatherCoverageBonus = 0,
+    weatherDarkness = 1,
+  ): void {
     const dtSeconds = Math.max(0, dtMs) / 1000;
     this.driftX += Math.cos(WIND_DIRECTION_RADIANS) * WIND_SPEED_MPS * dtSeconds;
     this.driftZ += Math.sin(WIND_DIRECTION_RADIANS) * WIND_SPEED_MPS * dtSeconds;
-    this.applyFrame(tick, timeOfDay);
+    this.applyFrame(tick, timeOfDay, weatherCoverageBonus, weatherDarkness);
   }
 
   /** Clouds currently shown (out of poolSize()), from the last update()/construction. */
@@ -354,8 +360,14 @@ export class CloudLayer {
     return this.slots.length;
   }
 
-  private applyFrame(tick: number, timeOfDay: number): void {
-    const coverage = clamp01(cloudCoverage(tick));
+  private applyFrame(
+    tick: number,
+    timeOfDay: number,
+    weatherCoverageBonus = 0,
+    weatherDarkness = 1,
+  ): void {
+    const baseCoverage = clamp01(cloudCoverage(tick));
+    const coverage = clamp01(baseCoverage + weatherCoverageBonus);
     this.lastCoverage = coverage;
     const activeCount = Math.round(coverage * this.slots.length);
     this.lastActiveCount = activeCount;
@@ -364,7 +376,11 @@ export class CloudLayer {
     const coverageOpacity = CLOUD_MIN_OPACITY + (1 - CLOUD_MIN_OPACITY) * coverage;
     const finalOpacity = clamp01(coverageOpacity * tint.opacityMultiplier);
     for (const material of this.materials) {
-      material.color.setRGB(tint.color[0], tint.color[1], tint.color[2]);
+      material.color.setRGB(
+        tint.color[0] * weatherDarkness,
+        tint.color[1] * weatherDarkness,
+        tint.color[2] * weatherDarkness,
+      );
       material.opacity = finalOpacity;
     }
 

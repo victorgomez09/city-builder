@@ -593,9 +593,16 @@ const TURBINE_BLADE_TIP_WIDTH = 0.5;
 const TURBINE_BLADE_THICKNESS = 0.9;
 const TURBINE_BEACON_RADIUS = 0.5;
 
-/** Pale bone white — same values as facade.ts's ROOF_PALETTE off-white/bone entry, duplicated locally per this subsystem's convention. */
-const TURBINE_BODY_RGB: RGB = [0.93, 0.91, 0.87];
-const TURBINE_ROTOR_RGB: RGB = [0.85, 0.83, 0.79];
+/** Turbine realistic livery: composite white, aviation red stripes, dark foundation & accents. */
+const TURBINE_BODY_RGB: RGB = [0.91, 0.9, 0.88];
+const TURBINE_ROTOR_RGB: RGB = [0.88, 0.87, 0.85];
+const TURBINE_AVIATION_RED_RGB: RGB = [0.76, 0.18, 0.14];
+const TURBINE_ROOT_CUFF_RGB: RGB = [0.26, 0.28, 0.31];
+const TURBINE_FOUNDATION_RGB: RGB = [0.42, 0.43, 0.45];
+const TURBINE_DOOR_RGB: RGB = [0.78, 0.62, 0.16];
+const TURBINE_FLANGE_RGB: RGB = [0.65, 0.67, 0.7];
+const TURBINE_NACELLE_ACCENT_RGB: RGB = [0.18, 0.42, 0.62];
+const TURBINE_GRILL_RGB: RGB = [0.24, 0.25, 0.27];
 const TURBINE_BEACON_COLOR = 0xff2a2a;
 
 /** About 6 rpm, the slow end of a 3 MW-class rotor's 6–16 rpm; a 134 m rotor any faster reads as frantic from the air. */
@@ -631,8 +638,11 @@ export function turbineBeaconLocal(): { x: number; y: number; z: number } {
   };
 }
 
-/** Tapered mast + nacelle box, merged; local Y=0 is the GROUND plane. */
+/** Tapered mast + nacelle box + foundation & technical livery detailing; local Y=0 is the GROUND plane. */
 function buildTurbineTowerGeometry(): THREE.BufferGeometry {
+  const parts: THREE.BufferGeometry[] = [];
+
+  // Main tapered mast
   const mast = new THREE.CylinderGeometry(
     TURBINE_MAST_RADIUS_TOP,
     TURBINE_MAST_RADIUS_BOTTOM,
@@ -641,29 +651,122 @@ function buildTurbineTowerGeometry(): THREE.BufferGeometry {
   );
   mast.translate(0, TURBINE_MAST_HEIGHT / 2, 0);
   paintVertexColor(mast, hexFromRgb(TURBINE_BODY_RGB));
+  parts.push(mast);
 
+  // Concrete foundation pedestal collar at base
+  const foundationH = 2.8;
+  const foundation = new THREE.CylinderGeometry(
+    TURBINE_MAST_RADIUS_BOTTOM + 0.16,
+    TURBINE_MAST_RADIUS_BOTTOM + 0.3,
+    foundationH,
+    12,
+  );
+  foundation.translate(0, foundationH / 2, 0);
+  paintVertexColor(foundation, hexFromRgb(TURBINE_FOUNDATION_RGB));
+  parts.push(foundation);
+
+  // Safety maintenance access door on the street (+Z) face
+  const door = new THREE.BoxGeometry(0.95, 2.1, 0.12);
+  door.translate(0, foundationH / 2 + 0.1, TURBINE_MAST_RADIUS_BOTTOM + 0.2);
+  paintVertexColor(door, hexFromRgb(TURBINE_DOOR_RGB));
+  parts.push(door);
+
+  // Modular steel mast flange rings (welded tubular segment joints)
+  for (const frac of [0.35, 0.7]) {
+    const y = TURBINE_MAST_HEIGHT * frac;
+    const r = lerpNum(TURBINE_MAST_RADIUS_BOTTOM, TURBINE_MAST_RADIUS_TOP, frac);
+    const flange = new THREE.CylinderGeometry(r + 0.05, r + 0.05, 0.22, 10);
+    flange.translate(0, y, 0);
+    paintVertexColor(flange, hexFromRgb(TURBINE_FLANGE_RGB));
+    parts.push(flange);
+  }
+
+  // Nacelle housing
   const nacelle = new THREE.BoxGeometry(
     TURBINE_NACELLE_SIZE.w,
     TURBINE_NACELLE_SIZE.h,
     TURBINE_NACELLE_SIZE.d,
   );
   nacelle.translate(0, TURBINE_MAST_HEIGHT + TURBINE_NACELLE_SIZE.h / 2, TURBINE_NACELLE_Z_OFFSET);
-  paintVertexColor(nacelle, hexFromRgb(TURBINE_ROTOR_RGB));
+  paintVertexColor(nacelle, hexFromRgb(TURBINE_BODY_RGB));
+  parts.push(nacelle);
 
-  return mergeParts([mast, nacelle]);
+  // Technical diorama blue accent stripes along both flanks
+  for (const sx of [-1, 1]) {
+    const stripe = new THREE.BoxGeometry(0.06, 0.45, TURBINE_NACELLE_SIZE.d * 0.72);
+    stripe.translate(
+      sx * (TURBINE_NACELLE_SIZE.w / 2 + 0.02),
+      TURBINE_MAST_HEIGHT + TURBINE_NACELLE_SIZE.h * 0.52,
+      TURBINE_NACELLE_Z_OFFSET,
+    );
+    paintVertexColor(stripe, hexFromRgb(TURBINE_NACELLE_ACCENT_RGB));
+    parts.push(stripe);
+  }
+
+  // Rear cooling radiator louver
+  const grill = new THREE.BoxGeometry(
+    TURBINE_NACELLE_SIZE.w * 0.72,
+    TURBINE_NACELLE_SIZE.h * 0.6,
+    0.15,
+  );
+  grill.translate(
+    0,
+    TURBINE_MAST_HEIGHT + TURBINE_NACELLE_SIZE.h / 2,
+    TURBINE_NACELLE_Z_OFFSET + TURBINE_NACELLE_SIZE.d / 2 + 0.05,
+  );
+  paintVertexColor(grill, hexFromRgb(TURBINE_GRILL_RGB));
+  parts.push(grill);
+
+  // Anemometer / wind sensor mast on top rear
+  const sensorMast = new THREE.CylinderGeometry(0.05, 0.05, 0.9, 4);
+  sensorMast.translate(
+    0,
+    TURBINE_MAST_HEIGHT + TURBINE_NACELLE_SIZE.h + 0.45,
+    TURBINE_NACELLE_Z_OFFSET + TURBINE_NACELLE_SIZE.d / 2 - 0.8,
+  );
+  paintVertexColor(sensorMast, hexFromRgb(TURBINE_GRILL_RGB));
+  parts.push(sensorMast);
+
+  return mergeParts(parts);
 }
 
-/** A single tapered blade, root at the hub, pointing +Y before being swept around the spin (Z) axis. */
+/**
+ * A single tapered blade, with pitch bearing cuff, composite body, and dual
+ * high-contrast aviation hazard red stripes at the tip.
+ * Root at the hub, pointing +Y before being swept around the spin (Z) axis.
+ */
 function buildTurbineBladeGeometry(): THREE.BufferGeometry {
-  const geometry = new THREE.CylinderGeometry(
-    TURBINE_BLADE_TIP_WIDTH / 2,
-    TURBINE_BLADE_ROOT_WIDTH / 2,
-    TURBINE_BLADE_LENGTH,
-    4,
-  );
-  geometry.scale(1, 1, TURBINE_BLADE_THICKNESS / TURBINE_BLADE_ROOT_WIDTH);
-  geometry.translate(0, TURBINE_BLADE_LENGTH / 2 + TURBINE_HUB_RADIUS * 0.6, 0);
-  return geometry;
+  const parts: THREE.BufferGeometry[] = [];
+  const rAt = (t: number): number =>
+    lerpNum(TURBINE_BLADE_ROOT_WIDTH / 2, TURBINE_BLADE_TIP_WIDTH / 2, t);
+
+  // Profile slices along the blade length [t0, t1, rgb]:
+  // 1. Root pitch bearing collar (dark carbon cuff)
+  // 2. Aerodynamic main body (composite white)
+  // 3. Aviation safety hazard stripe 1 (high-vis aviation red)
+  // 4. Intermediate composite white band
+  // 5. Aviation safety hazard stripe 2 (tip red)
+  const slices: readonly (readonly [number, number, RGB])[] = [
+    [0.0, 0.05, TURBINE_ROOT_CUFF_RGB],
+    [0.05, 0.74, TURBINE_ROTOR_RGB],
+    [0.74, 0.83, TURBINE_AVIATION_RED_RGB],
+    [0.83, 0.91, TURBINE_ROTOR_RGB],
+    [0.91, 1.0, TURBINE_AVIATION_RED_RGB],
+  ];
+
+  for (const [t0, t1, rgb] of slices) {
+    const len = (t1 - t0) * TURBINE_BLADE_LENGTH;
+    const rBot = rAt(t0);
+    const rTop = rAt(t1);
+    const slice = new THREE.CylinderGeometry(rTop, rBot, len, 4);
+    slice.scale(1, 1, TURBINE_BLADE_THICKNESS / TURBINE_BLADE_ROOT_WIDTH);
+    const yCenter = TURBINE_HUB_RADIUS * 0.6 + (t0 + (t1 - t0) / 2) * TURBINE_BLADE_LENGTH;
+    slice.translate(0, yCenter, 0);
+    paintVertexColor(slice, hexFromRgb(rgb));
+    parts.push(slice);
+  }
+
+  return mergeParts(parts);
 }
 
 /**
@@ -681,7 +784,6 @@ function buildTurbineRotorGeometry(): THREE.BufferGeometry {
     const angle = (i / TURBINE_BLADE_COUNT) * Math.PI * 2;
     const blade = buildTurbineBladeGeometry();
     blade.rotateZ(angle);
-    paintVertexColor(blade, hexFromRgb(TURBINE_ROTOR_RGB));
     parts.push(blade);
   }
   return mergeParts(parts);
@@ -718,8 +820,15 @@ const WATER_TIE_ROD_RADIUS = 0.05;
 const WATER_RISER_RADIUS = 0.6;
 export const WATER_TANK_SEGMENTS = 32;
 
-const WATER_STEEL_RGB: RGB = [0.62, 0.64, 0.67];
-const WATER_TANK_RGB: RGB = [0.94, 0.94, 0.92];
+const WATER_STEEL_RGB: RGB = [0.58, 0.6, 0.64];
+const WATER_TANK_RGB: RGB = [0.93, 0.93, 0.91];
+const WATER_TANK_BAND_RGB: RGB = [0.16, 0.44, 0.64];
+const WATER_TANK_TRIM_RGB: RGB = [0.84, 0.72, 0.32];
+const WATER_VENT_RGB: RGB = [0.32, 0.34, 0.37];
+const WATER_CATWALK_RGB: RGB = [0.36, 0.38, 0.41];
+const WATER_SAFETY_YELLOW_RGB: RGB = [0.86, 0.66, 0.14];
+const WATER_RISER_RGB: RGB = [0.22, 0.35, 0.48];
+const WATER_FOOTING_RGB: RGB = [0.48, 0.47, 0.45];
 
 export interface LegPlacement {
   base: Vec2;
@@ -752,14 +861,14 @@ function legPointAt(leg: LegPlacement, y: number): Vec3 {
 }
 
 /**
- * The silver-grey steel, merged; local Y=0 is the GROUND plane: the balcony
- * and its handrail, the legs, a ring of struts and four faces of crossed tie
- * rods in each panel, and the wet riser.
+ * The steel structural assembly, merged; local Y=0 is the GROUND plane:
+ * dark grated balcony walkway, OSHA safety yellow handrails, galvanized
+ * battered legs and bracing, concrete pier footings, and marine blue wet riser.
  */
 function buildWaterSteelGeometry(): THREE.BufferGeometry {
   const parts: THREE.BufferGeometry[] = [];
 
-  // Balcony floor: a closed rectangular profile lathed into a ring.
+  // Balcony walkway floor: dark industrial steel grating
   const rim = [
     new THREE.Vector2(WATER_TANK_RADIUS, WATER_BALCONY_Y - WATER_BALCONY_THICKNESS),
     new THREE.Vector2(WATER_BALCONY_OUTER_RADIUS, WATER_BALCONY_Y - WATER_BALCONY_THICKNESS),
@@ -767,40 +876,49 @@ function buildWaterSteelGeometry(): THREE.BufferGeometry {
     new THREE.Vector2(WATER_TANK_RADIUS, WATER_BALCONY_Y),
     new THREE.Vector2(WATER_TANK_RADIUS, WATER_BALCONY_Y - WATER_BALCONY_THICKNESS),
   ];
-  parts.push(new THREE.LatheGeometry(rim, WATER_TANK_SEGMENTS));
+  const balconyFloor = new THREE.LatheGeometry(rim, WATER_TANK_SEGMENTS);
+  paintVertexColor(balconyFloor, hexFromRgb(WATER_CATWALK_RGB));
+  parts.push(balconyFloor);
 
-  // Handrail: a top rail ring held up by evenly spaced posts.
+  // Handrail: OSHA industrial safety yellow top rail ring and posts
   const rail = new THREE.TorusGeometry(WATER_HANDRAIL_RADIUS, 0.06, 5, WATER_TANK_SEGMENTS);
   rail.rotateX(Math.PI / 2);
   rail.translate(0, WATER_BALCONY_Y + WATER_HANDRAIL_HEIGHT, 0);
+  paintVertexColor(rail, hexFromRgb(WATER_SAFETY_YELLOW_RGB));
   parts.push(rail);
   for (let i = 0; i < WATER_HANDRAIL_POSTS; i++) {
     const angle = (i / WATER_HANDRAIL_POSTS) * Math.PI * 2;
     const x = Math.cos(angle) * WATER_HANDRAIL_RADIUS;
     const z = Math.sin(angle) * WATER_HANDRAIL_RADIUS;
-    parts.push(
-      buildRodGeometry(
-        { x, y: WATER_BALCONY_Y, z },
-        { x, y: WATER_BALCONY_Y + WATER_HANDRAIL_HEIGHT, z },
-        0.04,
-        4,
-      ),
+    const post = buildRodGeometry(
+      { x, y: WATER_BALCONY_Y, z },
+      { x, y: WATER_BALCONY_Y + WATER_HANDRAIL_HEIGHT, z },
+      0.04,
+      4,
     );
+    paintVertexColor(post, hexFromRgb(WATER_SAFETY_YELLOW_RGB));
+    parts.push(post);
   }
 
-  // Legs, then the bracing: at every panel boundary a strut joins each pair of
-  // neighbouring legs, and each panel face carries a crossed pair of tie rods.
+  // Legs, bracing, and concrete footings
   const legs = computeWaterLegPlacements();
   for (const leg of legs) {
-    parts.push(
-      buildRodGeometry(
-        { x: leg.base.x, y: 0, z: leg.base.z },
-        { x: leg.top.x, y: WATER_BALCONY_Y, z: leg.top.z },
-        WATER_LEG_RADIUS,
-        6,
-      ),
+    const legRod = buildRodGeometry(
+      { x: leg.base.x, y: 0, z: leg.base.z },
+      { x: leg.top.x, y: WATER_BALCONY_Y, z: leg.top.z },
+      WATER_LEG_RADIUS,
+      6,
     );
+    paintVertexColor(legRod, hexFromRgb(WATER_STEEL_RGB));
+    parts.push(legRod);
+
+    // Concrete pier footings at ground
+    const footing = new THREE.CylinderGeometry(0.65, 0.75, 0.55, 8);
+    footing.translate(leg.base.x, 0.275, leg.base.z);
+    paintVertexColor(footing, hexFromRgb(WATER_FOOTING_RGB));
+    parts.push(footing);
   }
+
   const panelHeight = WATER_BALCONY_Y / WATER_PANEL_COUNT;
   for (let panel = 0; panel < WATER_PANEL_COUNT; panel++) {
     const lowY = panel * panelHeight;
@@ -809,42 +927,46 @@ function buildWaterSteelGeometry(): THREE.BufferGeometry {
       const a = legs[i]!;
       const b = legs[(i + 1) % legs.length]!;
       if (panel > 0) {
-        parts.push(
-          buildRodGeometry(legPointAt(a, lowY), legPointAt(b, lowY), WATER_STRUT_RADIUS, 4),
-        );
+        const strut = buildRodGeometry(legPointAt(a, lowY), legPointAt(b, lowY), WATER_STRUT_RADIUS, 4);
+        paintVertexColor(strut, hexFromRgb(WATER_STEEL_RGB));
+        parts.push(strut);
       }
-      parts.push(
-        buildRodGeometry(legPointAt(a, lowY), legPointAt(b, highY), WATER_TIE_ROD_RADIUS, 4),
-        buildRodGeometry(legPointAt(b, lowY), legPointAt(a, highY), WATER_TIE_ROD_RADIUS, 4),
-      );
+      const tie1 = buildRodGeometry(legPointAt(a, lowY), legPointAt(b, highY), WATER_TIE_ROD_RADIUS, 4);
+      paintVertexColor(tie1, hexFromRgb(WATER_STEEL_RGB));
+      const tie2 = buildRodGeometry(legPointAt(b, lowY), legPointAt(a, highY), WATER_TIE_ROD_RADIUS, 4);
+      paintVertexColor(tie2, hexFromRgb(WATER_STEEL_RGB));
+      parts.push(tie1, tie2);
     }
   }
 
-  // The wet riser: ground to the tank's lowest point.
-  parts.push(
-    buildRodGeometry(
-      { x: 0, y: 0, z: 0 },
-      { x: 0, y: WATER_TANK_BOTTOM_Y, z: 0 },
-      WATER_RISER_RADIUS,
-      10,
-    ),
+  // Central wet riser: marine deep blue pipe
+  const riser = buildRodGeometry(
+    { x: 0, y: 0, z: 0 },
+    { x: 0, y: WATER_TANK_BOTTOM_Y, z: 0 },
+    WATER_RISER_RADIUS,
+    10,
   );
+  paintVertexColor(riser, hexFromRgb(WATER_RISER_RGB));
+  parts.push(riser);
 
-  for (const part of parts) paintVertexColor(part, hexFromRgb(WATER_STEEL_RGB));
   return mergeParts(parts);
 }
 
-/** White tank, merged; local Y=0 is the GROUND plane: ellipsoidal bottom, cylindrical shell, ellipsoidal roof and the vent at its crown. */
+/**
+ * Elevated water tank with high-contrast municipal diorama livery:
+ * clean white ellipsoidal bottom & dome, municipal cobalt shell band,
+ * double gold accent pinstripes, and dark zinc crown vent with finial.
+ */
 function buildWaterTankGeometry(): THREE.BufferGeometry {
   const half = Math.PI / 2;
 
-  // Sphere halves scaled to ellipsoids: thetaStart = PI/2 sweeps equator to
-  // south pole (the bottom), thetaLength = PI/2 from the pole to the equator
-  // (the roof).
+  // 1. Bottom bowl: clean white ellipsoid
   const bottom = new THREE.SphereGeometry(1, WATER_TANK_SEGMENTS, 8, 0, Math.PI * 2, half, half);
   bottom.scale(WATER_TANK_RADIUS, WATER_TANK_BOTTOM_DEPTH, WATER_TANK_RADIUS);
   bottom.translate(0, WATER_BALCONY_Y, 0);
+  paintVertexColor(bottom, hexFromRgb(WATER_TANK_RGB));
 
+  // 2. Shell: municipal water cobalt blue
   const shell = new THREE.CylinderGeometry(
     WATER_TANK_RADIUS,
     WATER_TANK_RADIUS,
@@ -854,11 +976,26 @@ function buildWaterTankGeometry(): THREE.BufferGeometry {
     true,
   );
   shell.translate(0, WATER_BALCONY_Y + WATER_TANK_SHELL_HEIGHT / 2, 0);
+  paintVertexColor(shell, hexFromRgb(WATER_TANK_BAND_RGB));
 
+  // 3. Top and bottom gold/ivory trim pinstripe rings
+  const topTrim = new THREE.TorusGeometry(WATER_TANK_RADIUS + 0.04, 0.08, 4, WATER_TANK_SEGMENTS);
+  topTrim.rotateX(Math.PI / 2);
+  topTrim.translate(0, WATER_SHELL_TOP_Y, 0);
+  paintVertexColor(topTrim, hexFromRgb(WATER_TANK_TRIM_RGB));
+
+  const botTrim = new THREE.TorusGeometry(WATER_TANK_RADIUS + 0.04, 0.08, 4, WATER_TANK_SEGMENTS);
+  botTrim.rotateX(Math.PI / 2);
+  botTrim.translate(0, WATER_BALCONY_Y, 0);
+  paintVertexColor(botTrim, hexFromRgb(WATER_TANK_TRIM_RGB));
+
+  // 4. Roof dome: clean white ellipsoid
   const roof = new THREE.SphereGeometry(1, WATER_TANK_SEGMENTS, 8, 0, Math.PI * 2, 0, half);
   roof.scale(WATER_TANK_RADIUS, WATER_TANK_ROOF_HEIGHT, WATER_TANK_RADIUS);
   roof.translate(0, WATER_SHELL_TOP_Y, 0);
+  paintVertexColor(roof, hexFromRgb(WATER_TANK_RGB));
 
+  // 5. Crown vent cap: dark zinc / anthracite
   const vent = new THREE.CylinderGeometry(
     WATER_VENT_RADIUS,
     WATER_VENT_RADIUS,
@@ -866,10 +1003,14 @@ function buildWaterTankGeometry(): THREE.BufferGeometry {
     8,
   );
   vent.translate(0, WATER_CROWN_Y - 0.1 + WATER_VENT_HEIGHT / 2, 0);
+  paintVertexColor(vent, hexFromRgb(WATER_VENT_RGB));
 
-  const parts = [bottom, shell, roof, vent];
-  for (const part of parts) paintVertexColor(part, hexFromRgb(WATER_TANK_RGB));
-  return mergeParts(parts);
+  // 6. Crown finial / beacon tip
+  const finial = new THREE.CylinderGeometry(0.06, 0.06, 0.7, 4);
+  finial.translate(0, WATER_CROWN_Y + WATER_VENT_HEIGHT + 0.25, 0);
+  paintVertexColor(finial, hexFromRgb(WATER_VENT_RGB));
+
+  return mergeParts([bottom, shell, topTrim, botTrim, roof, vent, finial]);
 }
 
 /** The two merged parts of the water tower, local Y=0 at the ground. Exposed so the drawn shapes can be measured. */
@@ -1162,7 +1303,7 @@ function buildPumpStationGeometry(footprint: FootprintSize): THREE.BufferGeometr
     16,
   );
   tank.translate(layout.surgeTank.x, PUMP_SURGE_TANK.h / 2, layout.surgeTank.z);
-  parts.push(paintVertexColor(tank, hexFromRgb(PUMP_HOUSE_RGB)));
+  parts.push(paintVertexColor(tank, hexFromRgb([0.2, 0.44, 0.62])));
   const main = buildPipeAlongZ(PUMP_MAIN.radius, layout.main.z0, layout.main.z1, PUMP_MAIN.radius);
   main.translate(layout.main.x, 0, 0);
   parts.push(main);
@@ -3054,6 +3195,7 @@ function buildHospitalBlockGeometry(footprint: FootprintSize): THREE.BufferGeome
   // yard (doors, canopies, posts) starts at its top.
   const parts: THREE.BufferGeometry[] = [
     standingBox(w, height - HOSPITAL_ROOF_CAP_M, d, block.x, 0, block.z, HOSPITAL_CLADDING_RGB),
+    standingBox(w + 0.12, 1.2, d + 0.12, block.x, 0, block.z, [0.36, 0.38, 0.41]),
     standingBox(
       w,
       HOSPITAL_ROOF_CAP_M,
@@ -3133,6 +3275,16 @@ function buildHospitalBlockGeometry(footprint: FootprintSize): THREE.BufferGeome
       y0 + clear,
       (bay.z0 + bay.z1) / 2,
       HOSPITAL_CANOPY_RGB,
+    ),
+    // Emergency red accent fascia trim on the ambulance canopy
+    standingBox(
+      bay.x1 - bay.x0 + 0.1,
+      slab * 0.7,
+      0.12,
+      bayX,
+      y0 + clear + slab * 0.15,
+      bay.z1 + 0.06,
+      [0.74, 0.16, 0.14],
     ),
   );
   for (const x of [bay.x0 + 0.4, bay.x1 - 0.4]) {
@@ -3898,7 +4050,7 @@ const STATION_CAP_RGB: RGB = [0.42, 0.4, 0.38];
 const STATION_BAND_RGB: RGB = [0.18, 0.3, 0.55];
 const STATION_BELT_RGB: RGB = [0.72, 0.72, 0.7];
 const STATION_FRAME_RGB: RGB = [0.2, 0.2, 0.22];
-const STATION_FIRE_DOOR_RGB: RGB = [0.9, 0.9, 0.86];
+const STATION_FIRE_DOOR_RGB: RGB = [0.74, 0.16, 0.14];
 const STATION_SALLY_DOOR_RGB: RGB = [0.82, 0.84, 0.86];
 const STATION_GROOVE_RGB: RGB = [0.62, 0.63, 0.62];
 const STATION_ENTRANCE_RGB: RGB = [0.2, 0.2, 0.24];
@@ -4233,6 +4385,20 @@ function stationDoorParts(
           y0 + (door.h * k) / 6,
           front + STATION_LEAF_PROUD_M + 0.07,
           STATION_GROOVE_RGB,
+        ),
+      );
+    }
+    // For fire station doors, add glazed vision window inserts in the upper door panel
+    if (leafRgb === STATION_FIRE_DOOR_RGB) {
+      parts.push(
+        standingBox(
+          door.w * 0.72,
+          door.h * 0.18,
+          0.04,
+          door.x,
+          y0 + door.h * 0.52,
+          front + STATION_LEAF_PROUD_M + 0.07,
+          [0.18, 0.24, 0.3],
         ),
       );
     }
@@ -5541,11 +5707,11 @@ const SOLAR_POST_M = 0.1;
 /** A solar farm's fence runs round a 120 m lot: its rails carry it, and a post every 10 m holds them. */
 const SOLAR_FENCE_POST_SPACING_M = 10;
 
-const SOLAR_PANEL_RGB: RGB = [0.06, 0.09, 0.17];
-const SOLAR_FRAME_RGB: RGB = [0.5, 0.54, 0.58];
+const SOLAR_PANEL_RGB: RGB = [0.1, 0.15, 0.25];
+const SOLAR_FRAME_RGB: RGB = [0.72, 0.74, 0.78];
 const SOLAR_POST_RGB: RGB = [0.45, 0.47, 0.5];
 const SOLAR_SKID_RGB: RGB = [0.5, 0.52, 0.5];
-const SOLAR_SKID_DOOR_RGB: RGB = [0.26, 0.3, 0.32];
+const SOLAR_SKID_DOOR_RGB: RGB = [0.82, 0.64, 0.15];
 
 /**
  * The horizontal direction of the sun at noon, as an axis of the scene: the way
@@ -5624,7 +5790,7 @@ function buildSolarGroundsGeometry(footprint: FootprintSize): THREE.BufferGeomet
   ]);
 }
 
-/** The inverter skid with its doors and roof vent, and the chain-link fence with its gate. */
+/** The inverter skid with its doors, hazard labels, roof vent, and the chain-link fence with its gate. */
 function buildSolarSiteGeometry(footprint: FootprintSize): THREE.BufferGeometry {
   const { skid, gate } = computeSolarLayout(footprint, 0);
   const c = rectCentre(skid);
@@ -5633,7 +5799,9 @@ function buildSolarSiteGeometry(footprint: FootprintSize): THREE.BufferGeometry 
     standingBox(1.4, 0.35, 1.2, c.x - 1.2, SOLAR_SKID.h, c.z, GEN_STEEL_RGB),
   ];
   for (const dx of [-1.4, 1.4]) {
+    // Safety yellow enclosure doors with dark high-voltage warning placard
     parts.push(standingBox(1.6, 2.2, 0.1, c.x + dx, 0, skid.z1 + 0.05, SOLAR_SKID_DOOR_RGB));
+    parts.push(standingBox(0.6, 0.35, 0.04, c.x + dx, 1.15, skid.z1 + 0.11, [0.18, 0.2, 0.22]));
   }
   fenceLoop(
     parts,
@@ -5649,10 +5817,10 @@ function buildSolarSiteGeometry(footprint: FootprintSize): THREE.BufferGeometry 
  * One row, drawn for 100 m: a frame-coloured slab of two modules' height tilted
  * to the facing (+Z) with its low edge at `SOLAR_LOW_EDGE_M`, the panel a quad
  * laid on it inside the frame's band, the seam between the two modules a quad
- * in the frame's colour (the module seams along the row are not geometry), on a
- * line of posts every `SOLAR_SUPPORT_SPACING_M`
- * under the slab's middle, each a two-sided strip. Local Y=0 is the plate's top,
- * the row's centre on the origin, panels facing +Z.
+ * in the frame's colour, transverse module framing seams every ~2.26 m along
+ * the row, on a line of posts every `SOLAR_SUPPORT_SPACING_M` under the slab's
+ * middle. Local Y=0 is the plate's top, the row's centre on the origin, panels
+ * facing +Z.
  */
 function buildSolarRowGeometry(length: number): THREE.BufferGeometry {
   const mid = SOLAR_LOW_EDGE_M + (SOLAR_SLOPE_M / 2) * Math.sin(SOLAR_TILT);
@@ -5687,6 +5855,18 @@ function buildSolarRowGeometry(length: number): THREE.BufferGeometry {
       SOLAR_FRAME_RGB,
     ),
   ];
+
+  // Transverse module frames along row length to articulate individual solar panels
+  const moduleSpacing = SOLAR_MODULE_M.wide * 2; // ~2.26 m panel pairs
+  for (let x = -hl + moduleSpacing; x < hl - 0.4; x += moduleSpacing) {
+    parts.push(
+      onPlane(
+        quad(x - 0.02, x + 0.02, -half + f, half - f, SOLAR_PANEL_LIFT_M + SOLAR_SEAM_PROUD_M),
+        SOLAR_FRAME_RGB,
+      ),
+    );
+  }
+
   // The slab's underside at the middle line, where each post stops.
   const top = mid - SOLAR_SLAB_M / Math.cos(SOLAR_TILT) + 0.02;
   for (let x = -hl + SOLAR_SUPPORT_SPACING_M / 2; x < hl; x += SOLAR_SUPPORT_SPACING_M) {

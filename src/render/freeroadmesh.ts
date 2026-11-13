@@ -1029,8 +1029,29 @@ export class FreeRoadRenderer {
     this.scene.add(this.mesh);
   }
 
+  /**
+   * Modulates freeform road pavement color by nightFactor, wetness (darkened wet asphalt),
+   * and snowCover (frosty winter dusting).
+   */
+  setEnvironment(nightFactor: number, wetness = 0, snowCover = 0): void {
+    const base = roadNightTint(nightFactor);
+    const wetMult = 1.0 - Math.min(1, Math.max(0, wetness)) * 0.22;
+    const r = base[0] * wetMult;
+    const g = base[1] * wetMult;
+    const b = base[2] * wetMult;
+    const effectiveSnow = Math.min(1, Math.max(0, snowCover)) * 0.6;
+    const snowR = 0.94;
+    const snowG = 0.96;
+    const snowB = 1.0;
+    this.material.color.setRGB(
+      r + (snowR - r) * effectiveSnow,
+      g + (snowG - g) * effectiveSnow,
+      b + (snowB - b) * effectiveSnow,
+    );
+  }
+
   setNightFactor(nightFactor: number): void {
-    this.material.color.setRGB(...roadNightTint(nightFactor));
+    this.setEnvironment(nightFactor, 0, 0);
   }
 
   /** The grid tiles the last rebuild drew a junction over, which the tile renderer leaves to it. */

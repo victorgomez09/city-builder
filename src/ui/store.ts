@@ -44,6 +44,7 @@ import { NO_EDITS, type ProfileEdits } from '../shared/roadprofile';
 import type { StatsSample } from './statshistory';
 import type { CityIssue } from './advisor';
 import { type GameSettings, loadSettings, saveSettings } from '../app/session';
+import type { WeatherType } from '../render/weather';
 
 const MAX_NOTIFICATIONS = 50;
 
@@ -276,10 +277,14 @@ export interface CityStoreState {
   menuOpen: boolean;
   /** Persisted user options (bloom / sandbox / audio). */
   settings: GameSettings;
+  /** Active dynamic weather condition. */
+  weather: WeatherType;
 
   applySnapshotStats: (stats: CityStats) => void;
   setTool: (tool: ToolId) => void;
   setOverlay: (overlay: LensId | null) => void;
+  /** Updates active weather condition. */
+  setWeather: (weather: WeatherType) => void;
   /** Updates the local speed readout and forwards it to the bound worker bridge. */
   setSpeed: (speed: SimSpeed) => void;
   pushNotification: (note: CityNotification) => void;
@@ -347,6 +352,7 @@ export const useCityStore = create<CityStoreState>((set, get) => ({
   selectedTool: 'select',
   overlay: null,
   speed: 1,
+  weather: 'clear',
   notifications: [],
   preview: null,
   selectedBuilding: null,
@@ -410,6 +416,7 @@ export const useCityStore = create<CityStoreState>((set, get) => ({
       roadProfileEdits: tool === state.selectedTool ? state.roadProfileEdits : NO_EDITS,
     })),
   setOverlay: (overlay) => set({ overlay }),
+  setWeather: (weather) => set({ weather }),
   setSpeed: (speed) => {
     set({ speed });
     get().bound?.setSpeed(speed);

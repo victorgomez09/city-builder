@@ -114,12 +114,23 @@ export function dampTowards(current: number, goal: number, lambda: number, dt: n
   return goal + (current - goal) * decay;
 }
 
+/** Extra panning margin in meters beyond the parcel boundary into the high-definition buffer. */
+export const CAMERA_PAN_MARGIN_METERS = 400;
+
 /** Clamp pitch/distance/target into valid ranges. yaw passes through unchanged. */
 export function clampState(state: CameraState): CameraState {
   const mapMeters = MAP_SIZE * TILE_METERS;
   return {
-    targetX: clamp(state.targetX, 0, mapMeters),
-    targetZ: clamp(state.targetZ, 0, mapMeters),
+    targetX: clamp(
+      state.targetX,
+      -CAMERA_PAN_MARGIN_METERS,
+      mapMeters + CAMERA_PAN_MARGIN_METERS,
+    ),
+    targetZ: clamp(
+      state.targetZ,
+      -CAMERA_PAN_MARGIN_METERS,
+      mapMeters + CAMERA_PAN_MARGIN_METERS,
+    ),
     distance: clamp(state.distance, CAMERA_MIN_DISTANCE, CAMERA_MAX_DISTANCE),
     yaw: state.yaw,
     pitch: clamp(state.pitch, CAMERA_MIN_PITCH, CAMERA_MAX_PITCH),

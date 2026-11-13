@@ -24,7 +24,7 @@
  */
 import * as THREE from 'three';
 import { MeshStandardNodeMaterial } from 'three/webgpu';
-import { uniform } from 'three/tsl';
+import { materialColor, mix, uniform, vec3 } from 'three/tsl';
 import { nightTintNode } from './nightlook';
 import {
   BuildingCatalogEntry,
@@ -507,6 +507,7 @@ export class HouseRoofRenderer {
   private readonly street: StreetLookup;
   private readonly catalogById: Map<string, BuildingCatalogEntry>;
   private readonly nightFactorUniform = uniform(0);
+  private readonly snowCoverUniform = uniform(0);
   private readonly pools: Record<HousePart, InstancedSlotPool>;
   private readonly carPool: VehicleKitPool;
   private readonly buildingSlots = new Map<number, HouseSlots>();
@@ -568,7 +569,10 @@ export class HouseRoofRenderer {
 
   private kitMaterial(vertexColors: boolean): MeshStandardNodeMaterial {
     const material = new MeshStandardNodeMaterial({ roughness: 1, metalness: 0, vertexColors });
-    material.colorNode = nightTintNode(this.nightFactorUniform);
+    const nightTint = nightTintNode(this.nightFactorUniform);
+    // Roofs take a white snow dusting when snowCover > 0
+    const snowLayer = mix(materialColor, vec3(0.96, 0.97, 1.0), this.snowCoverUniform.mul(0.7));
+    material.colorNode = snowLayer.mul(nightTint);
     return material;
   }
 
@@ -602,9 +606,15 @@ export class HouseRoofRenderer {
     this.carPool.finalize();
   }
 
+  /** Modulates house kit colors by nightFactor and snowCover. */
+  setEnvironment(nightFactor: number, snowCover = 0): void {
+    this.nightFactorUniform.value = Math.min(1, Math.max(0, nightFactor));
+    this.snowCoverUniform.value = Math.min(1, Math.max(0, snowCover));
+  }
+
   /** 0 (day) .. 1 (night) — mixes the structure toward the same tint as the body. */
   setNightFactor(nightFactor: number): void {
-    this.nightFactorUniform.value = Math.min(1, Math.max(0, nightFactor));
+    this.setEnvironment(nightFactor, 0);
   }
 
   nightFactor(): number {

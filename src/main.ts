@@ -90,6 +90,8 @@ import { ROUNDABOUT_CODE } from './shared/roundabout';
 import { createRenderer, createWorldScene, timeOfDayColors } from './render/scene';
 import { createBloomPipeline, type BloomPipeline } from './render/bloom';
 import { CloudLayer } from './render/clouds';
+import { WeatherManager, type WeatherType } from './render/weather';
+import { PrecipitationRenderer } from './render/precipitation';
 import { TerrainRenderer } from './render/terrain';
 import { WaterRenderer } from './render/water';
 import { TreeRenderer } from './render/trees';
@@ -325,6 +327,8 @@ async function startGame(session: Extract<AppSession, { screen: 'playing' }>): P
   // Animated water surface and cumulus layer; both tick in the frame loop below.
   const water = new WaterRenderer(world.scene, heightAt, map.size, initialTerrainQuality);
   const clouds = new CloudLayer(world.scene);
+  const weather = new WeatherManager(seed);
+  const precipitation = new PrecipitationRenderer(world.scene);
 
   const trees = new TreeRenderer(world.scene, heightAt);
   trees.build(map, seed);
@@ -581,7 +585,7 @@ async function startGame(session: Extract<AppSession, { screen: 'playing' }>): P
     45,
     Math.max(1, initialRect.width) / Math.max(1, initialRect.height),
     2,
-    MAP_SIZE * TILE_METERS * 4,
+    MAP_SIZE * TILE_METERS * 7,
   );
   handle.onResize((w, h) => {
     camera.aspect = w / Math.max(1, h);
@@ -720,6 +724,10 @@ async function startGame(session: Extract<AppSession, { screen: 'playing' }>): P
       setOverlay: (overlay: LensId | null): void => {
         useCityStore.getState().setOverlay(overlay);
       },
+      setWeather: (w: WeatherType, immediate?: boolean): void => {
+        weather.setWeather(w, immediate);
+      },
+      getWeather: () => weather.getAtmosphere(),
       // Deterministic tile-addressed dispatch + grid reader for the visual
       // harness: places roads/buildings/zones by exact tile (no screen
       // picking), and reads back the client grid to pick buildable tiles.
@@ -1355,10 +1363,10 @@ async function startGame(session: Extract<AppSession, { screen: 'playing' }>): P
     e.preventDefault();
     if (music.addFiles(Array.from(files)) > 0) audio.play('notify');
   });
-  /** The dedicated renderers show only when their lens/tool is live. */
+  /** The dedicated renderers show only when their lens/tool is live; a line's vehicles are always drawn, its ribbon is the lens's. */
   const refreshEpicVisibility = (): void => {
     const { overlay, selectedTool } = store.getState();
-    transitRenderer.setVisible(overlay === 'transit' || selectedTool.startsWith('transit.'));
+    transitRenderer.setRibbonVisible(overlay === 'transit' || selectedTool.startsWith('transit.'));
     districtsRenderer.setVisible(overlay === 'districts' || selectedTool === 'district.paint');
     // The city goes underground while the player works on the water: a water
     // lens, the pipe tool, or any building of the Water tab in hand. The
@@ -3187,7 +3195,31 @@ async function startGame(session: Extract<AppSession, { screen: 'playing' }>): P
     world.setShadowFocus(rig.state.targetX, rig.state.targetZ);
     terrain.update();
     water.update(dtMs, lastNightFactor);
-    clouds.update(dtMs, lastTick, lastDayT);
+
+    const currentMonth = lastSeasonMonth || tickToDate(lastTick).month;
+    weather.update(dtMs, lastTick, currentMonth);
+    const atmo = weather.getAtmosphere();
+    world.setWeatherAtmosphere(atmo);
+    clouds.update(dtMs, lastTick, lastDayT, atmo.cloudCoverageBonus, atmo.cloudDarkness);
+    if (useCityStore.getState().weather !== atmo.currentWeather) {
+      useCityStore.getState().setWeather(atmo.currentWeather);
+    }
+
+    // Surface environment: puddle sheen, wet asphalt darkening, snow accumulation, and seasonal ground tones
+    terrain.setEnvironment(lastNightFactor, atmo.wetness, atmo.snowCover, currentMonth);
+    roadsMesh.setEnvironment(lastNightFactor, atmo.wetness, atmo.snowCover);
+    freeRoads.setEnvironment(lastNightFactor, atmo.wetness, atmo.snowCover);
+    houseRoofs.setEnvironment(lastNightFactor, atmo.snowCover);
+
+    const focusGroundY = heightAt(rig.state.targetX, rig.state.targetZ);
+    precipitation.update(
+      dtMs,
+      rig.state.targetX,
+      focusGroundY,
+      rig.state.targetZ,
+      atmo.rainIntensity,
+      atmo.snowIntensity,
+    );
 
     snapshotAgeMs += dtMs;
     const vehicleAlpha = snapshotAlpha(snapshotAgeMs, snapshotIntervalMs);

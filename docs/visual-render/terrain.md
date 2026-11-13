@@ -53,17 +53,61 @@ edited chunk and the shared edge would show the old height on one side and the
 new one on the other — a crack that shows the water plane straight through the
 ground.
 
-## The map edge
+## The map edge and endless horizon
 
-At the edge of the map, a perimeter skirt wall closes the view from outside:
-for every boundary-chunk edge vertex, a vertical quad strip drops from the
-surface down to a fixed base (−18 m), vertex-coloured as an earth
-cross-section — a thin topsoil band matching the local ground colour, then dirt
-brown, then darker rock at the base. It follows the terrain height, and a
-terraform edit touching an edge row rebuilds just that skirt segment.
+Beyond the 256×256 playable city parcel, the world does not end abruptly in an
+empty void. A continuous 360-degree backdrop landscape extends outward to a
+16,000 m horizon radius (`BACKDROP_REACH_METERS`), providing an expansive 37.1 km
+panoramic view of rolling hills, mountain ridges, and coastal horizons:
 
-Below the waterline the strata read straight through the translucent water,
-closing what would otherwise look like a set of floating layers.
+- **Isotropic 68-ring concentric mesh & non-shearing 8-sector layout**:
+  Sixty-eight concentric radial loops (`BACKDROP_RING_RADII`: 0 m, 10 m, 20 m, 32 m, 46 m,
+  62 m, 80 m, 100 m, 122 m, 146 m, 172 m, 200 m, 230 m, 262 m, 296 m, 332 m, 370 m,
+  410 m, 452 m, 496 m, 542 m, 590 m, 640 m, 692 m, 746 m, 802 m, 860 m, 920 m, 982 m,
+  1,050 m, 1,125 m, 1,205 m, 1,290 m, 1,380 m, 1,475 m, 1,575 m, 1,680 m, 1,790 m,
+  1,910 m, 2,040 m, 2,180 m, 2,330 m, 2,490 m, 2,660 m, 2,840 m, 3,030 m, 3,230 m,
+  3,450 m, 3,690 m, 3,950 m, 4,230 m, 4,530 m, 4,860 m, 5,220 m, 5,610 m, 6,030 m,
+  6,490 m, 6,990 m, 7,540 m, 8,150 m, 8,820 m, 9,560 m, 10,380 m, 11,300 m, 12,340 m,
+  13,520 m, 14,700 m, 16,000 m).
+  Radial steps grow continuously and smoothly from 10 m up close, keeping polygon aspect
+  ratios isotropic ($< 2.5:1$ in visible range) and completely eliminating needle-thin quads.
+- **Natural 2D organic relief (anti-extrusion)**: Ground topography is genuinely 2D organic
+  right from the perimeter: $C^1$ Hermite tangent slope continuity carries across the first
+  20 m to 300 m (`tangentDecay`), while natural 2D rolling hills (±18 m, `rolling + foothills`)
+  emerge smoothly between 20 m (`BACKDROP_RELIEF_START_METERS`) and 350 m (`BACKDROP_RELIEF_FULL_METERS`).
+  This eliminates 1D profile extrusions and longitudinal ridge stretching.
+- **Multiscale Nyquist anti-aliasing (zero texture stretching)**: Rather than sampling micro-noise
+  on distant quads, detail is decomposed into spatial frequency tiers (`backdropDetailLevels`):
+  - Micro-grain (2.8 m sand pebbles, 2.8 m rock crag, 4 m lawn micro) is 100% full detail up close
+    (dist $\le$ 80 m) and smoothly diffuses by 350 m before quad spacing exceeds its Nyquist wavelength.
+  - Mid-frequency features (10 m patches, 18 m rock crags, 24 m dry patches) remain active out to 1,600 m.
+  - Macro-frequency variation (30 m dunes, 96 m grass hues) diffuses between 3,000 m and 8,500 m.
+  Gouraud vertex interpolation across triangles never stretches or streaks towards the horizon.
+- **Deep 3D foliage & 2D woodland clusters (1,600 m)**: Boundary forests continue
+  into a 1,600 m (80 tiles) backdrop tree buffer (`TreeRenderer.planPlacements`).
+  Full edge density is preserved across tiles 0 to 2 (0 m to 40 m), then smoothly blends into
+  isotropic 2D procedural woodlands across tiles 2 to 8 (40 m to 160 m), eliminating longitudinal tree
+  rows and ground shadow stripes. Trees gently taper toward alpine heights out to 1,600 m.
+- **Analytical surface normal stitching**: Chunk boundary vertices and Ring 0 backdrop
+  vertices overwrite their geometric normals with exact central-difference surface
+  normals (`surfaceNormalAt`), guaranteeing bit-for-bit normal equality across the seam.
+  This eliminates all directional lighting creases and shadow boundaries under sunlight.
+- **Procedural macro landscape & ocean extension**: Outside the city, terrain blends
+  smoothly across an 800 m transition band (`BACKDROP_BLEND_METERS`) into deterministic
+  macro simplex hills and ridged mountain peaks. Submerged parcel edges sustain open
+  ocean basins that seamlessly align with the concentric outer water plane (`WaterRenderer.outerMesh`).
+- **Horizon elevation tapering**: At extreme distances (>8,000 m), mountain
+  elevations gently taper toward sea level into smooth coastal plains and ocean,
+  eliminating floating cross-section edges on the distant horizon.
+- **Dynamic climatology & progressive aerial perspective**: The backdrop mesh shares the
+  primary `MeshStandardNodeMaterial`, responding in real time to dynamic weather.
+  Fog color matches the sky horizon color (`skyHorizonColor`) exactly, and fog
+  parameters ramp smoothly over a broad 11 km span (e.g. 3,300 m to 14,300 m in clear
+  weather), creating a soft, progressive aerial haze that dissolves seamlessly into
+  the sky dome with zero hard cutoffs.
+- **Perimeter skirt fallback**: The legacy vertical quad strip skirt (−18 m)
+  remains built as a dormant fallback (`visible = false`), preserving backwards
+  compatibility with edge terraforming rebuild triggers.
 
 ## Materials
 
