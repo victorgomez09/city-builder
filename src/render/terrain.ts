@@ -15,6 +15,7 @@ import { MeshStandardNodeMaterial, type MeshLambertNodeMaterial } from 'three/we
 import { float, mix, uniform, vec3, vertexColor } from 'three/tsl';
 import { createNoise2D, type NoiseFunction2D } from 'simplex-noise';
 import { nightBodyMaterial, nightTintNode } from './nightlook';
+import { createProceduralWorldEvaluator, type ProceduralWorldEvaluator } from '../world/maps';
 import type { MapData, TilePoint } from '../shared/types';
 import {
   CHUNK_TILES,
@@ -688,8 +689,8 @@ export class TerrainRenderer {
   private backdropMesh: THREE.Mesh | null = null;
   private dirtyBackdrop = false;
   private readonly backdropNoise: NoiseFunction2D;
-  private readonly backdropRidgeNoise: NoiseFunction2D;
   private map: MapData | null = null;
+  private worldEvaluator: ProceduralWorldEvaluator | null = null;
   private quality: TerrainQuality = 'high';
   private subdivisionsPerTile = TERRAIN_QUALITY_SUBDIVISIONS.high;
   private readonly dirtyChunks = new Set<number>();
@@ -705,7 +706,6 @@ export class TerrainRenderer {
     this.chunks = new Array<ChunkEntry | null>(CHUNKS_PER_SIDE * CHUNKS_PER_SIDE).fill(null);
     this.skirts = { west: null, east: null, north: null, south: null };
     this.backdropNoise = createNoise2D(mulberry32(0x517cc1b7));
-    this.backdropRidgeNoise = createNoise2D(mulberry32(0x9e3779b9));
 
     // Environmental surface shading: seasonal vegetation tint, wetness darkening + specular sheen,
     // snow accumulation overlay, and night tint.
@@ -798,6 +798,11 @@ export class TerrainRenderer {
 
   build(map: MapData): void {
     this.map = map;
+    if (map.seed !== undefined) {
+      this.worldEvaluator = createProceduralWorldEvaluator(map.seed, map.options, map.size);
+    } else {
+      this.worldEvaluator = null;
+    }
     this.dirtyChunks.clear();
     this.dirtySides.clear();
     this.dirtyBackdrop = false;
@@ -923,43 +928,51 @@ export class TerrainRenderer {
     const dist = Math.hypot(dx, dz);
     if (dist <= 0) return edgeHeight;
 
-    // 1. Water edges: maintain ocean / river mouth basin outward smoothly:
-    if (edgeHeight < SEA_LEVEL) {
-      return Math.min(SEA_LEVEL - 1.5, edgeHeight - Math.min(10, (dist / 1500) * 4));
+    let height: number;
+    if (this.worldEvaluator) {
+      // 1. Natural procedural world continuation: exactly evaluates the continuous world generator
+      // (meandering river channels, valleys, coastlines, mountain ranges) across the landscape:
+      const tileX = x / TILE_METERS;
+      const tileZ = z / TILE_METERS;
+      const rawProceduralH = this.worldEvaluator.heightAt(tileX, tileZ);
+
+      // Boundary stitching: blend out any delta between chunk edge height (e.g. terraforming, road grades)
+      // and untouched procedural terrain across 250m:
+      const edgeTileX = edgeX / TILE_METERS;
+      const edgeTileZ = edgeZ / TILE_METERS;
+      const edgeProceduralH = this.worldEvaluator.heightAt(edgeTileX, edgeTileZ);
+      const seamDelta = edgeHeight - edgeProceduralH;
+      const deltaWeight = 1.0 - quinticStep(0, 250, dist);
+
+      // C1 outward slope continuity across the boundary:
+      const outwardSlope = this.boundaryOutwardSlope(edgeX, edgeZ);
+      const tangentOffset = outwardSlope * dist * (1.0 - quinticStep(10, 180, dist));
+
+      height = rawProceduralH + seamDelta * deltaWeight + tangentOffset;
+    } else {
+      // Fallback for custom raster maps without procedural seed:
+      const outwardSlope = this.boundaryOutwardSlope(edgeX, edgeZ);
+      const tangentDecay = 1.0 - quinticStep(20, 300, dist);
+      const tangentOffset = outwardSlope * dist * tangentDecay;
+
+      const n1 = this.backdropNoise(x * 0.0004, z * 0.0004);
+      const n1Edge = this.backdropNoise(edgeX * 0.0004, edgeZ * 0.0004);
+      const rolling = (n1 - n1Edge) * 18;
+
+      const n2 = this.backdropNoise(x * 0.0009 + 17.3, z * 0.0009 + 31.7);
+      const n2Edge = this.backdropNoise(edgeX * 0.0009 + 17.3, edgeZ * 0.0009 + 31.7);
+      const foothills = (n2 - n2Edge) * 10;
+      const reliefWeight = quinticStep(20, 350, dist);
+
+      if (edgeHeight < SEA_LEVEL) {
+        const wobble = Math.sin(dist * 0.03) * 10;
+        height = Math.min(SEA_LEVEL - 1.5, edgeHeight - Math.min(10, (dist / 1500) * 4) + wobble * 0.2);
+      } else {
+        height = Math.max(SEA_LEVEL + 0.8, edgeHeight + tangentOffset + (rolling + foothills) * reliefWeight);
+      }
     }
 
-    // 2. Outward tangent slope continuity (C1 continuation of the city's ground angle):
-    // Near the parcel (dist <= 20m), tangent continuation is exact; it then gently curves into 2D terrain:
-    const outwardSlope = this.boundaryOutwardSlope(edgeX, edgeZ);
-    const tangentDecay = 1.0 - quinticStep(20, 300, dist);
-    const tangentOffset = outwardSlope * dist * tangentDecay;
-
-    // 3. Multi-octave natural 2D rolling relief (anchored to zero at edgeX, edgeZ):
-    // Relief begins gently right from the boundary (20m to 350m) so ground topography is genuinely 2D organic
-    // rather than an extruded 1D slope, completely eliminating stretching along the radial axis:
-    const n1 = this.backdropNoise(x * 0.0004, z * 0.0004);
-    const n1Edge = this.backdropNoise(edgeX * 0.0004, edgeZ * 0.0004);
-    const rolling = (n1 - n1Edge) * 18;
-
-    const n2 = this.backdropNoise(x * 0.0009 + 17.3, z * 0.0009 + 31.7);
-    const n2Edge = this.backdropNoise(edgeX * 0.0009 + 17.3, edgeZ * 0.0009 + 31.7);
-    const foothills = (n2 - n2Edge) * 10;
-
-    const reliefWeight = quinticStep(
-      BACKDROP_RELIEF_START_METERS,
-      BACKDROP_RELIEF_FULL_METERS,
-      dist,
-    );
-
-    // 4. Distant mountain ridges (only emerge far away on the skyline, dist > 5000m):
-    const mountainWeight = quinticStep(5000, 11000, dist);
-    const r1 = 1.0 - Math.abs(this.backdropRidgeNoise(x * 0.00035 + 53.1, z * 0.00035 + 89.2));
-    const mountains = r1 * r1 * 120 * mountainWeight;
-
-    let height = edgeHeight + tangentOffset + (rolling + foothills) * reliefWeight + mountains;
-    height = Math.max(SEA_LEVEL + 0.8, height);
-
-    // 5. Horizon elevation taper: as distance approaches BACKDROP_REACH_METERS (dist > 8500m),
+    // Horizon elevation taper: as distance approaches BACKDROP_REACH_METERS (dist > 8500m),
     // mountains gently subside into sea-level coastal plains and ocean:
     if (dist > 8500) {
       const taperT = quinticStep(8500, BACKDROP_REACH_METERS, dist);
@@ -1436,11 +1449,16 @@ export class TerrainRenderer {
     // 2D organic woodland density: seam-locked to edgeDensity at dist = 0,
     // seamlessly transitioning across 20m-160m into 2D isotropic procedural woodlands:
     const edgeDensity = this.treeDensityAt(edgeX, edgeZ, map?.trees ?? null, mapSize);
-    const treeNoise = valueNoise2D(wx, wz, 160, 5431);
-    const slopeFactor = quinticStep(10, 4, slope);
-    const altFactor = quinticStep(SEA_LEVEL, SEA_LEVEL + 1.5, h) * quinticStep(75, 45, h);
-    const treeSignal = clamp01((treeNoise - 0.40) * 2.5);
-    const proceduralDensity = Math.round(treeSignal * slopeFactor * altFactor * 190);
+    let proceduralDensity: number;
+    if (this.worldEvaluator) {
+      proceduralDensity = this.worldEvaluator.treeDensityAt(wx / TILE_METERS, wz / TILE_METERS, h);
+    } else {
+      const treeNoise = valueNoise2D(wx, wz, 160, 5431);
+      const slopeFactor = quinticStep(10, 4, slope);
+      const altFactor = quinticStep(SEA_LEVEL, SEA_LEVEL + 1.5, h) * quinticStep(75, 45, h);
+      const treeSignal = clamp01((treeNoise - 0.40) * 2.5);
+      proceduralDensity = Math.round(treeSignal * slopeFactor * altFactor * 190);
+    }
     const blendT = quinticStep(20, 160, dist);
     let treeDensity = Math.round(lerp(edgeDensity, proceduralDensity, blendT));
     if (dist > 2200) {

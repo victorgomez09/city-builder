@@ -22,6 +22,7 @@ import * as THREE from 'three';
 import type { MeshLambertNodeMaterial } from 'three/webgpu';
 import { uniform } from 'three/tsl';
 import { nightBodyMaterial } from './nightlook';
+import { createProceduralWorldEvaluator, type ProceduralWorldEvaluator } from '../world/maps';
 import { MapData, TilePoint } from '../shared/types';
 import { SEA_LEVEL, TILE_METERS } from '../shared/constants';
 import { setInstanceCount } from './groundquad';
@@ -736,6 +737,7 @@ export class TreeRenderer {
   };
   private readonly tileToInstances = new Map<number, TreeInstanceRef[]>();
   private gridSize = 0;
+  private worldEvaluator: ProceduralWorldEvaluator | null = null;
 
   constructor(scene: THREE.Scene, heightAt: (x: number, z: number) => number) {
     this.scene = scene;
@@ -771,6 +773,7 @@ export class TreeRenderer {
     this.removeExistingMeshes();
     this.tileToInstances.clear();
     this.gridSize = map.size;
+    this.worldEvaluator = seed !== undefined ? createProceduralWorldEvaluator(seed, map.options, map.size) : null;
 
     const bySpecies = this.planPlacements(map, seed);
 
@@ -1010,8 +1013,9 @@ export class TreeRenderer {
 
         // Procedural natural woodland clumps across the countryside:
         const naturalNoise = valueNoise2D(x, z, CLUSTER_NOISE_CELL_TILES * 2, seed + 8831);
-        const proceduralDensity =
-          elevation < 70 ? Math.round(clamp01((naturalNoise - 0.40) * 2.5) * 190) : 0;
+        const proceduralDensity = this.worldEvaluator
+          ? this.worldEvaluator.treeDensityAt(x, z, elevation)
+          : (elevation < 70 ? Math.round(clamp01((naturalNoise - 0.40) * 2.5) * 190) : 0);
 
         // Smooth 2D organic transition: 0-2 tiles (0-40m) preserves edge density,
         // 2-8 tiles (40m-160m) blends smoothly into 2D procedural countryside woodlands,

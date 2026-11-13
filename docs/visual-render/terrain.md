@@ -60,6 +60,15 @@ empty void. A continuous 360-degree backdrop landscape extends outward to a
 16,000 m horizon radius (`BACKDROP_REACH_METERS`), providing an expansive 37.1 km
 panoramic view of rolling hills, mountain ridges, and coastal horizons:
 
+- **Continuous procedural world generation & meandering river continuation**:
+  The macro world generation is identical and continuous across the entire map and horizon:
+  `createProceduralWorldEvaluator` exactly evaluates the mathematical terrain formula for any
+  world coordinate $(x, z)$. Valleys, meandering riverbeds, ocean basins, and flanking mountain
+  ranges flow naturally and seamlessly across the boundary:
+  - Meandering rivers bend and twist continuously outside the city parcel instead of projecting
+    as straight canals. Real water (`WaterRenderer.outerMesh`) fills the riverbed between natural banks.
+  - Boundary stitching blends out any local terraforming or road grading deltas across 250 m with
+    quintic Hermite decay, guaranteeing zero seam cracks at Ring 0 and smooth convergence to the wild landscape.
 - **Isotropic 68-ring concentric mesh & non-shearing 8-sector layout**:
   Sixty-eight concentric radial loops (`BACKDROP_RING_RADII`: 0 m, 10 m, 20 m, 32 m, 46 m,
   62 m, 80 m, 100 m, 122 m, 146 m, 172 m, 200 m, 230 m, 262 m, 296 m, 332 m, 370 m,
@@ -71,11 +80,6 @@ panoramic view of rolling hills, mountain ridges, and coastal horizons:
   13,520 m, 14,700 m, 16,000 m).
   Radial steps grow continuously and smoothly from 10 m up close, keeping polygon aspect
   ratios isotropic ($< 2.5:1$ in visible range) and completely eliminating needle-thin quads.
-- **Natural 2D organic relief (anti-extrusion)**: Ground topography is genuinely 2D organic
-  right from the perimeter: $C^1$ Hermite tangent slope continuity carries across the first
-  20 m to 300 m (`tangentDecay`), while natural 2D rolling hills (±18 m, `rolling + foothills`)
-  emerge smoothly between 20 m (`BACKDROP_RELIEF_START_METERS`) and 350 m (`BACKDROP_RELIEF_FULL_METERS`).
-  This eliminates 1D profile extrusions and longitudinal ridge stretching.
 - **Multiscale Nyquist anti-aliasing (zero texture stretching)**: Rather than sampling micro-noise
   on distant quads, detail is decomposed into spatial frequency tiers (`backdropDetailLevels`):
   - Micro-grain (2.8 m sand pebbles, 2.8 m rock crag, 4 m lawn micro) is 100% full detail up close
@@ -83,11 +87,10 @@ panoramic view of rolling hills, mountain ridges, and coastal horizons:
   - Mid-frequency features (10 m patches, 18 m rock crags, 24 m dry patches) remain active out to 1,600 m.
   - Macro-frequency variation (30 m dunes, 96 m grass hues) diffuses between 3,000 m and 8,500 m.
   Gouraud vertex interpolation across triangles never stretches or streaks towards the horizon.
-- **Deep 3D foliage & 2D woodland clusters (1,600 m)**: Boundary forests continue
+- **Deep 3D foliage & procedural woodland clusters (1,600 m)**: Boundary forests continue
   into a 1,600 m (80 tiles) backdrop tree buffer (`TreeRenderer.planPlacements`).
-  Full edge density is preserved across tiles 0 to 2 (0 m to 40 m), then smoothly blends into
-  isotropic 2D procedural woodlands across tiles 2 to 8 (40 m to 160 m), eliminating longitudinal tree
-  rows and ground shadow stripes. Trees gently taper toward alpine heights out to 1,600 m.
+  Foliage follows the continuous procedural tree evaluator across the countryside, preserving
+  edge density near the boundary and forming natural 2D groves along riverbanks and slopes.
 - **Analytical surface normal stitching**: Chunk boundary vertices and Ring 0 backdrop
   vertices overwrite their geometric normals with exact central-difference surface
   normals (`surfaceNormalAt`), guaranteeing bit-for-bit normal equality across the seam.

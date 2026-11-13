@@ -147,10 +147,21 @@ const FEATURE_SEED_SALT = 0x85ebca6b;
  * island archipelago, or mountain pass), and vegetation density driven by treeDensity.
  * Spawn is placed on the most-buildable land tile nearest to the map center.
  */
-export function generateProceduralMap(seed: number, name: string, options?: MapOptions): MapData {
-  const size = MAP_SIZE;
-  const n = size * size;
+export interface ProceduralWorldEvaluator {
+  heightAt(tileX: number, tileZ: number): number;
+  treeDensityAt(tileX: number, tileZ: number, height: number): number;
+}
 
+/**
+ * Continuous deterministic procedural world evaluator.
+ * Evaluates the exact mathematical elevation and tree coverage for ANY tile coordinates (tileX, tileZ),
+ * seamlessly extending valleys, meandering rivers, coastlines, and mountain ranges across the infinite horizon.
+ */
+export function createProceduralWorldEvaluator(
+  seed: number,
+  options?: MapOptions,
+  size = MAP_SIZE,
+): ProceduralWorldEvaluator {
   const relief = options?.relief ?? 0.5;
   const waterLevel = options?.waterLevel ?? 0.4;
   const treeDensity = options?.treeDensity ?? 0.5;
@@ -160,152 +171,143 @@ export function generateProceduralMap(seed: number, name: string, options?: MapO
   const treeNoise = createNoise2D(mulberry32((seed ^ TREE_SEED_SALT) >>> 0));
   const featureNoise = createNoise2D(mulberry32((seed ^ FEATURE_SEED_SALT) >>> 0));
 
+  const maxPeakAltitude = 10 + relief * 500;
+
+  function heightAt(tileX: number, tileZ: number): number {
+    const nx = (tileX / (size - 1)) * 2 - 1;
+    const nz = (tileZ / (size - 1)) * 2 - 1;
+    const distFromCenter = Math.sqrt(nx * nx + nz * nz);
+
+    let baseLandform: number;
+    let mountainMask: number;
+
+    switch (archetype) {
+      case 'coastal': {
+        baseLandform = (nx + 0.05) * 12 - (waterLevel - 0.4) * 14;
+        mountainMask = Math.max(0, (nx - 0.2) * 1.5);
+        break;
+      }
+
+      case 'island': {
+        const radial = 0.65 - distFromCenter;
+        baseLandform = radial * 18 - (waterLevel - 0.4) * 16;
+        mountainMask = Math.max(0, (radial - 0.15) * 1.6);
+        break;
+      }
+
+      case 'plains': {
+        baseLandform = 8 - (waterLevel - 0.4) * 16;
+        mountainMask = 0.05;
+        break;
+      }
+
+      case 'mountain': {
+        baseLandform = 10 - (waterLevel - 0.4) * 16;
+        const pass = (featureNoise(tileX * 0.008, tileZ * 0.008) + 1) * 0.5;
+        mountainMask = Math.max(0.3, pass * 1.3);
+        break;
+      }
+
+      case 'custom': {
+        const continent = featureNoise(tileX * 0.008, tileZ * 0.008);
+        baseLandform = continent * 14 - (waterLevel - 0.4) * 16;
+        mountainMask = Math.max(0, (continent - 0.1) * 1.4);
+        break;
+      }
+
+      case 'valley':
+      default: {
+        const flankDist = Math.abs(nx);
+        baseLandform = 8 - (waterLevel - 0.4) * 16;
+        mountainMask = Math.max(0, (flankDist - 0.28) * 1.8);
+
+        // Meandering river flowing through the center of the valley
+        const riverCenter =
+          size / 2 + Math.sin(tileZ * 0.04) * 18 + featureNoise(0, tileZ * 0.02) * 12;
+        const distToRiver = Math.abs(tileX - riverCenter);
+
+        const riverWidth = 8;
+        if (distToRiver < riverWidth) {
+          const t = distToRiver / riverWidth;
+          // Smooth cubic hermite curve (smoothstep): seamless zero-derivative blend at bank
+          const trench = 1 - t * t * (3 - 2 * t);
+          baseLandform -= trench * 14;
+        }
+        break;
+      }
+    }
+
+    const rollingNoise =
+      fbm(
+        terrainNoise,
+        tileX * TERRAIN_FREQUENCY,
+        tileZ * TERRAIN_FREQUENCY,
+        TERRAIN_OCTAVES,
+        TERRAIN_LACUNARITY,
+        TERRAIN_GAIN,
+      ) * 10;
+
+    const mFreq1 = 1 / 140;
+    const mFreq2 = 1 / 70;
+    const r1 = 1.0 - Math.abs(terrainNoise(tileX * mFreq1, tileZ * mFreq1));
+    const r2 = 1.0 - Math.abs(terrainNoise((tileX + 127) * mFreq2, (tileZ + 311) * mFreq2));
+    const ridgeSample = Math.pow(r1 * 0.7 + r2 * 0.3, 1.4);
+    const mountainAltitude = ridgeSample * maxPeakAltitude * mountainMask;
+
+    return baseLandform + rollingNoise + mountainAltitude;
+  }
+
+  function treeDensityAt(tileX: number, tileZ: number, h: number): number {
+    if (h < SEA_LEVEL) return 0;
+    const t = fbm(
+      treeNoise,
+      tileX * TREE_FREQUENCY,
+      tileZ * TREE_FREQUENCY,
+      TREE_OCTAVES,
+      TREE_LACUNARITY,
+      TREE_GAIN,
+    );
+    const baseTree = (t + 1) / 2;
+
+    const treeLineStart = Math.min(220, maxPeakAltitude * 0.5);
+    let biomeFactor = 1.0;
+    if (h < 1.5) {
+      biomeFactor = 0.15;
+    } else if (h > treeLineStart) {
+      biomeFactor = Math.max(0, 1 - (h - treeLineStart) / 60);
+    }
+
+    const finalTree = baseTree * biomeFactor * (treeDensity * 1.6);
+    return clamp(Math.round(finalTree * 255), 0, 255);
+  }
+
+  return { heightAt, treeDensityAt };
+}
+
+export function generateProceduralMap(seed: number, name: string, options?: MapOptions): MapData {
+  const size = MAP_SIZE;
+  const n = size * size;
+
+  const evaluator = createProceduralWorldEvaluator(seed, options, size);
+
   const height = new Float32Array(n);
   const water = new Uint8Array(n);
   const trees = new Uint8Array(n);
 
-  // Peak mountain height scales with relief:
-  // low relief (0.1) -> 12m hills (very flat, buildable everywhere)
-  // high relief (0.85) -> 85m-100m towering alpine mountain ranges
-  const maxPeakAltitude = 10 + relief * 500;
-
   for (let z = 0; z < size; z++) {
     for (let x = 0; x < size; x++) {
       const i = z * size + x;
-
-      // Normalized coordinates from -1 to 1 centered on the map
-      const nx = (x / (size - 1)) * 2 - 1;
-      const nz = (z / (size - 1)) * 2 - 1;
-      const distFromCenter = Math.sqrt(nx * nx + nz * nz);
-
-      let baseLandform: number;
-      let mountainMask: number;
-
-      switch (archetype) {
-        case 'coastal': {
-          // West (nx < -0.1) is ocean; center is coastal plain; east has mountains
-          baseLandform = (nx + 0.05) * 12 - (waterLevel - 0.4) * 14;
-          mountainMask = Math.max(0, (nx - 0.2) * 1.5);
-          break;
-        }
-
-        case 'island': {
-          // Perimeter is ocean; center rises into islands with central peaks
-          const radial = 0.65 - distFromCenter;
-          baseLandform = radial * 18 - (waterLevel - 0.4) * 16;
-          mountainMask = Math.max(0, (radial - 0.15) * 1.6);
-          break;
-        }
-
-        case 'plains': {
-          // Broad, elevated buildable landmass with minimal mountain influence
-          baseLandform = 8 - (waterLevel - 0.4) * 16;
-          mountainMask = 0.05;
-          break;
-        }
-
-        case 'mountain': {
-          // Alpine highland basin: widespread mountain ridges and passes
-          baseLandform = 10 - (waterLevel - 0.4) * 16;
-          const pass = (featureNoise(x * 0.008, z * 0.008) + 1) * 0.5;
-          mountainMask = Math.max(0.3, pass * 1.3);
-          break;
-        }
-
-        case 'custom': {
-          // Freeform terrain: continent contours driven by feature noise + sliders
-          const continent = featureNoise(x * 0.008, z * 0.008);
-          baseLandform = continent * 14 - (waterLevel - 0.4) * 16;
-          mountainMask = Math.max(0, (continent - 0.1) * 1.4);
-          break;
-        }
-
-        case 'valley':
-        default: {
-          // Flat central valley along Z, flanked by mountains along X
-          const flankDist = Math.abs(nx);
-          baseLandform = 8 - (waterLevel - 0.4) * 16;
-          // Mountains rise on the flanks outside the central valley corridor
-          mountainMask = Math.max(0, (flankDist - 0.28) * 1.8);
-
-          // Meandering river flowing through the center of the valley
-          const riverCenter =
-            size / 2 + Math.sin(z * 0.04) * 18 + featureNoise(0, z * 0.02) * 12;
-          const distToRiver = Math.abs(x - riverCenter);
-
-          const riverWidth = 8;
-          if (distToRiver < riverWidth) {
-            const t = distToRiver / riverWidth;
-            // Smooth cubic hermite curve (smoothstep): seamless zero-derivative blend at bank
-            const trench = 1 - t * t * (3 - 2 * t);
-            baseLandform -= trench * 14;
-          }
-          break;
-        }
-      }
-
-      // 1. Lowland rolling hills (gentle 0..10m slopes for city building & fluid coasts):
-      const rollingNoise =
-        fbm(
-          terrainNoise,
-          x * TERRAIN_FREQUENCY,
-          z * TERRAIN_FREQUENCY,
-          TERRAIN_OCTAVES,
-          TERRAIN_LACUNARITY,
-          TERRAIN_GAIN,
-        ) * 10;
-
-      // 2. Sharp alpine mountain ridges (ridged multifractal 1.0 - abs(noise)):
-      const mFreq1 = 1 / 140;
-      const mFreq2 = 1 / 70;
-      const r1 = 1.0 - Math.abs(terrainNoise(x * mFreq1, z * mFreq1));
-      const r2 = 1.0 - Math.abs(terrainNoise((x + 127) * mFreq2, (z + 311) * mFreq2));
-      const ridgeSample = Math.pow(r1 * 0.7 + r2 * 0.3, 1.4);
-
-      // Mountain altitude contribution (only in highland regions where mountainMask > 0):
-      const mountainAltitude = ridgeSample * maxPeakAltitude * mountainMask;
-
-      // Combine base landform, rolling lowlands, and mountain peaks
-      const h = baseLandform + rollingNoise + mountainAltitude;
-
+      const h = evaluator.heightAt(x, z);
       height[i] = h;
-
       const isWater = h < SEA_LEVEL;
       water[i] = isWater ? 1 : 0;
-
-      if (isWater) {
-        trees[i] = 0;
-      } else {
-        const t = fbm(
-          treeNoise,
-          x * TREE_FREQUENCY,
-          z * TREE_FREQUENCY,
-          TREE_OCTAVES,
-          TREE_LACUNARITY,
-          TREE_GAIN,
-        );
-        const baseTree = (t + 1) / 2;
-
-        // Biome elevation attenuation:
-        // - Shoreline/sand beaches have sparse trees
-        // - Alpine tree line scales naturally with peak mountain height
-        const treeLineStart = Math.min(220, maxPeakAltitude * 0.5);
-        let biomeFactor = 1.0;
-        if (h < 1.5) {
-          biomeFactor = 0.15;
-        } else if (h > treeLineStart) {
-          biomeFactor = Math.max(0, 1 - (h - treeLineStart) / 60);
-        }
-
-        const finalTree = baseTree * biomeFactor * (treeDensity * 1.6);
-        trees[i] = clamp(Math.round(finalTree * 255), 0, 255);
-      }
+      trees[i] = isWater ? 0 : evaluator.treeDensityAt(x, z, h);
     }
   }
 
   const spawn = findSpawn(size, height, water);
 
-  return { name, size, height, water, trees, seaLevel: SEA_LEVEL, spawn };
+  return { name, size, height, water, trees, seaLevel: SEA_LEVEL, spawn, seed, options };
 }
 
 // ---------------------------------------------------------------------------

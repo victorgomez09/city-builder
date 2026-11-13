@@ -507,6 +507,8 @@ export interface MapData {
   trees: Uint8Array; // 0..255 density
   seaLevel: number; // meters (heights are absolute; water derived already)
   spawn: TilePoint; // initial camera target
+  seed?: number;
+  options?: MapOptions;
 }
 
 // ---------------------------------------------------------------------------
