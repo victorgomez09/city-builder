@@ -13,6 +13,7 @@ import { StarField } from './stars';
 import { SkyDome, SunBillboard } from './sky';
 import { sunDirection } from './sun';
 import type { WeatherAtmosphere } from './weather';
+import type { AntiAliasingMode, AnisotropicFiltering, ResolutionScale, ShadowQuality } from '../app/session';
 
 // ---------------------------------------------------------------------------
 // Renderer bootstrap
@@ -23,6 +24,54 @@ export interface RendererHandle {
   start(frame: (dtMs: number) => void): void;
   stop(): void;
   onResize(cb: (w: number, h: number) => void): void;
+  setRenderScale(scale: ResolutionScale, aa: AntiAliasingMode): void;
+  setAnisotropy(level: AnisotropicFiltering, scene: THREE.Scene): void;
+}
+
+/**
+ * Calculates effective pixel ratio for WebGPURenderer based on display container size,
+ * selected resolution scale target, and anti-aliasing supersampling mode.
+ */
+export function computeEffectivePixelRatio(
+  scale: ResolutionScale,
+  aa: AntiAliasingMode,
+  containerW: number,
+  containerH: number,
+  devicePixelRatio = (typeof window !== 'undefined' ? window.devicePixelRatio : 1) || 1,
+): number {
+  if (aa === 'ssaa4k' || scale === '4k') {
+    // 4K SSAA supersampling: renders at full 4K UHD (3840×2160) internal resolution downsampled
+    const targetW = 3840;
+    const targetH = 2160;
+    const widthRatio = targetW / Math.max(1, containerW);
+    const heightRatio = targetH / Math.max(1, containerH);
+    const ssaaRatio = Math.max(2.0, Math.min(widthRatio, heightRatio));
+    return Math.min(ssaaRatio, 3.0);
+  }
+
+  if (scale === '1440p') {
+    const targetH = 1440;
+    const ratio = targetH / Math.max(1, containerH);
+    return Math.max(0.75, Math.min(ratio, 2.5));
+  }
+
+  if (scale === '1080p') {
+    const targetH = 1080;
+    const ratio = targetH / Math.max(1, containerH);
+    return Math.max(0.5, Math.min(ratio, 2.0));
+  }
+
+  // 'native'
+  if (aa === 'off') {
+    return 1.0;
+  }
+  if (aa === 'msaa2x') {
+    return Math.min(devicePixelRatio, 1.5);
+  }
+  if (aa === 'msaa8x') {
+    return Math.min(Math.max(devicePixelRatio, 2.0), 2.5);
+  }
+  return Math.min(devicePixelRatio, 2.0);
 }
 
 /**
@@ -44,8 +93,15 @@ export async function createRenderer(container: HTMLElement): Promise<RendererHa
 
   const resizeCallbacks: Array<(w: number, h: number) => void> = [];
 
+  let currentScale: ResolutionScale = 'native';
+  let currentAA: AntiAliasingMode = 'msaa4x';
+  let lastWidth = 1;
+  let lastHeight = 1;
+
   const applySize = (width: number, height: number): void => {
-    const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+    lastWidth = width;
+    lastHeight = height;
+    const pixelRatio = computeEffectivePixelRatio(currentScale, currentAA, width, height);
     renderer.setPixelRatio(pixelRatio);
     renderer.setSize(width, height, false);
     for (const cb of resizeCallbacks) cb(width, height);
@@ -87,6 +143,24 @@ export async function createRenderer(container: HTMLElement): Promise<RendererHa
     },
     onResize(cb: (w: number, h: number) => void): void {
       resizeCallbacks.push(cb);
+    },
+    setRenderScale(scale: ResolutionScale, aa: AntiAliasingMode): void {
+      currentScale = scale;
+      currentAA = aa;
+      applySize(lastWidth, lastHeight);
+    },
+    setAnisotropy(level: AnisotropicFiltering, scene: THREE.Scene): void {
+      const val = parseInt(level, 10) || 1;
+      scene.traverse((obj) => {
+        const mesh = obj as THREE.Mesh;
+        if (mesh && mesh.material) {
+          const mat = mesh.material as THREE.Material & { map?: THREE.Texture };
+          if (mat.map && typeof mat.map === 'object' && 'anisotropy' in mat.map) {
+            mat.map.anisotropy = val;
+            mat.map.needsUpdate = true;
+          }
+        }
+      });
     },
   };
 }
@@ -309,14 +383,16 @@ export function timeOfDayColors(t: number): TimeOfDayColors {
 export interface WorldScene {
   scene: THREE.Scene;
   setTimeOfDay(t: number): void;
-  /** Slews the (limited-span) sun shadow frustum to centre on a world XZ point — the camera target — so shadows stay resolved where the player is looking. */
-  setShadowFocus(x: number, z: number, y?: number): void;
+  /** Slews the sun shadow frustum to centre on world XZ, adapting coverage and resolution to camera zoom. */
+  setShadowFocus(x: number, z: number, y?: number, cameraDistance?: number): void;
   /** Modulates atmospheric fog, sun/ambient lighting, sky and sun disc by dynamic weather. */
   setWeatherAtmosphere(atmo: WeatherAtmosphere): void;
+  /** Configures shadow mapping resolution and filter quality. */
+  setShadowQuality(quality: ShadowQuality, renderer?: WebGPURenderer): void;
 }
 
 /** Builds the lit THREE.Scene: hemisphere ambient, shadow-casting sun, fog, sky background. */
-export function createWorldScene(): WorldScene {
+export function createWorldScene(renderer?: WebGPURenderer): WorldScene {
   const scene = new THREE.Scene();
   const mapMeters = MAP_SIZE * TILE_METERS;
   const mapCenter = new THREE.Vector3(mapMeters / 2, 0, mapMeters / 2);
@@ -339,15 +415,16 @@ export function createWorldScene(): WorldScene {
   // a tree's shadow bridges from its trunk base to the canopy blob instead of
   // reading as a detached floating patch. Distant props fall outside the
   // frustum, which is fine for a top-down RTS.
-  const SHADOW_SPAN_METERS = 360;
+  const DEFAULT_SHADOW_SPAN_METERS = 360;
+  let currentShadowSpan = DEFAULT_SHADOW_SPAN_METERS;
   const sunDistance = 2500;
   const shadowCamera = sun.shadow.camera;
-  shadowCamera.left = -SHADOW_SPAN_METERS;
-  shadowCamera.right = SHADOW_SPAN_METERS;
-  shadowCamera.top = SHADOW_SPAN_METERS;
-  shadowCamera.bottom = -SHADOW_SPAN_METERS;
+  shadowCamera.left = -DEFAULT_SHADOW_SPAN_METERS;
+  shadowCamera.right = DEFAULT_SHADOW_SPAN_METERS;
+  shadowCamera.top = DEFAULT_SHADOW_SPAN_METERS;
+  shadowCamera.bottom = -DEFAULT_SHADOW_SPAN_METERS;
   shadowCamera.near = 50;
-  shadowCamera.far = sunDistance + SHADOW_SPAN_METERS * 2.5;
+  shadowCamera.far = sunDistance + DEFAULT_SHADOW_SPAN_METERS * 2.5;
   shadowCamera.updateProjectionMatrix();
 
   // The point the shadow frustum + sun rig are centred on (world XZ). Defaults
@@ -430,14 +507,99 @@ export function createWorldScene(): WorldScene {
     sun.target.updateMatrixWorld();
   };
 
+  let currentShadowQuality: ShadowQuality = 'high';
+
+  const setShadowQuality = (quality: ShadowQuality, rend?: WebGPURenderer): void => {
+    currentShadowQuality = quality;
+    const r = rend ?? renderer;
+
+    if (quality === 'off') {
+      sun.castShadow = false;
+      if (r) {
+        r.shadowMap.enabled = false;
+      }
+      return;
+    }
+
+    sun.castShadow = true;
+    if (r) {
+      r.shadowMap.enabled = true;
+    }
+
+    let mapSize = 4096;
+    let shadowType: THREE.ShadowMapType = THREE.PCFSoftShadowMap;
+
+    switch (quality) {
+      case 'low':
+        mapSize = 1024;
+        shadowType = THREE.BasicShadowMap;
+        break;
+      case 'medium':
+        mapSize = 2048;
+        shadowType = THREE.PCFShadowMap;
+        break;
+      case 'high':
+        mapSize = 4096;
+        shadowType = THREE.PCFSoftShadowMap;
+        break;
+      case 'ultra':
+        mapSize = 4096;
+        shadowType = THREE.PCFSoftShadowMap;
+        break;
+    }
+
+    if (r) {
+      r.shadowMap.type = shadowType;
+    }
+
+    if (sun.shadow.mapSize.x !== mapSize || sun.shadow.mapSize.y !== mapSize) {
+      sun.shadow.mapSize.set(mapSize, mapSize);
+      if (sun.shadow.map) {
+        sun.shadow.map.dispose();
+        sun.shadow.map = null;
+      }
+    }
+  };
+
   /**
    * Shadow sweep: slew the limited-span shadow frustum so it
-   * tracks the camera target, keeping the shadowed region wherever the player
-   * is looking. Cheap — just repositions the existing sun/target, no allocation.
+   * tracks the camera target, adapting coverage and resolution to camera zoom.
+   * Snaps focus to light-space shadow map texels to prevent sub-pixel edge jittering.
    */
-  const setShadowFocus = (x: number, z: number, y = 0): void => {
-    if (x === shadowFocus.x && y === shadowFocus.y && z === shadowFocus.z) return;
-    shadowFocus.set(x, y, z);
+  const setShadowFocus = (x: number, z: number, y = 0, cameraDistance?: number): void => {
+    let spanChanged = false;
+    if (cameraDistance !== undefined && cameraDistance > 0) {
+      // Zoom-adaptive shadow frustum:
+      // Street level (camera distance 40-150m): span tightens to 120-180m,
+      // delivering sub-decimeter (~3-4 cm/texel) resolution for railings, balconies, cars, and pedestrians.
+      // Vista overview (distance 1000-2400m): span widens up to 750m,
+      // ensuring continuous shadow projection across broad metropolitan views without abrupt cutoffs.
+      const targetSpan = clampRange(120, 750, cameraDistance * 0.35 + 80);
+      if (Math.abs(currentShadowSpan - targetSpan) > 3) {
+        currentShadowSpan = targetSpan;
+        shadowCamera.left = -currentShadowSpan;
+        shadowCamera.right = currentShadowSpan;
+        shadowCamera.top = currentShadowSpan;
+        shadowCamera.bottom = -currentShadowSpan;
+        shadowCamera.far = sunDistance + currentShadowSpan * 2.5;
+        shadowCamera.updateProjectionMatrix();
+
+        const zoomAlpha = (currentShadowSpan - 120) / (750 - 120);
+        const radiusMult = currentShadowQuality === 'ultra' ? 1.4 : currentShadowQuality === 'low' ? 0.7 : 1.0;
+        sun.shadow.radius = lerp(1.2, 2.8, zoomAlpha) * radiusMult;
+        sun.shadow.bias = lerp(0.00004, 0.0001, zoomAlpha);
+        sun.shadow.normalBias = lerp(0.015, 0.04, zoomAlpha);
+        spanChanged = true;
+      }
+    }
+    // Shadow texel snapping: snap focus point to multiples of world texel size
+    // to lock shadow edges to world geometry and eliminate camera-pan shimmering.
+    const shadowRes = sun.shadow.mapSize.x || 4096;
+    const worldTexelSize = (currentShadowSpan * 2) / shadowRes;
+    const snappedX = Math.round(x / worldTexelSize) * worldTexelSize;
+    const snappedZ = Math.round(z / worldTexelSize) * worldTexelSize;
+    if (!spanChanged && snappedX === shadowFocus.x && y === shadowFocus.y && snappedZ === shadowFocus.z) return;
+    shadowFocus.set(snappedX, y, snappedZ);
     placeSun();
   };
 
@@ -507,5 +669,5 @@ export function createWorldScene(): WorldScene {
 
   setTimeOfDay(0.5);
 
-  return { scene, setTimeOfDay, setShadowFocus, setWeatherAtmosphere };
+  return { scene, setTimeOfDay, setShadowFocus, setWeatherAtmosphere, setShadowQuality };
 }

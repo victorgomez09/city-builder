@@ -19,8 +19,8 @@
 | --- | --- | --- | --- |
 | `HEMI_GROUND_BOUNCE` | `[0.725, 0.663, 0.549]` | RGB 0..1 | Studio diorama reference (`#B9A98C`) |
 | `SUN_DAY_KEY` | `[1.0, 0.945, 0.863]` | RGB 0..1 | Studio diorama key light (`#FFF1DC`) |
-| `SHALLOW_WATER_COLOR` | `[0.498, 0.663, 0.788]` | RGB 0..1 | Clean cerulean diorama water (`#7FA9C9`) |
-| `DEEP_WATER_COLOR` | `[0.369, 0.553, 0.702]` | RGB 0..1 | Deep cerulean architectural wash (`#5E8DB3`) |
+| `SHALLOW_WATER_COLOR` | `[0.26, 0.72, 0.76]` | RGB 0..1 | Turquoise coastal shallows (`#42B8C2`) |
+| `DEEP_WATER_COLOR` | `[0.08, 0.28, 0.52]` | RGB 0..1 | Deep navy ocean trench (`#144785`) |
 | `TOWER_CRANE_JIB_L` | 16.0 | metres | Standard construction crane boom |
 | `PENTHOUSE_SIZE` | 3.5, 2.8, 2.4 | metres | Elevator & stair bulkhead (w, d, h) |
 | `CONCRETE_PANEL_W_H` | 1.5, 1.0 | metres | Precast facade panel standard |

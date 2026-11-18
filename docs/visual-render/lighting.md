@@ -33,7 +33,7 @@ The window grid described in [../art/buildings/README.md](../art/buildings/READM
 per-archetype procedural emissive on the same instanced material used for
 its day-side glass tint. A hash of the building id and window index decides
 each window's lit threshold, so roughly 40–70% of a building's windows are
-lit at once, warm `#ffd9a0` with the occasional cool `#cfe4ff`. Windows
+lit at once: warm tungsten `#ffe2a8` for residential, cool daylight LED `#cfe4ff` for office towers, and golden amber `#ffbe6b` for storefronts `[R-render-040]`. Windows
 switch on progressively across dusk — the lit threshold sweeps with the
 night factor rather than popping all at once, so the whole city "wakes up"
 over roughly 20 seconds. A lit pane keeps its colour: `WINDOW_EMISSIVE_STRENGTH`
@@ -164,10 +164,7 @@ clock, runs the lamps: full on from 19:30 through 06:00, ramping up from
 sunset (18:00 → 19:30), and fading out over the hour after sunrise to fully
 off at 07:00 — then off through the day.
 
-Cosmetic vehicles carry their own, much simpler night lights — warm
-headlight-emissive quads at the front and red taillights at the rear,
-switched on by the same night-factor threshold (see
-[../art/props-and-vehicles.md](../art/props-and-vehicles/README.md) for the vehicle kit itself).
+Moving vehicles carry night lighting: warm headlight quads and red taillights, plus an instanced additive road-light mesh projecting a 15 m headlight beam forward down the lane and a red braking halo behind the rear bumper ([../art/props-and-vehicles.md](../art/props-and-vehicles/README.md), `[R-render-040]`).
 
 ## Clock and morning boot
 
@@ -230,6 +227,12 @@ Three layers sit on top of the day/night ramp above:
 
 Soft cloud-shadow blobs drifting with the clouds are designed for but not
 built; [../DESIGN.md](../DESIGN.md) owns that backlog.
+
+## Zoom-adaptive directional shadows and atmospheric scattering
+
+A single directional shadow frustum is dynamically refocused on the camera target each frame (`setShadowFocus` in `src/render/scene.ts`). Rather than fixing a single frustum span, the span scales adaptively with camera distance: tightening to ~120–180 m at street-level zoom to provide crisp ~3 cm/texel shadow fidelity for posts, vehicles, balconies, and pedestrians, and widening up to ~750 m on high-altitude overviews so that shadows do not truncate across city horizons. Contact shadow bias and PCF filter radius scale proportionally with span (`[R-render-038]`).
+
+The sky dome vertex shader couples a vertical Rayleigh power curve with solar Mie forward scattering (a solar aureole oriented along the sun vector) and twilight horizon warming along the sun's azimuth angle (`src/render/sky.ts`), avoiding expensive volumetric passes while reproducing natural dawn and golden-hour horizon coloration.
 
 ## An honest approximation, not a limitation
 

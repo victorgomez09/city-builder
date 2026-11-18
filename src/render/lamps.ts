@@ -167,10 +167,10 @@ const LENS_DROP = HOUSING_CAP_HEIGHT + HOUSING_COWL_HEIGHT;
  */
 const POOL_RADIUS = 4.5;
 const POOL_ALONG_SCALE = 4.5; // down the roadway — ~40 m of road per lamp, 60 m apart on alternate kerbs
-const POOL_ACROSS_SCALE = 1; // across it — the carriageway plus a little verge
+const POOL_ACROSS_SCALE = 1.35; // across it — spans carriageway and bathes the pedestrian sidewalk
 const POOL_SEGMENTS = 24;
 const POOL_Y_OFFSET = ROAD_Y_OFFSET + 0.06; // clears the raised road surface
-const POOL_MAX_OPACITY = 0.55;
+const POOL_MAX_OPACITY = 0.6;
 /** Sodium-warm: road light is warmer and deeper than the fixture's own body. */
 const POOL_COLOR = 0xffc27a;
 /**
@@ -180,10 +180,10 @@ const POOL_COLOR = 0xffc27a;
  * the radius reads as light falling on a surface.
  */
 const POOL_RINGS: ReadonlyArray<readonly [number, number]> = [
-  [0.12, 0.72],
-  [0.3, 0.4],
-  [0.55, 0.18],
-  [0.78, 0.06],
+  [0.12, 0.76],
+  [0.28, 0.5],
+  [0.5, 0.28],
+  [0.74, 0.1],
   [1, 0],
 ];
 
@@ -193,8 +193,8 @@ const POOL_RINGS: ReadonlyArray<readonly [number, number]> = [
  * the lens goes far hotter because it is a handful of pixels and needs to clear
  * the bloom threshold by a wide margin to smear into a halo.
  */
-const HOUSING_EMISSIVE_STRENGTH = 3.2;
-const LENS_EMISSIVE_STRENGTH = 14;
+const HOUSING_EMISSIVE_STRENGTH = 3.6;
+const LENS_EMISSIVE_STRENGTH = 16;
 
 /**
  * Lamp schedule, in clock hours (hour = dayT × 24, matching ui/format.ts's

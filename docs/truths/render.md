@@ -235,4 +235,28 @@ Back to [the index](../GROUND-TRUTHS.md).
   grew at 4×; its longest stall is now 1.1 s. —
   [performance-budget.md](../engineering/performance-budget.md#the-main-thread-while-a-city-grows);
   `onSnapshot` in `src/main.ts`
+- [R-render-038] Directional shadow camera bounds dynamically adapt their span to camera distance (tightening at close zoom to resolve sub-decimeter architectural details and widening at overview to prevent shadow clipping), while sky dome vertex scattering couples vertical Rayleigh gradients with solar Mie forward glow and twilight horizon warming. —
+  [lighting.md](../visual-render/lighting.md);
+  `src/render/scene.ts`, `src/render/sky.ts`
+- [R-render-039] Water depth attenuation transitions from turquoise coastal shallows to deep navy with dynamic shoreline foam pulsing against terrain contours, while precipitation modulates surface roughness and wetness specular reflectivity across roads, roofs and terrain. —
+  [water.md](../visual-render/water.md), [vfx.md](../visual-render/vfx.md);
+  `src/render/water.ts`, `src/render/roadsmesh.ts`, `src/render/freeroadmesh.ts`, `src/render/weather.ts`
+- [R-render-040] Moving vehicles project additive forward headlight cones and rear red taillight halos onto road pavement at night, while building window emissive tones vary by archetype (warm tungsten for residential, cool daylight LED for commercial towers, and golden amber for ground-floor storefronts). —
+  [lighting.md](../visual-render/lighting.md);
+  `src/render/vehicles.ts`, `src/render/buildings.ts`, `src/render/lamps.ts`
+- [R-render-041] Building silhouettes and roof eaves feature beveled chamfer edge geometry to catch sharp specular highlights, while active facade glazing exhibits low specular roughness (0.10) and cubic Fresnel sky reflections. —
+  [materials.md](../visual-render/materials.md);
+  `src/render/beveledbox.ts`, `src/render/buildings.ts`, `src/render/buildingkit.ts`
+- [R-render-042] Terrain material evaluates decoupled PBR roughness and metalness across biomes (smooth crystalline rock at 0.55 roughness, beach sand at 0.75, lush grass at 0.82, snow at 0.88), while procedural TSL micro-normal perturbation and multi-layer geological strata resolve fine rock crags and grass turf under directional sunlight. —
+  [terrain.md](../visual-render/terrain.md), [materials.md](../visual-render/materials.md);
+  `src/render/terrain.ts`
+- [R-render-043] Terrain biome transitions (sand-to-grass coastal dunes, dry-turf knolls, and rock-to-meadow margins) bridge biomes through warm saturated golden-green dune grass (marram turf) and macro-scale organic curvature (wavelength >= 32 m), strictly avoiding small-cell value noise (< 16 m) or shader standing-wave interference that creates square grid or voxel artifacts. —
+  [terrain.md](../visual-render/terrain.md);
+  `src/render/terrain.ts`
+- [R-render-044] Graphics settings (preset, resolution scale, anti-aliasing, anisotropic filtering, shadows, terrain mesh subdivisions, dynamic clouds, vehicle headlights, precipitation, bloom) are persisted in session storage and immediately reconfigure the WebGPU/Three.js rendering pipeline without page reload. —
+  [rendering-architecture.md](../visual-render/rendering-architecture.md);
+  `src/app/session.ts`, `src/render/scene.ts`, `src/render/terrain.ts`, `src/render/clouds.ts`, `src/render/vehicles.ts`, `src/render/precipitation.ts`
+
+
+
 

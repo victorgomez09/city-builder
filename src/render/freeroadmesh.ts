@@ -994,10 +994,12 @@ export function freeRoadPoleLay(
 
 /** Draws the roads off the grid, rebuilt whole whenever the network or the ground changes. */
 export class FreeRoadRenderer {
-  // Lit like the tile roads so the two shade alike. Kerb faces are drawn
-  // without a winding of their own, so both sides are lit.
-  private readonly material = new THREE.MeshLambertMaterial({
+  // Lit standard PBR material matching grid roads: pavement receives cast shadows and
+  // exhibits realistic surface wetness with specular puddle reflections during rain.
+  private readonly material = new THREE.MeshStandardMaterial({
     vertexColors: true,
+    roughness: 0.82,
+    metalness: 0.05,
     side: THREE.DoubleSide,
   });
   private mesh: THREE.Mesh | null = null;
@@ -1035,11 +1037,13 @@ export class FreeRoadRenderer {
    */
   setEnvironment(nightFactor: number, wetness = 0, snowCover = 0): void {
     const base = roadNightTint(nightFactor);
-    const wetMult = 1.0 - Math.min(1, Math.max(0, wetness)) * 0.22;
+    const clampedWetness = Math.min(1, Math.max(0, wetness));
+    const clampedSnow = Math.min(1, Math.max(0, snowCover));
+    const wetMult = 1.0 - clampedWetness * 0.22;
     const r = base[0] * wetMult;
     const g = base[1] * wetMult;
     const b = base[2] * wetMult;
-    const effectiveSnow = Math.min(1, Math.max(0, snowCover)) * 0.6;
+    const effectiveSnow = clampedSnow * 0.6;
     const snowR = 0.94;
     const snowG = 0.96;
     const snowB = 1.0;
@@ -1048,6 +1052,12 @@ export class FreeRoadRenderer {
       g + (snowG - g) * effectiveSnow,
       b + (snowB - b) * effectiveSnow,
     );
+    // PBR wetness & puddle gloss: asphalt roughness drops from 0.82 to 0.18 during rain.
+    const dryFactor = 1.0 - clampedSnow * 0.85;
+    this.material.roughness = THREE.MathUtils.lerp(0.82, 0.18, clampedWetness * dryFactor);
+    this.material.roughness = THREE.MathUtils.lerp(this.material.roughness, 0.95, clampedSnow * 0.7);
+    this.material.metalness = THREE.MathUtils.lerp(0.05, 0.22, clampedWetness * dryFactor);
+    this.material.metalness = THREE.MathUtils.lerp(this.material.metalness, 0.02, clampedSnow * 0.7);
   }
 
   setNightFactor(nightFactor: number): void {

@@ -6443,10 +6443,14 @@ export class RoadMeshRenderer {
   private readonly scene: THREE.Scene;
   private readonly heightAt: (x: number, z: number) => number;
   private readonly overHeightAt: (wx: number, wz: number, cx: number, cz: number) => number;
-  // Lit (Lambert) so the pavement receives cast shadows from cars, lamps and
-  // buildings and shades with the sun; road faces are flat +Y, so daylight
-  // reads nearly as uniform as the old unlit fill but now grounds its traffic.
-  private readonly material = new THREE.MeshLambertMaterial({ vertexColors: true });
+  // Lit standard PBR material so pavement receives cast shadows and exhibits realistic
+  // surface wetness: dry matte asphalt (roughness 0.82) transitions to mirror-like puddle gloss
+  // (roughness 0.18, metalness 0.22) during rain, reflecting directional sunlight and the sky dome.
+  private readonly material = new THREE.MeshStandardMaterial({
+    vertexColors: true,
+    roughness: 0.82,
+    metalness: 0.05,
+  });
   private readonly chunks = new Map<number, ChunkEntry>();
   /**
    * The same deltas the chunk maps hold, by `z * MAP_SIZE + x`, so a lookup of
@@ -6520,11 +6524,13 @@ export class RoadMeshRenderer {
    */
   setEnvironment(nightFactor: number, wetness = 0, snowCover = 0): void {
     const base = roadNightTint(nightFactor);
-    const wetMult = 1.0 - Math.min(1, Math.max(0, wetness)) * 0.22;
+    const clampedWetness = Math.min(1, Math.max(0, wetness));
+    const clampedSnow = Math.min(1, Math.max(0, snowCover));
+    const wetMult = 1.0 - clampedWetness * 0.22;
     const r = base[0] * wetMult;
     const g = base[1] * wetMult;
     const b = base[2] * wetMult;
-    const effectiveSnow = Math.min(1, Math.max(0, snowCover)) * 0.6;
+    const effectiveSnow = clampedSnow * 0.6;
     const snowR = 0.94;
     const snowG = 0.96;
     const snowB = 1.0;
@@ -6533,6 +6539,13 @@ export class RoadMeshRenderer {
       g + (snowG - g) * effectiveSnow,
       b + (snowB - b) * effectiveSnow,
     );
+    // PBR wetness & puddle gloss: asphalt roughness drops from 0.82 to 0.18 during rain,
+    // catching sky and sun glints. Snow accumulation dampens reflections back to matte.
+    const dryFactor = 1.0 - clampedSnow * 0.85;
+    this.material.roughness = THREE.MathUtils.lerp(0.82, 0.18, clampedWetness * dryFactor);
+    this.material.roughness = THREE.MathUtils.lerp(this.material.roughness, 0.95, clampedSnow * 0.7);
+    this.material.metalness = THREE.MathUtils.lerp(0.05, 0.22, clampedWetness * dryFactor);
+    this.material.metalness = THREE.MathUtils.lerp(this.material.metalness, 0.02, clampedSnow * 0.7);
   }
 
   /**

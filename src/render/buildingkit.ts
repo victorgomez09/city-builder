@@ -23,6 +23,7 @@ import {
   BuildingState,
 } from '../shared/types';
 import { nightBodyMaterial } from './nightlook';
+import { buildBeveledBoxGeometry } from './beveledbox';
 import {
   computeSetbacks,
   frontageSetbackFor,
@@ -4844,9 +4845,9 @@ const _yAxis = new THREE.Vector3(0, 1, 0);
 const _xAxis = new THREE.Vector3(1, 0, 0);
 const _pitch = new THREE.Quaternion();
 
-/** A unit box anchored at its own center, scaled per instance. */
-function unitBox(): THREE.BoxGeometry {
-  return new THREE.BoxGeometry(1, 1, 1);
+/** A unit box anchored at its own center, scaled per instance with chamfered edge bevels for specular gleams. */
+function unitBox(): THREE.BufferGeometry {
+  return buildBeveledBoxGeometry(0.025);
 }
 
 export class BuildingKitRenderer {

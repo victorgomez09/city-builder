@@ -29,7 +29,7 @@ import {
   type Incident,
 } from '../shared/types';
 import { tileToWorld } from '../shared/constants';
-import { laneOffset, lerpVehicle, sizeForKind } from './vehicles';
+import { buildVehicleRoadLightGeometry, laneOffset, lerpVehicle, sizeForKind } from './vehicles';
 import { ROAD_Y_OFFSET } from './roadsmesh';
 
 const SERVICE_KINDS = [
@@ -313,6 +313,8 @@ export class ServiceVehicleRenderer {
 
   private readonly incidentMesh: THREE.InstancedMesh;
   private readonly incidentCapacity: number;
+  private readonly roadLightMesh: THREE.InstancedMesh;
+  private readonly roadLightMaterial: THREE.MeshBasicMaterial;
 
   constructor(
     scene: THREE.Scene,
@@ -344,6 +346,24 @@ export class ServiceVehicleRenderer {
       meshes[kind] = mesh;
     }
     this.meshes = meshes;
+
+    // Additive headlight projection cones & taillight road pools for emergency vehicles
+    const roadLightGeo = buildVehicleRoadLightGeometry();
+    this.roadLightMaterial = new THREE.MeshBasicMaterial({
+      vertexColors: true,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+    });
+    this.roadLightMesh = new THREE.InstancedMesh(roadLightGeo, this.roadLightMaterial, MAX_VEHICLES);
+    this.roadLightMesh.frustumCulled = false;
+    this.roadLightMesh.visible = false;
+    for (let i = 0; i < MAX_VEHICLES; i++) this.roadLightMesh.setMatrixAt(i, HIDDEN_MATRIX);
+    this.roadLightMesh.count = MAX_VEHICLES;
+    this.roadLightMesh.instanceMatrix.needsUpdate = true;
+    scene.add(this.roadLightMesh);
 
     // A plain (uncolored) cone; per-marker color is carried entirely by
     // InstancedMesh.setColorAt/instanceColor below (three.js applies it via
@@ -392,6 +412,7 @@ export class ServiceVehicleRenderer {
 
       if (!isServiceKind(currKind)) {
         for (const kind of SERVICE_KINDS) this.meshFor(kind).setMatrixAt(slot, HIDDEN_MATRIX);
+        this.roadLightMesh.setMatrixAt(slot, HIDDEN_MATRIX);
         continue;
       }
 
@@ -413,6 +434,7 @@ export class ServiceVehicleRenderer {
 
       if (x === INACTIVE_VEHICLE_X) {
         for (const kind of SERVICE_KINDS) this.meshFor(kind).setMatrixAt(slot, HIDDEN_MATRIX);
+        this.roadLightMesh.setMatrixAt(slot, HIDDEN_MATRIX);
         continue;
       }
 
@@ -434,11 +456,21 @@ export class ServiceVehicleRenderer {
         if (meshKind === kind) mesh.setMatrixAt(slot, _matrix);
         else mesh.setMatrixAt(slot, HIDDEN_MATRIX);
       }
+      this.roadLightMesh.setMatrixAt(slot, _matrix);
     }
 
     for (const kind of SERVICE_KINDS) {
       this.meshFor(kind).instanceMatrix.needsUpdate = true;
     }
+    this.roadLightMesh.instanceMatrix.needsUpdate = true;
+  }
+
+  /** Modulates emergency vehicle headlights and taillights by nightFactor. */
+  setNightFactor(nightFactor: number): void {
+    const nf = Math.min(1, Math.max(0, nightFactor));
+    const glow = Math.min(1, Math.max(0, (nf - 0.4) / 0.25));
+    this.roadLightMaterial.opacity = glow * 0.75;
+    this.roadLightMesh.visible = glow > 0;
   }
 
   /** Colors an incident marker pin by kind: fire=red, crime=blue, medical=white-pink. */

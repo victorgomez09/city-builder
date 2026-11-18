@@ -123,3 +123,15 @@ node-graph build or a failed first-frame render permanently falls back to a
 direct scene render, and construction itself is guarded so a throw there can
 never abort boot. See [lighting.md](lighting.md) for its tuning values
 (radius, night-only strength) and why they're kept low.
+
+## Graphics settings and pipeline scaling
+
+Rendering quality scales across presets (`low`, `medium`, `high`, `ultra_4k`, `custom`) through direct GPU pipeline reconfiguration (`[R-render-044]`):
+
+- **Resolution and supersampling**: `setRenderScale` adjusts `renderer.setPixelRatio` based on target display resolution (`native`, `1080p`, `1440p`, `4k`). Selecting 4K or `ssaa4k` enables super-sample antialiasing by allocating a 3840×2160 internal framebuffer downsampled to the display viewport.
+- **Shadow maps**: `setShadowQuality` alters `sun.shadow.mapSize` (`1024` Basic on low, `2048` PCF on medium, `4096` PCF Soft on high/ultra) and dynamically toggles shadow casting passes. Disposing `sun.shadow.map` reallocates GPU shadow targets seamlessly.
+- **Mesh density**: `terrainQuality` modulates subdivision quad counts from 20m quads (low) down to 2.5m UHD quads (ultra) across terrain and water chunk meshes.
+- **Filtering and anti-aliasing**: `setAnisotropy` applies anisotropic filtering (`1x` to `16x`) across material textures. Anti-aliasing supports `off`, `msaa2x`, `msaa4x`, `msaa8x`, and `ssaa4k`.
+- **Atmosphere & environment**: `CloudLayer.setQuality` scales cloud coverage from off to full, `VehicleRenderer.setHeadlightsEnabled` toggles night road lighting, and `PrecipitationRenderer.setEnabled` toggles rain/snow particle simulation.
+
+

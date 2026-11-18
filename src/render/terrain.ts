@@ -12,7 +12,18 @@
 
 import * as THREE from 'three';
 import { MeshStandardNodeMaterial, type MeshLambertNodeMaterial } from 'three/webgpu';
-import { float, mix, uniform, vec3, vertexColor } from 'three/tsl';
+import {
+  float,
+  mix,
+  normalLocal,
+  positionLocal,
+  sin,
+  smoothstep,
+  transformNormalToView,
+  uniform,
+  vec3,
+  vertexColor,
+} from 'three/tsl';
 import { createNoise2D, type NoiseFunction2D } from 'simplex-noise';
 import { nightBodyMaterial, nightTintNode } from './nightlook';
 import { createProceduralWorldEvaluator, type ProceduralWorldEvaluator } from '../world/maps';
@@ -44,15 +55,16 @@ const GRASS_MAX_HEIGHT = 900; // meters at which elevation-driven effects (patch
 const ROCK_BLEND_RANGE = 3; // meters of slope beyond MAX_BUILD_SLOPE to fully saturate to rock
 const TREE_DARKEN_MAX = 0.35; // fraction darkened at full (255) tree density (canopy-shadow read)
 
-const WET_SAND_COLOR: readonly [number, number, number] = [0.65, 0.59, 0.45]; // compacted moist sand near the water line
-const DRY_SAND_COLOR: readonly [number, number, number] = [0.86, 0.81, 0.62]; // warm sun-bleached golden beach sand
-const ROCK_DARK_SLATE: readonly [number, number, number] = [0.28, 0.30, 0.34];
-const ROCK_GRANITE: readonly [number, number, number] = [0.44, 0.43, 0.41];
-const ROCK_LIGHT_STONE: readonly [number, number, number] = [0.56, 0.54, 0.49];
-const SNOW_COLOR: readonly [number, number, number] = [0.93, 0.95, 0.98];
+const WET_SAND_COLOR: readonly [number, number, number] = [0.58, 0.54, 0.44]; // compacted moist sand near the water line
+const DRY_SAND_COLOR: readonly [number, number, number] = [0.84, 0.79, 0.64]; // warm sun-bleached golden beach sand
+const ROCK_DARK_SLATE: readonly [number, number, number] = [0.24, 0.26, 0.29];
+const ROCK_GRANITE: readonly [number, number, number] = [0.42, 0.43, 0.44];
+const ROCK_LIGHT_STONE: readonly [number, number, number] = [0.62, 0.60, 0.54];
+const ROCK_IRON_OXIDE: readonly [number, number, number] = [0.46, 0.38, 0.32];
+const SNOW_COLOR: readonly [number, number, number] = [0.94, 0.96, 0.99];
 
 /** Altitude in meters where alpine snowcaps begin to appear. */
-export const SNOW_MIN_HEIGHT = 1600;
+export const SNOW_MIN_HEIGHT = 850;
 /** Vertical transition range in meters over which snow reaches full coverage. */
 export const SNOW_BLEND_RANGE = 350;
 
@@ -103,16 +115,17 @@ const SEABED_DEEP_COLOR: readonly [number, number, number] = [0.24, 0.38, 0.48];
 const FOAM_COLOR: readonly [number, number, number] = [0.9, 0.93, 0.96]; // shoreline sand/foam highlight
 
 // Ground cover — grass hue variants, dry patches, mown band.
-const GRASS_HUE_FRESH: readonly [number, number, number] = [0.27, 0.53, 0.23];
-const GRASS_HUE_OLIVE: readonly [number, number, number] = [0.36, 0.48, 0.24];
-const GRASS_HUE_YELLOW: readonly [number, number, number] = [0.46, 0.54, 0.25];
-const DRY_PATCH_COLOR: readonly [number, number, number] = [0.48, 0.43, 0.28];
-const MOWN_GREEN_COLOR: readonly [number, number, number] = [0.26, 0.58, 0.26];
+const GRASS_HUE_FRESH: readonly [number, number, number] = [0.23, 0.58, 0.24];
+const GRASS_HUE_OLIVE: readonly [number, number, number] = [0.31, 0.54, 0.23];
+const GRASS_HUE_YELLOW: readonly [number, number, number] = [0.38, 0.53, 0.25];
+/** Sunlit golden dry turf / prairie grass for natural open meadow patches. */
+const DRY_PATCH_COLOR: readonly [number, number, number] = [0.38, 0.50, 0.25];
+const MOWN_GREEN_COLOR: readonly [number, number, number] = [0.22, 0.62, 0.26];
 
 /** Low-frequency cell size (meters/cycle) for the 3-hue grass blend — the "different grass types" read. */
 const GRASS_HUE_CELL_METERS = 96;
-/** Higher-frequency cell size (meters/cycle) for the brown dry-patch splotches. */
-const DRY_PATCH_CELL_METERS = 26;
+/** Broad macro cell size (meters/cycle) for the golden prairie turf variation (zero square artifacts). */
+const DRY_PATCH_CELL_METERS = 64;
 const GRASS_HUE_SEED = 1337;
 const DRY_PATCH_SEED = 9173;
 
@@ -341,18 +354,11 @@ export function treeShadeFactor(treeDensity: number): number {
  */
 export function seabedDepthColor(
   depth: number,
-  worldX: number = 0,
-  worldZ: number = 0,
+  _worldX: number = 0,
+  _worldZ: number = 0,
 ): [number, number, number] {
   const t = fade(clamp01(depth / MAX_WATER_DEPTH_VIS));
-  const base = lerp3(SEABED_SHALLOW_COLOR, SEABED_DEEP_COLOR, t);
-  if (depth < 4) {
-    const ripple = valueNoise2D(worldX, worldZ, 6.0, 7723);
-    const shallowFactor = fade(clamp01(1 - depth / 4));
-    const mod = 1 + (ripple - 0.5) * 0.14 * shallowFactor;
-    return [clamp01(base[0] * mod), clamp01(base[1] * mod), clamp01(base[2] * mod)];
-  }
-  return base;
+  return lerp3(SEABED_SHALLOW_COLOR, SEABED_DEEP_COLOR, t);
 }
 
 /**
@@ -369,35 +375,17 @@ export function shorelineBandWeight(height: number): number {
 
 /**
  * Procedural beach and coastal sand texture:
- * Blends from compacted wet sand at the shoreline to warm sunlit dry sand,
- * with deterministic fine grain and coastal ripple noise.
- * `detail` (0..1) allows seamless distance attenuation of micro-grain to prevent aliasing.
+ * Smoothly blends from compacted moist sand at the water line to warm golden sunlit dry sand.
+ * Clean, silky, and 100% free of square lattice or grid artifacts.
  */
 export function sandColorAt(
-  worldX: number,
-  worldZ: number,
+  _worldX: number,
+  _worldZ: number,
   height: number,
-  detail: number | DetailLevels = 1.0,
+  _detail: number | DetailLevels = 1.0,
 ): [number, number, number] {
-  const micro = typeof detail === 'number' ? detail : detail.micro;
-  const mid = typeof detail === 'number' ? detail : detail.mid;
   const wetT = quinticStep(0, 1.8, height - SEA_LEVEL);
-  const baseSand = lerp3(WET_SAND_COLOR, DRY_SAND_COLOR, wetT);
-
-  // Micro-grain noise (fine sand particles and pebbles)
-  const grainNoise = valueNoise2D(worldX, worldZ, 2.8, 1193);
-  // Coastal ripple noise (wind and tide ripples across dunes)
-  const duneNoise = valueNoise2D(worldX, worldZ, 12, 5231);
-
-  const factor =
-    1.0 +
-    (grainNoise - 0.5) * 0.12 * micro +
-    (duneNoise - 0.5) * 0.08 * (0.35 + 0.65 * mid);
-  return [
-    clamp01(baseSand[0] * factor),
-    clamp01(baseSand[1] * factor),
-    clamp01(baseSand[2] * factor),
-  ];
+  return lerp3(WET_SAND_COLOR, DRY_SAND_COLOR, wetT);
 }
 
 /** 3-hue grass blend (fresh green / olive / yellow-green) from a single low-frequency noise value in [0,1). */
@@ -407,12 +395,9 @@ function grassHueBlend(n: number): [number, number, number] {
 }
 
 /**
- * Dry-patch blend weight (0..1) from the higher-frequency splotch noise,
+ * Dry-patch blend weight (0..1) from higher-frequency value noise,
  * biased patchier where tree density is low (open plains) and at higher
- * elevation, down in lush/low areas. The noise VALUE at a
- * position never depends on treeDensity/height — only how strongly it's
- * allowed to show through does — so patchiness scales smoothly with those
- * inputs rather than snapping across a moving threshold.
+ * elevation, down in lush/low areas. Smoothly graded to eliminate blocky quad steps.
  */
 function dryPatchWeight(patchNoise: number, treeDensity: number, height: number): number {
   const signal = fade(clamp01((patchNoise - 0.55) / 0.45));
@@ -420,17 +405,16 @@ function dryPatchWeight(patchNoise: number, treeDensity: number, height: number)
   const elevT = fade(
     clamp01((height - SEA_LEVEL - SAND_BAND_METERS) / (GRASS_MAX_HEIGHT - SAND_BAND_METERS)),
   );
-  const bias = clamp01(sparseT * 0.6 + elevT * 0.4 + 0.15);
+  const bias = clamp01(sparseT * 0.55 + elevT * 0.35 + 0.10);
   return signal * bias;
 }
 
 /**
  * Ground-cover tint: 3 grass hue variants blended by seeded
- * low-frequency value noise, brown dry-patch splotches from a higher-
- * frequency noise (patchier where trees are sparse / elevation is high), and
- * a uniform "mown" fresh-green override on tiles within 1 of a road. Pure;
- * exported for direct testing and composed into vertexColorFor.
- * `detail` provides continuous multiscale progressive diffusion with distance.
+ * low-frequency value noise, golden dry-patch clearings (patchier where trees
+ * are sparse / elevation is high), and a uniform "mown" fresh-green override
+ * on tiles within 1 of a road. Pure; exported for direct testing and composed into vertexColorFor.
+ * Clean, natural meadow tones with zero grid squares.
  */
 export function groundCoverTint(
   worldX: number,
@@ -440,32 +424,20 @@ export function groundCoverTint(
   nearRoad: boolean,
   detail: number | DetailLevels = 1.0,
 ): [number, number, number] {
-  const micro = typeof detail === 'number' ? detail : detail.micro;
   const mid = typeof detail === 'number' ? detail : detail.mid;
   if (nearRoad) {
-    const lawnMicro = valueNoise2D(worldX, worldZ, 4, 1847);
-    const lawnFactor = 1.0 + (lawnMicro - 0.5) * 0.08 * micro;
-    return [
-      clamp01(MOWN_GREEN_COLOR[0] * lawnFactor),
-      clamp01(MOWN_GREEN_COLOR[1] * lawnFactor),
-      clamp01(MOWN_GREEN_COLOR[2] * lawnFactor),
-    ];
+    return [MOWN_GREEN_COLOR[0], MOWN_GREEN_COLOR[1], MOWN_GREEN_COLOR[2]];
   }
   const hueNoise = valueNoise2D(worldX, worldZ, GRASS_HUE_CELL_METERS, GRASS_HUE_SEED);
   const patchNoise = valueNoise2D(worldX, worldZ, DRY_PATCH_CELL_METERS, DRY_PATCH_SEED);
   const base = grassHueBlend(hueNoise);
-  const patchT = dryPatchWeight(patchNoise, treeDensity, height) * (0.3 + 0.7 * mid);
-  const tinted = lerp3(base, DRY_PATCH_COLOR, patchT);
+  const patchT = dryPatchWeight(patchNoise, treeDensity, height) * (0.35 + 0.65 * mid);
+  const tinted = lerp3(base, DRY_PATCH_COLOR, patchT * 0.45);
 
-  // Subtle organic micro-noise (fine grass blade / soil variation):
-  // At micro = 1.0, provides full definition matching in-parcel terrain.
-  // Smoothly diffuses before quad spacing exceeds Nyquist limit to prevent directional stretching:
-  const bladeNoise = valueNoise2D(worldX, worldZ, 5, 3141);
-  const microFactor = 1.0 + (bladeNoise - 0.5) * 0.14 * micro;
   return [
-    clamp01(tinted[0] * microFactor),
-    clamp01(tinted[1] * microFactor),
-    clamp01(tinted[2] * microFactor),
+    clamp01(tinted[0]),
+    clamp01(tinted[1]),
+    clamp01(tinted[2]),
   ];
 }
 
@@ -491,12 +463,14 @@ export function rockColorAt(
   const blendedMicro = lerp(0.5, microNoise, mid);
   const baseStone = lerp3(ROCK_DARK_SLATE, ROCK_GRANITE, blendedMicro);
   const stratified = lerp3(baseStone, ROCK_LIGHT_STONE, strataBand * 0.45);
+  const ironBand = Math.sin(height * 0.18 + strataNoise * 2.1) * 0.5 + 0.5;
+  const withMinerals = lerp3(stratified, ROCK_IRON_OXIDE, ironBand * 0.22);
 
   const cragFactor = 1.0 + (cragNoise - 0.5) * 0.14 * micro;
   return [
-    clamp01(stratified[0] * cragFactor),
-    clamp01(stratified[1] * cragFactor),
-    clamp01(stratified[2] * cragFactor),
+    clamp01(withMinerals[0] * cragFactor),
+    clamp01(withMinerals[1] * cragFactor),
+    clamp01(withMinerals[2] * cragFactor),
   ];
 }
 
@@ -528,34 +502,44 @@ export function vertexColorFor(
   if (height < SEA_LEVEL) {
     rgb = seabedDepthColor(SEA_LEVEL - height, worldX, worldZ);
   } else {
-    // Multi-frequency organic dune & coastal vegetation shaping:
-    // 1. Broad undulating dune formations (30m wavelength)
-    const broadDune = (valueNoise2D(worldX, worldZ, 30, 6199) - 0.5) * 2.4 * macro;
-    // 2. Finer vegetation tongues and sandy hollows (10m wavelength)
-    const finePatch = (valueNoise2D(worldX, worldZ, 10, 8377) - 0.5) * 1.3 * mid;
-    const coastalNoise = broadDune + finePatch;
+    // Broad, continuous coastal dune shaping (48m wavelength):
+    // Smooth macro curvature eliminates square quad lines and Minecraft stepping:
+    const duneWobble = (valueNoise2D(worldX, worldZ, 48, 6199) - 0.5) * 1.8 * macro;
 
-    // Progressive transition from beach sand to inland ground cover:
-    // Pure sand foreshore near sea level, then a gentle, progressive S-curve blend
-    // across the dune band centered on SAND_BAND_METERS, eliminating hard cut lines.
+    // Smooth progressive transition over coastal dune band:
     const sandT = quinticStep(
-      SEA_LEVEL + 0.6,
-      SEA_LEVEL + SAND_BAND_METERS + 2.0,
-      height + coastalNoise,
+      SEA_LEVEL + 1.0,
+      SEA_LEVEL + SAND_BAND_METERS + 0.8,
+      height + duneWobble,
     );
     const sand = sandColorAt(worldX, worldZ, height, { micro, mid, macro });
     const cover = groundCoverTint(worldX, worldZ, treeDensity, height, nearRoad, { micro, mid, macro });
-    rgb = lerp3(sand, cover, sandT);
+
+    // AAA Color-Graded Biome Transition:
+    // Bridges golden sand into rich meadow through warm sunlit coastal dune grass (marram grass),
+    // eliminating the muddy desaturated khaki midpoint with zero square or blocky artifacts:
+    const COASTAL_MARRAM_COLOR: readonly [number, number, number] = [0.46, 0.62, 0.28];
+    if (sandT <= 0.001) {
+      rgb = sand;
+    } else if (sandT >= 0.999) {
+      rgb = cover;
+    } else if (sandT < 0.5) {
+      const t = sandT / 0.5;
+      rgb = lerp3(sand, COASTAL_MARRAM_COLOR, fade(t));
+    } else {
+      const t = (sandT - 0.5) / 0.5;
+      rgb = lerp3(COASTAL_MARRAM_COLOR, cover, fade(t));
+    }
 
     // Multi-criteria rock blending with smoothstep
-    const rockNoise = (valueNoise2D(worldX, worldZ, 18, 4423) - 0.5) * 1.2 * mid;
+    const rockNoise = (valueNoise2D(worldX, worldZ, 32, 4423) - 0.5) * 1.2 * mid;
     const slopeRock = quinticStep(
       MAX_BUILD_SLOPE - 1.0,
       MAX_BUILD_SLOPE - 1.0 + ROCK_BLEND_RANGE,
       slope + rockNoise * 0.5,
     );
-    // 2. High altitude transition (rock emerges naturally above 550m, dominates above 1400m)
-    const altitudeRock = quinticStep(550, 1400, height + rockNoise * 20);
+    // 2. High altitude transition (rock emerges naturally above 380m, dominates above 850m)
+    const altitudeRock = quinticStep(380, 850, height + rockNoise * 20);
     const rockT = Math.max(slopeRock, altitudeRock * 0.9);
 
     if (rockT > 0) {
@@ -711,31 +695,55 @@ export class TerrainRenderer {
     // snow accumulation overlay, and night tint.
     const vCol = vertexColor();
     const seasonalColor = vCol.mul(this.seasonTintUniform);
-    // Water reduces diffuse scattering, deepening and saturating wet soil/grass/rock
-    const wetDarken = mix(vec3(1, 1, 1), vec3(0.74, 0.74, 0.77), this.wetnessUniform);
+    const wetDarken = mix(vec3(1, 1, 1), vec3(0.72, 0.72, 0.76), this.wetnessUniform);
     const dayGround = seasonalColor.mul(wetDarken);
-    // Snow accumulation overlay
-    const snowGround = mix(dayGround, vec3(0.96, 0.97, 1.0), this.snowCoverUniform);
+
+    const worldPos = positionLocal;
+    const worldNorm = normalLocal;
+    const slope = worldNorm.y; // 1 = flat horizontal, 0 = vertical cliff
+
+    // Continuous smoothstep transitions: zero harsh triangle seams or quad grid boundaries!
+    // Transitions smoothly from flat ground (slope >= 0.82) to rocky cliff (slope <= 0.65):
+    const rockFactor = float(1.0).sub(smoothstep(float(0.65), float(0.82), slope));
+    const beachFactor = float(1.0).sub(smoothstep(float(SEA_LEVEL + 0.8), float(SEA_LEVEL + 2.8), worldPos.y))
+      .mul(float(1.0).sub(rockFactor));
+    const grassFactor = float(1.0).sub(rockFactor).sub(beachFactor);
+
+    // Pilar 1: View-space geometric normal (smooth, continuous normal, zero grid artifacts)
+    const shadingNormalLocal = worldNorm;
+
+    // Pilar 2: Decoupled PBR Physical Roughness & Metalness (smoothly blended)
+    const rockRoughness = float(0.55).sub(this.wetnessUniform.mul(0.35));
+    const rockMetalness = float(0.08).add(this.wetnessUniform.mul(0.16));
+    const grassRoughness = float(0.82).sub(this.wetnessUniform.mul(0.52));
+    const grassMetalness = float(0.02).add(this.wetnessUniform.mul(0.10));
+    const sandRoughness = float(0.75).sub(this.wetnessUniform.mul(0.40));
+    const sandMetalness = float(0.03).add(this.wetnessUniform.mul(0.12));
+    const snowRoughness = float(0.88);
+    const snowMetalness = float(0.01);
+
+    const baseRoughness = grassFactor.mul(grassRoughness)
+      .add(rockFactor.mul(rockRoughness))
+      .add(beachFactor.mul(sandRoughness));
+    const baseMetalness = grassFactor.mul(grassMetalness)
+      .add(rockFactor.mul(rockMetalness))
+      .add(beachFactor.mul(sandMetalness));
+
+    // Pilar 3: Geological cliff strata striations on rock faces (continuous horizontal layers, zero squares)
+    const cliffStrata = sin(worldPos.y.mul(0.85)).mul(0.04).mul(rockFactor);
+    const stratifiedGround = dayGround.add(cliffStrata);
+    const snowGround = mix(stratifiedGround, vec3(0.96, 0.97, 1.0), this.snowCoverUniform);
     const nightTint = nightTintNode(this.nightFactorUniform);
 
     this.material = new MeshStandardNodeMaterial({
       vertexColors: false,
-      roughness: 0.9,
+      roughness: 0.8,
       metalness: 0.05,
     });
     this.material.colorNode = snowGround.mul(nightTint);
-
-    // Wetness drops roughness (puddle sheen / specular shine), snow is soft matte
-    this.material.roughnessNode = mix(
-      float(0.9).sub(this.wetnessUniform.mul(0.45)),
-      float(0.85),
-      this.snowCoverUniform,
-    );
-    this.material.metalnessNode = mix(
-      float(0.05).add(this.wetnessUniform.mul(0.2)),
-      float(0.02),
-      this.snowCoverUniform,
-    );
+    this.material.normalNode = transformNormalToView(shadingNormalLocal);
+    this.material.roughnessNode = mix(baseRoughness, snowRoughness, this.snowCoverUniform);
+    this.material.metalnessNode = mix(baseMetalness, snowMetalness, this.snowCoverUniform);
 
     // Skirt: DoubleSide so the perimeter reads correctly regardless of which
     // way the camera happens to be facing it from.

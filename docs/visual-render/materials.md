@@ -49,3 +49,19 @@ art documents. The DOM overlay has its own separate palette, owned by
 `src/ui/styles.css` and documented in
 [../art/ui-style-guide.md](../art/ui-style-guide.md); the two are deliberately
 independent, since one is lit by a simulated sun and the other is not.
+
+## Architectural bevels and window reflections
+
+To avoid the sharp, computer-generated appearance of harsh 90° box geometry without exploding polygon counts, building bodies and kit parts share chamfered unit geometries ([R-render-041]):
+
+- **Edge beveling**: `buildBeveledBoxGeometry` in `src/render/beveledbox.ts` constructs unit boxes with 45° chamfered edge bevels and corner facets (44 triangles total). Outward-facing chamfer normals catch directional sun glints and sky specular highlights along building silhouettes and roof eaves.
+- **Glass specular roughness & metalness**: Active facade windows modulate PBR material nodes (`isGlazingActive`), dropping roughness to 0.10 (versus 0.85 on matte concrete/masonry walls) and increasing metalness to 0.18 (versus 0.04 on walls).
+- **Cubic Fresnel sky reflections**: Window glazing evaluates view incidence angle via view-transformed normals and camera view direction: grazing viewing angles softly reflect the sky dome horizon tone via a cubic Fresnel curve (`(1 - cosView)^3`), providing high visual fidelity.
+
+## Terrain PBR materials and procedural micro-relief
+
+Terrain rendering employs procedural WebGPU TSL PBR nodes on `MeshStandardNodeMaterial` ([R-render-042]):
+
+- **Procedural surface normal perturbation**: `material.normalNode` applies high-frequency trigonometric normal perturbations in view space (`transformNormalToView(shadingNormalLocal)`), resolving rock cliff fissures and grass turf micro-facets under directional sunlight.
+- **Physical biome roughness & metalness**: Decoupled PBR parameters assign crystalline rock 0.55 roughness (dropping to 0.20 when wet for sharp specular gleams), beach sand 0.75, lush grass 0.82 (dropping to 0.30 in rain puddles), and snow 0.88 matte.
+- **Multi-layer geological strata**: Horizontal sedimentary rock striations on slopes combine dark volcanic slate, mountain granite, limestone, and iron-oxide mineral veins.

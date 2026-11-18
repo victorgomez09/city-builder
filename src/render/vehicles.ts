@@ -548,6 +548,90 @@ function buildLightParts(): THREE.BufferGeometry[] {
 }
 
 /**
+ * Builds the merged additive road-light projection geometry for a vehicle:
+ * - A forward-projecting trapezoidal beam for the headlights, reaching ~15m ahead
+ *   down the vehicle's lane with warm golden-white light tapering to black.
+ * - A rear-trailing soft halo for the taillights, reaching ~3m behind the bumper
+ *   with deep ruby red glow tapering to black.
+ * Both sit in local space with Y = -0.478, mapping to ~0.03m above road level.
+ */
+export function buildVehicleRoadLightGeometry(): THREE.BufferGeometry {
+  const positions: number[] = [];
+  const colors: number[] = [];
+  const indices: number[] = [];
+
+  const y = -0.478;
+
+  // --- Headlight Projection Cone ---
+  const headZFracs = [0.0, 0.22, 0.48, 0.74, 1.0];
+  const headStartVertex = 0;
+  for (let r = 0; r < headZFracs.length; r++) {
+    const f = headZFracs[r]!;
+    const z = 0.48 + f * 3.32;
+    const halfWidth = 0.42 + f * 0.58;
+    const centerIntensity = [1.0, 0.75, 0.46, 0.18, 0.0][r]!;
+    const edgeIntensity = [0.65, 0.45, 0.22, 0.05, 0.0][r]!;
+
+    // Left vertex
+    positions.push(-halfWidth, y, z);
+    colors.push(0.98 * edgeIntensity, 0.94 * edgeIntensity, 0.78 * edgeIntensity);
+
+    // Center vertex
+    positions.push(0, y, z);
+    colors.push(1.0 * centerIntensity, 0.96 * centerIntensity, 0.82 * centerIntensity);
+
+    // Right vertex
+    positions.push(halfWidth, y, z);
+    colors.push(0.98 * edgeIntensity, 0.94 * edgeIntensity, 0.78 * edgeIntensity);
+
+    if (r < headZFracs.length - 1) {
+      const rowBase = headStartVertex + r * 3;
+      const nextBase = headStartVertex + (r + 1) * 3;
+      indices.push(rowBase, nextBase, rowBase + 1);
+      indices.push(rowBase + 1, nextBase, nextBase + 1);
+      indices.push(rowBase + 1, nextBase + 1, rowBase + 2);
+      indices.push(rowBase + 2, nextBase + 1, nextBase + 2);
+    }
+  }
+
+  // --- Taillight Glow ---
+  const tailZFracs = [0.0, 0.45, 1.0];
+  const tailStartVertex = positions.length / 3;
+  for (let r = 0; r < tailZFracs.length; r++) {
+    const f = tailZFracs[r]!;
+    const z = -0.48 - f * 0.77;
+    const halfWidth = 0.42 + f * 0.32;
+    const centerIntensity = [0.85, 0.38, 0.0][r]!;
+    const edgeIntensity = [0.55, 0.18, 0.0][r]!;
+
+    positions.push(-halfWidth, y, z);
+    colors.push(0.92 * edgeIntensity, 0.12 * edgeIntensity, 0.08 * edgeIntensity);
+
+    positions.push(0, y, z);
+    colors.push(0.96 * centerIntensity, 0.15 * centerIntensity, 0.10 * centerIntensity);
+
+    positions.push(halfWidth, y, z);
+    colors.push(0.92 * edgeIntensity, 0.12 * edgeIntensity, 0.08 * edgeIntensity);
+
+    if (r < tailZFracs.length - 1) {
+      const rowBase = tailStartVertex + r * 3;
+      const nextBase = tailStartVertex + (r + 1) * 3;
+      indices.push(rowBase, nextBase, rowBase + 1);
+      indices.push(rowBase + 1, nextBase, nextBase + 1);
+      indices.push(rowBase + 1, nextBase + 1, rowBase + 2);
+      indices.push(rowBase + 2, nextBase + 1, nextBase + 2);
+    }
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+/**
  * Builds the merged multi-part geometry for one vehicle kind: body
  * slab (region=BODY, baked white so instanceColor reproduces the palette
  * color exactly) + darker inset cabin/window mass + wheel cylinders (both
@@ -782,6 +866,8 @@ export class VehicleRenderer {
   private readonly heightAt: (x: number, z: number, heading: number) => number;
   private readonly nightFactorUniform = uniform(0);
   private readonly meshes: THREE.InstancedMesh[] = [];
+  private readonly roadLightMesh: THREE.InstancedMesh;
+  private readonly roadLightMaterial: THREE.MeshBasicMaterial;
   private prevBuffer: Float32Array | null = null;
   private currBuffer: Float32Array | null = null;
   /** Bumped per-slot only on an observed inactive->active transition (palette re-roll). */
@@ -828,6 +914,24 @@ export class VehicleRenderer {
       scene.add(mesh);
       this.meshes[kind] = mesh;
     }
+
+    // Additive headlight projection cones & taillight road pools
+    const roadLightGeo = buildVehicleRoadLightGeometry();
+    this.roadLightMaterial = new THREE.MeshBasicMaterial({
+      vertexColors: true,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+    });
+    this.roadLightMesh = new THREE.InstancedMesh(roadLightGeo, this.roadLightMaterial, MAX_VEHICLES);
+    this.roadLightMesh.frustumCulled = false;
+    this.roadLightMesh.visible = false;
+    for (let i = 0; i < MAX_VEHICLES; i++) this.roadLightMesh.setMatrixAt(i, HIDDEN_MATRIX);
+    this.roadLightMesh.count = MAX_VEHICLES;
+    this.roadLightMesh.instanceMatrix.needsUpdate = true;
+    scene.add(this.roadLightMesh);
   }
 
   private meshFor(kind: number): THREE.InstancedMesh {
@@ -900,6 +1004,7 @@ export class VehicleRenderer {
 
       if (x === INACTIVE_VEHICLE_X) {
         for (const kind of ALL_KINDS) this.meshFor(kind).setMatrixAt(slot, HIDDEN_MATRIX);
+        this.roadLightMesh.setMatrixAt(slot, HIDDEN_MATRIX);
         continue;
       }
 
@@ -939,6 +1044,7 @@ export class VehicleRenderer {
           mesh.setMatrixAt(slot, HIDDEN_MATRIX);
         }
       }
+      this.roadLightMesh.setMatrixAt(slot, _matrix);
     }
 
     for (const kind of ALL_KINDS) {
@@ -946,18 +1052,33 @@ export class VehicleRenderer {
       mesh.instanceMatrix.needsUpdate = true;
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     }
+    this.roadLightMesh.instanceMatrix.needsUpdate = true;
+  }
+
+  private headlightsEnabled = true;
+
+  /** Toggles nighttime vehicle road light projections (headlight cones & taillight road halos). */
+  setHeadlightsEnabled(enabled: boolean): void {
+    this.headlightsEnabled = enabled;
+    if (!enabled) {
+      this.roadLightMesh.visible = false;
+    }
   }
 
   /** Modulates vehicles by nightFactor, wetness (reflective rain sheen), and snowCover. */
   setEnvironment(nightFactor: number, wetness = 0, snowCover = 0): void {
-    this.nightFactorUniform.value = Math.min(1, Math.max(0, nightFactor));
+    const nf = Math.min(1, Math.max(0, nightFactor));
+    this.nightFactorUniform.value = nf;
     VehiclePartMaterial.wetnessUniform.value = Math.min(1, Math.max(0, wetness));
     VehiclePartMaterial.snowCoverUniform.value = Math.min(1, Math.max(0, snowCover));
+    const glow = Math.min(1, Math.max(0, (nf - VEHICLE_NIGHT_LIGHT_THRESHOLD) / 0.25));
+    this.roadLightMaterial.opacity = glow * 0.7;
+    this.roadLightMesh.visible = this.headlightsEnabled && glow > 0;
   }
 
   /** 0 (day, lights off) .. 1 (night, lights on above VEHICLE_NIGHT_LIGHT_THRESHOLD). */
   setNightFactor(nightFactor: number): void {
-    this.nightFactorUniform.value = Math.min(1, Math.max(0, nightFactor));
+    this.setEnvironment(nightFactor, 0, 0);
   }
 
   /** Current nightFactor, for tests/introspection. */

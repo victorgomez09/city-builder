@@ -282,12 +282,16 @@ async function startGame(session: Extract<AppSession, { screen: 'playing' }>): P
 
   // --- renderer, scene, world ------------------------------------------------
   const handle = await createRenderer(viewport);
-  const world = createWorldScene();
+  const world = createWorldScene(handle.renderer);
+
+  const initialSettings = useCityStore.getState().settings;
+  handle.setRenderScale(initialSettings.resolutionScale ?? 'native', initialSettings.antiAliasing ?? 'msaa4x');
+  world.setShadowQuality(initialSettings.shadowQuality ?? 'high', handle.renderer);
 
   const cityName = session.cityName ?? MAP_NAME;
   const map = generateProceduralMap(seed, cityName, session.mapOptions);
 
-  const initialTerrainQuality = useCityStore.getState().settings.terrainQuality ?? 'high';
+  const initialTerrainQuality = initialSettings.terrainQuality ?? 'high';
   const terrain = new TerrainRenderer(world.scene, initialTerrainQuality);
   terrain.build(map);
   const heightAt = (x: number, z: number): number => terrain.heightAt(x, z);
@@ -330,8 +334,10 @@ async function startGame(session: Extract<AppSession, { screen: 'playing' }>): P
   // Animated water surface and cumulus layer; both tick in the frame loop below.
   const water = new WaterRenderer(world.scene, heightAt, map.size, initialTerrainQuality);
   const clouds = new CloudLayer(world.scene);
+  if (initialSettings.clouds) clouds.setQuality(initialSettings.clouds);
   const weather = new WeatherManager(seed);
   const precipitation = new PrecipitationRenderer(world.scene);
+  if (initialSettings.weatherEffects !== undefined) precipitation.setEnabled(initialSettings.weatherEffects);
 
   const trees = new TreeRenderer(world.scene, heightAt);
   trees.build(map, seed);
@@ -401,6 +407,8 @@ async function startGame(session: Extract<AppSession, { screen: 'playing' }>): P
     (wx, wz, heading) =>
       clientGrid.vehicleSurfaceAt(wx, wz, headingAlongX(heading)) ?? heightAt(wx, wz),
   );
+  if (initialSettings.vehicleLights !== undefined) vehicles.setHeadlightsEnabled(initialSettings.vehicleLights);
+  if (initialSettings.anisotropicFiltering) handle.setAnisotropy(initialSettings.anisotropicFiltering, world.scene);
   // Bus transit (stop posts + route ribbon + cosmetic buses), service vehicles
   // (fire/police/ambulance from the shared buffer + incident pins), and the
   // district tint/boundary overlay. All fed from the snapshot channels.
@@ -2866,9 +2874,31 @@ async function startGame(session: Extract<AppSession, { screen: 'playing' }>): P
       if (patch.unlimitedMoney !== undefined) {
         postCommands([{ kind: 'setUnlimitedMoney', on: patch.unlimitedMoney }], true);
       }
+      if (patch.resolutionScale !== undefined || patch.antiAliasing !== undefined) {
+        const current = store.getState().settings;
+        handle.setRenderScale(
+          patch.resolutionScale ?? current.resolutionScale,
+          patch.antiAliasing ?? current.antiAliasing,
+        );
+      }
+      if (patch.shadowQuality !== undefined) {
+        world.setShadowQuality(patch.shadowQuality, handle.renderer);
+      }
       if (patch.terrainQuality !== undefined) {
         terrain.setQuality(patch.terrainQuality);
         water.setQuality(patch.terrainQuality);
+      }
+      if (patch.clouds !== undefined) {
+        clouds.setQuality(patch.clouds);
+      }
+      if (patch.vehicleLights !== undefined) {
+        vehicles.setHeadlightsEnabled(patch.vehicleLights);
+      }
+      if (patch.weatherEffects !== undefined) {
+        precipitation.setEnabled(patch.weatherEffects);
+      }
+      if (patch.anisotropicFiltering !== undefined) {
+        handle.setAnisotropy(patch.anisotropicFiltering, world.scene);
       }
       applyAudioSettings(store.getState().settings);
     },
@@ -3202,14 +3232,13 @@ async function startGame(session: Extract<AppSession, { screen: 'playing' }>): P
     rig.update(dtMs);
     const focusGroundY = heightAt(rig.state.targetX, rig.state.targetZ);
     // Shadow sweep: keep the limited-span sun shadow frustum centred on the
-    // camera target so lamp/prop/pedestrian shadows stay resolved on screen.
-    world.setShadowFocus(rig.state.targetX, rig.state.targetZ, focusGroundY);
+    // camera target, adapting resolution and span dynamically to camera distance.
+    world.setShadowFocus(rig.state.targetX, rig.state.targetZ, focusGroundY, rig.state.distance);
     terrain.update();
-    water.update(dtMs, lastNightFactor);
-
     const currentMonth = lastSeasonMonth || tickToDate(lastTick).month;
     weather.update(dtMs, lastTick, currentMonth);
     const atmo = weather.getAtmosphere();
+    water.update(dtMs, lastNightFactor, atmo.rainIntensity);
     world.setWeatherAtmosphere(atmo);
     clouds.update(dtMs, lastTick, lastDayT, atmo.cloudCoverageBonus, atmo.cloudDarkness);
     if (useCityStore.getState().weather !== atmo.currentWeather) {
@@ -3224,6 +3253,7 @@ async function startGame(session: Extract<AppSession, { screen: 'playing' }>): P
     instancer.setEnvironment(lastNightFactor, atmo.wetness, atmo.snowCover);
     houseRoofs.setEnvironment(lastNightFactor, atmo.wetness, atmo.snowCover);
     vehicles.setEnvironment(lastNightFactor, atmo.wetness, atmo.snowCover);
+    serviceVehicles.setNightFactor(lastNightFactor);
 
     precipitation.update(
       dtMs,

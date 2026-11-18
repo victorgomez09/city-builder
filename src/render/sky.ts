@@ -95,21 +95,52 @@ export class SkyDome {
 
     const position = this.mesh.geometry.getAttribute('position');
     const count = position.count;
+    const sdir = c.sunDirection;
+    const horizLen = Math.hypot(sdir.x, sdir.z) || 1;
+    const sunAzimuthX = sdir.x / horizLen;
+    const sunAzimuthZ = sdir.z / horizLen;
+    // Sunset/sunrise low-sun intensity factor
+    const isSunsetLow = Math.max(0, 0.45 - Math.abs(sdir.y));
+
     for (let i = 0; i < count; i++) {
-      const y = position.getY(i);
-      const radius = Math.hypot(position.getX(i), y, position.getZ(i)) || 1;
-      // 0 at/below the equator (horizon and everything below it), 1 at the
-      // north pole (zenith) — the lower hemisphere is never visible from a
-      // camera above the ground, so painting it uniformly horizon-colored is
-      // a deliberate simplification, not an oversight.
-      const up = clamp01(y / radius);
-      const mix = Math.pow(up, SKY_GRADIENT_EXPONENT);
-      this.colorAttribute.setXYZ(
-        i,
-        horizon[0] + (zenith[0] - horizon[0]) * mix,
-        horizon[1] + (zenith[1] - horizon[1]) * mix,
-        horizon[2] + (zenith[2] - horizon[2]) * mix,
-      );
+      const px = position.getX(i);
+      const py = position.getY(i);
+      const pz = position.getZ(i);
+      const radius = Math.hypot(px, py, pz) || 1;
+      const vx = px / radius;
+      const vy = py / radius;
+      const vz = pz / radius;
+
+      // 0 at/below the equator (horizon and everything below it), 1 at zenith
+      const up = clamp01(vy);
+      // Rayleigh vertical power curve
+      const rayleigh = Math.pow(up, SKY_GRADIENT_EXPONENT);
+
+      let r = horizon[0] + (zenith[0] - horizon[0]) * rayleigh;
+      let g = horizon[1] + (zenith[1] - horizon[1]) * rayleigh;
+      let b = horizon[2] + (zenith[2] - horizon[2]) * rayleigh;
+
+      // Mie forward solar scattering & twilight horizon warming
+      if (c.nightFactor < 0.85) {
+        const sunDot = Math.max(0, vx * sdir.x + vy * sdir.y + vz * sdir.z);
+        const mieLobe = Math.pow(sunDot, 10) * (1 - c.nightFactor * 0.7);
+
+        // Warm solar aureole tone
+        r += c.sunColor[0] * 0.35 * mieLobe;
+        g += c.sunColor[1] * 0.28 * mieLobe;
+        b += c.sunColor[2] * 0.18 * mieLobe;
+
+        // Sunset/sunrise horizon warming along sun azimuth
+        if (isSunsetLow > 0.05 && up < 0.35) {
+          const horizDot = Math.max(0, vx * sunAzimuthX + vz * sunAzimuthZ);
+          const sunsetBand = (1 - up / 0.35) * Math.pow(horizDot, 4) * isSunsetLow * 0.85;
+          r += c.sunColor[0] * 0.5 * sunsetBand;
+          g += c.sunColor[1] * 0.25 * sunsetBand;
+          b += c.sunColor[2] * 0.05 * sunsetBand;
+        }
+      }
+
+      this.colorAttribute.setXYZ(i, clamp01(r), clamp01(g), clamp01(b));
     }
     this.colorAttribute.needsUpdate = true;
   }
@@ -186,7 +217,8 @@ const GLOW_TEXTURE_SIZE = 128;
  * jsdom without the optional `canvas` npm package) — real browsers always
  * have one (same fallback idiom as pin.ts's MapPin).
  */
-function drawDiscCanvas(): HTMLCanvasElement {
+function drawDiscCanvas(): HTMLCanvasElement | null {
+  if (typeof document === 'undefined') return null;
   const size = DISC_TEXTURE_SIZE;
   const canvas = document.createElement('canvas');
   canvas.width = size;
@@ -209,7 +241,8 @@ function drawDiscCanvas(): HTMLCanvasElement {
 }
 
 /** Canvas-drawn soft radial glow texture (full-bleed, gentle falloff), additively blended in the scene. */
-function drawGlowCanvas(): HTMLCanvasElement {
+function drawGlowCanvas(): HTMLCanvasElement | null {
+  if (typeof document === 'undefined') return null;
   const size = GLOW_TEXTURE_SIZE;
   const canvas = document.createElement('canvas');
   canvas.width = size;
@@ -229,10 +262,12 @@ function drawGlowCanvas(): HTMLCanvasElement {
   return canvas;
 }
 
-function buildSpriteMaterial(canvas: HTMLCanvasElement): THREE.SpriteMaterial {
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.needsUpdate = true;
+function buildSpriteMaterial(canvas: HTMLCanvasElement | null): THREE.SpriteMaterial {
+  const texture = canvas ? new THREE.CanvasTexture(canvas) : null;
+  if (texture) {
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.needsUpdate = true;
+  }
   return new THREE.SpriteMaterial({
     map: texture,
     transparent: true,

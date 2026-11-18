@@ -20,6 +20,7 @@ import * as THREE from 'three';
 import { createNoise2D } from 'simplex-noise';
 import { MAP_SIZE, TICKS_PER_DAY, TILE_METERS } from '../shared/constants';
 import { timeOfDayColors } from './scene';
+import type { CloudQuality } from '../app/session';
 
 const clamp01 = (v: number): number => Math.min(1, Math.max(0, v));
 
@@ -294,6 +295,7 @@ export class CloudLayer {
   private driftZ = 0;
   private lastCoverage = 0;
   private lastActiveCount = 0;
+  private quality: CloudQuality = 'high';
 
   constructor(scene: THREE.Scene) {
     const variantCount = PUFF_VARIANT_SEEDS.length;
@@ -326,6 +328,15 @@ export class CloudLayer {
     this.applyFrame(0, 0.5);
   }
 
+  /** Sets cloud layer quality: 'off' disables meshes completely, 'low' reduces density, 'high' full. */
+  setQuality(quality: CloudQuality): void {
+    this.quality = quality;
+    const visible = quality !== 'off';
+    for (const mesh of this.meshes) {
+      mesh.visible = visible;
+    }
+  }
+
   /** Advances the slow uniform drift and repaints the pool for (tick, timeOfDay), modulated by weather. */
   update(
     dtMs: number,
@@ -334,10 +345,14 @@ export class CloudLayer {
     weatherCoverageBonus = 0,
     weatherDarkness = 1,
   ): void {
+    if (this.quality === 'off') {
+      return;
+    }
     const dtSeconds = Math.max(0, dtMs) / 1000;
     this.driftX += Math.cos(WIND_DIRECTION_RADIANS) * WIND_SPEED_MPS * dtSeconds;
     this.driftZ += Math.sin(WIND_DIRECTION_RADIANS) * WIND_SPEED_MPS * dtSeconds;
-    this.applyFrame(tick, timeOfDay, weatherCoverageBonus, weatherDarkness);
+    const bonus = this.quality === 'low' ? weatherCoverageBonus * 0.5 : weatherCoverageBonus;
+    this.applyFrame(tick, timeOfDay, bonus, weatherDarkness);
   }
 
   /** Clouds currently shown (out of poolSize()), from the last update()/construction. */

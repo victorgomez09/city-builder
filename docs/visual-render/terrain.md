@@ -114,10 +114,13 @@ panoramic view of rolling hills, mountain ridges, and coastal horizons:
 
 ## Materials
 
-The terrain carries no textures. The grass, dirt and rock reads are all
-per-vertex colour baked at chunk build time — see
-[vegetation.md](vegetation.md) for the ground-cover variation and
-[shaders.md](shaders.md) for why there is no shader doing this.
+The terrain carries no imported texture maps (`[R-render-006]`). Surface richness is achieved through deterministic per-vertex coloration coupled with procedural WebGPU TSL PBR material nodes (`[R-render-042]`):
+
+- **Procedural TSL Micro-Relief Normals**: `material.normalNode` applies high-frequency procedural perturbations in view space (`transformNormalToView(shadingNormalLocal)`). Steep cliff faces receive horizontal sedimentary ripples and vertical crag fractures; meadows and lawns receive grass blade clumping and turf micro-normals; beaches receive wind-driven sand ripples. Snow accumulation softly dampens surface micro-relief.
+- **Decoupled Biome PBR Physical Response**: `material.roughnessNode` and `material.metalnessNode` dynamically modulate physical properties by biome: exposed crystalline rock at 0.55 roughness (dropping to 0.20 when wet for sharp specular sun glints), beach sand at 0.75, lush grass at 0.82 (dropping to 0.30 in rain puddles), and snow at 0.88 matte.
+- **Multi-Layer Geological Cliff Strata**: Steep slopes (`slope > MAX_BUILD_SLOPE`) project horizontal sedimentary rock striations combining volcanic slate, weathered mountain granite, limestone quartz, and iron-oxide mineral veins.
+- **Vibrant Color-Graded Biome Transitions (`[R-render-043]`)**: Coastal sand-to-grass transitions bridge biomes through warm, sunlit golden-green marram grass (`COASTAL_MARRAM_COLOR: [0.46, 0.62, 0.28]`) and macro-scale organic dune curves (wavelength 48 m), completely eliminating the desaturated muddy olive midpoint. Ground surfaces strictly forbid small-cell value noise (< 16 m) or shader standing-wave interference that creates square grid or Minecraft voxel artifacts.
+- **Nordic/Alpine AAA Palette**: Natural, saturated meadow greens, golden beach sands, dark slate massifs, and crisp alpine snowcaps calibrated for high-fidelity isometric diorama rendering.
 
 The rules governing what the terrain _is_ — height, sea level, terraforming and
 buildability — are simulation, not rendering; see

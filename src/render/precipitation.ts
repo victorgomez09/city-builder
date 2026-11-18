@@ -206,6 +206,17 @@ export class PrecipitationRenderer {
     }
   }
 
+  private enabled = true;
+
+  /** Toggles weather precipitation effects (rain streaks, snowflakes). */
+  setEnabled(enabled: boolean): void {
+    this.enabled = enabled;
+    if (!enabled) {
+      this.rainMesh.visible = false;
+      this.snowMesh.visible = false;
+    }
+  }
+
   /**
    * Updates precipitation positions and opacities centered on the camera focus point.
    * Call every frame in the main animation loop.
@@ -218,6 +229,11 @@ export class PrecipitationRenderer {
     rainIntensity: number,
     snowIntensity: number,
   ): void {
+    if (!this.enabled) {
+      this.rainMesh.visible = false;
+      this.snowMesh.visible = false;
+      return;
+    }
     const dtSeconds = Math.max(0, dtMs) / 1000;
     this.elapsedSeconds += dtSeconds;
 

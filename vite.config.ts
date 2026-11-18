@@ -50,6 +50,7 @@ export default defineConfig(() => ({
   worker: { format: 'es' },
   test: {
     environment: 'node',
+    passWithNoTests: true,
     include: ['src/**/*.test.{ts,tsx}', 'tests/**/*.test.ts'],
     // A handful of tests diffuse or hash full 256² grids. Each runs in well
     // under a second of real CPU, but under full-suite parallel load on the

@@ -92,11 +92,11 @@ export function phaseWarp(x: number, z: number): number {
 }
 
 // ---------------------------------------------------------------------------
-// Depth-keyed surface color (clean cerulean near shores -> deep cerulean wash).
+// Depth-keyed surface color (vibrant turquoise shallows -> deep navy ocean trench).
 // ---------------------------------------------------------------------------
 
-export const SHALLOW_WATER_COLOR: readonly [number, number, number] = [0.498, 0.663, 0.788];
-export const DEEP_WATER_COLOR: readonly [number, number, number] = [0.369, 0.553, 0.702];
+export const SHALLOW_WATER_COLOR: readonly [number, number, number] = [0.26, 0.72, 0.76]; // #42B8C2
+export const DEEP_WATER_COLOR: readonly [number, number, number] = [0.08, 0.28, 0.52]; // #144785
 
 /** Concentric LOD ring offsets for outer water extending smoothly to the 16000m horizon. Synchronized with BACKDROP_RING_RADII. */
 const OUTER_WATER_RING_RADII: readonly number[] = [
@@ -372,9 +372,9 @@ export function reflectedColor(
 // waterline (the separate, unanimated terrain-side foam band at 0.4m).
 // ---------------------------------------------------------------------------
 
-/** Depth (m) below which the animated foam band can appear (baked depth < ~0.65m). */
-export const SHORELINE_FOAM_DEPTH_M = 0.65;
-export const FOAM_CREST_COLOR: readonly [number, number, number] = [0.9, 0.93, 0.96];
+/** Depth (m) below which the animated foam band can appear (baked depth < ~0.85m). */
+export const SHORELINE_FOAM_DEPTH_M = 0.85;
+export const FOAM_CREST_COLOR: readonly [number, number, number] = [0.92, 0.96, 0.98];
 // Moiré fix: a single straight sine band would paint the whole shallow zone
 // with diagonal zebra stripes. Foam is instead the product of two
 // crossed, phase-warped scrolling waves with wide separation (~24–38m) —
@@ -393,13 +393,14 @@ const FOAM_MAX = 0.45; // subtle, translucent seafoam crest
 
 /**
  * Foam brightening strength (0..FOAM_MAX) at world (x,z), animation time t
- * (seconds), for a given baked water depth (meters): the product of two
- * crossed, phase-warped scrolling waves (patchy pulses, not straight bands)
- * inside an envelope that fades from 1 at depth<=0 to 0 at
- * depth>=SHORELINE_FOAM_DEPTH_M. Pure; deterministic in (x, z, t).
+ * (seconds), for a given baked water depth (meters): rhythmic tidal surge
+ * modulates reach, crossed by phase-warped scrolling waves and breaker crest pulses.
+ * Pure; deterministic in (x, z, t).
  */
 export function foamStrength(depth: number, x: number, z: number, t: number): number {
-  const envelope = clamp01(1 - depth / SHORELINE_FOAM_DEPTH_M) ** FOAM_ENVELOPE_EXPONENT;
+  const surge = Math.sin(t * 0.785) * 0.15;
+  const effectiveReach = Math.max(0.2, SHORELINE_FOAM_DEPTH_M + surge);
+  const envelope = clamp01(1 - depth / effectiveReach) ** FOAM_ENVELOPE_EXPONENT;
   if (envelope <= 0) return 0;
   const warp = phaseWarp(x, z);
   const phaseA =
@@ -410,7 +411,8 @@ export function foamStrength(depth: number, x: number, z: number, t: number): nu
     t * FOAM_SPEED_B;
   const a = Math.sin(phaseA) * 0.5 + 0.5;
   const b = Math.sin(phaseB) * 0.5 + 0.5;
-  return envelope * (a * b) ** FOAM_PATTERN_EXPONENT * FOAM_MAX;
+  const crestPulse = 1.0 + Math.sin(t * 1.25 + warp * 0.5) * 0.2;
+  return envelope * (a * b) ** FOAM_PATTERN_EXPONENT * (FOAM_MAX * crestPulse);
 }
 
 // ---------------------------------------------------------------------------
@@ -481,6 +483,7 @@ export class WaterRenderer {
   private readonly material: MeshStandardNodeMaterial;
   private readonly timeUniform = uniform(0);
   private readonly nightFactorUniform = uniform(0);
+  private readonly stormUniform = uniform(0);
   private readonly lightDirUniform = uniform(new THREE.Vector3().copy(DEFAULT_LIGHT_DIRECTION));
   private readonly skyZenithUniform = uniform(new THREE.Vector3(...DEFAULT_SKY_ZENITH_COLOR));
   private readonly skyHorizonUniform = uniform(new THREE.Vector3(...DEFAULT_SKY_HORIZON_COLOR));
@@ -621,9 +624,10 @@ export class WaterRenderer {
     return (this.foulAttribute.array as Float32Array)[index] ?? 0;
   }
 
-  update(dtMs: number, nightFactor: number): void {
+  update(dtMs: number, nightFactor: number, stormIntensity = 0): void {
     this.timeUniform.value += Math.max(0, dtMs) / 1000;
     this.nightFactorUniform.value = clamp01(nightFactor);
+    this.stormUniform.value = clamp01(stormIntensity);
 
     const light = this.sunLight;
     if (light) {
@@ -793,8 +797,8 @@ export class WaterRenderer {
     const material = new MeshStandardNodeMaterial({
       transparent: true,
       depthWrite: false,
-      roughness: 0.2,
-      metalness: 0.02,
+      roughness: 0.15,
+      metalness: 0.04,
     });
 
     const worldX = positionLocal.x;
@@ -841,6 +845,9 @@ export class WaterRenderer {
 
     // Scrolling wave-normal layers: shading-only XZ tilt with trochoidal crest shaping —
     // three widely separated layers from 24m ripples to 88m orbital swell.
+    // Dynamic storm interaction: wind and precipitation amplify ripple speed and crest tilt.
+    const stormSpeedFactor = float(1.0).add(this.stormUniform.mul(0.35));
+    const stormTiltFactor = float(1.0).add(this.stormUniform.mul(0.25));
     let tiltX: Node<'float'> = float(0);
     let tiltZ: Node<'float'> = float(0);
     for (const layer of WAVE_NORMAL_LAYERS) {
@@ -849,12 +856,12 @@ export class WaterRenderer {
         .mul(layer.dirX)
         .add(worldZ.mul(layer.dirZ))
         .mul(k)
-        .add(this.timeUniform.mul(layer.speed))
+        .add(this.timeUniform.mul(layer.speed).mul(stormSpeedFactor))
         .add(warpNode);
       // Trochoidal crest envelope: squared half-sine isolates narrow crests while
       // flattening troughs into calm, glassy water, producing wide ripple separation.
       const crestEnvelope = sin(phase).mul(0.5).add(0.5).pow(2);
-      const s = crestEnvelope.mul(cos(phase)).mul(layer.strength);
+      const s = crestEnvelope.mul(cos(phase)).mul(layer.strength).mul(stormTiltFactor);
       tiltX = tiltX.add(s.mul(layer.dirX));
       tiltZ = tiltZ.add(s.mul(layer.dirZ));
     }
@@ -881,10 +888,11 @@ export class WaterRenderer {
     const fresnelWeight = oneMinus(cosView).pow(2.5);
     const reflected = mix(baseColor, skyTone, fresnelWeight);
 
-    // Animated shoreline foam — mirrors foamStrength(depth, x, z, t)
-    // exactly: a shore-hugging envelope times the product of two crossed,
-    // phase-warped scrolling waves, capped at FOAM_MAX and mixed toward ivory foam.
-    const foamEnvelope = clamp(oneMinus(depthAttr.div(SHORELINE_FOAM_DEPTH_M)), 0, 1).pow(
+    // Animated shoreline foam — mirrors foamStrength(depth, x, z, t) exactly:
+    // rhythmic tidal surge modulates coastal reach and wave break intensity
+    const surge = sin(this.timeUniform.mul(0.785)).mul(0.15);
+    const effectiveReach = float(SHORELINE_FOAM_DEPTH_M).add(surge);
+    const foamEnvelope = clamp(oneMinus(depthAttr.div(effectiveReach)), 0, 1).pow(
       FOAM_ENVELOPE_EXPONENT,
     );
     const foamPhaseA = worldX
@@ -901,7 +909,10 @@ export class WaterRenderer {
       .add(this.timeUniform.mul(FOAM_SPEED_B));
     const foamA = sin(foamPhaseA).mul(0.5).add(0.5);
     const foamB = sin(foamPhaseB).mul(0.5).add(0.5);
-    const foam = foamEnvelope.mul(foamA.mul(foamB).pow(FOAM_PATTERN_EXPONENT)).mul(FOAM_MAX);
+    const crestPulse = float(1.0).add(sin(this.timeUniform.mul(1.25).add(warpNode.mul(0.5))).mul(0.2));
+    const foam = foamEnvelope
+      .mul(foamA.mul(foamB).pow(FOAM_PATTERN_EXPONENT))
+      .mul(float(FOAM_MAX).mul(crestPulse));
     // The surface is lit by the scene's sun and sky like any other, so it
     // carries the one night tint too and reads no brighter than the shore.
     material.colorNode = mix(reflected, vec3(...FOAM_CREST_COLOR), foam).mul(

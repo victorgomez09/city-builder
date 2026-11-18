@@ -12,14 +12,15 @@ no flow.
   surface with soft clarity.
 - **Shoreline**: a static foam band draws every coastline where the height is
   within 0.4 m of sea level, and an animated band of soft ivory foam
-  pulses gently with wide separation (~24–38 m) wherever the baked depth is under roughly 0.65 m.
+  pulses with rhythmic tidal surge (~24–38 m separation) wherever the baked depth is under roughly 0.85 m.
 - **Surface animation**: widely spaced trochoidal wave layers (wavelengths from
   24 m up to an 88 m long-wavelength orbital swell) with flat glassy troughs
-  providing wide, calm separation between wave crests, combined with
+  providing wide, calm separation between wave crests, dynamically responsive to
+  storm precipitation and wind, combined with
   a gentle sine-sum vertex swell (total swell amplitude budget ≤0.12 m) so the
   surface reads calm and expansive from RTS camera distance (~600 m). Colour is depth-keyed
-  (clean cerulean `#7FA9C9` to deep `#5E8DB3`) with cubic glancing-angle Fresnel
-  reflection and standard PBR specular highlights without blooming emissive —
+  (vibrant turquoise shallows `#42B8C2` to deep navy `#144785`) with cubic glancing-angle Fresnel
+  reflection and calibrated PBR specular highlights without blooming emissive —
   see [lighting.md](lighting.md).
 - **Sky reflection**: an analytic, cubic-Fresnel-weighted (`(1 - cosView)^2.5`)
   blend of the sky's zenith and horizon colours into the water's own colour, fed

@@ -10,7 +10,9 @@ import {
   abs,
   attribute,
   bool,
+  clamp,
   distance,
+  dot,
   float,
   floor,
   fract,
@@ -20,15 +22,20 @@ import {
   min,
   mix,
   mod,
+  normalize,
   normalGeometry,
   normalLocal,
+  oneMinus,
+  positionViewDirection,
   saturation,
   select,
+  transformNormalToView,
   uniform,
   uv,
   vec2,
   vec3,
 } from 'three/tsl';
+import { buildBeveledBoxGeometry } from './beveledbox';
 import {
   BuildingCatalogEntry,
   BuildingDelta,
@@ -143,6 +150,12 @@ const WINDOW_FRACTION_SLOT = WINDOW_SEED_SLOTS - 1;
 const WINDOW_COOL_PROBABILITY = 0.18;
 export const WARM_WINDOW_COLOR = 0xffd9a0;
 export const COOL_WINDOW_COLOR = 0xcfe4ff;
+export const RESIDENTIAL_TUNGSTEN_COLOR = 0xffe2a8;
+export const STOREFRONT_GOLDEN_AMBER_COLOR = 0xffbe6b;
+export const COMMERCIAL_COOL_LED_COLOR = 0xcfe4ff;
+export const COMMERCIAL_NEUTRAL_WHITE_COLOR = 0xf4f7fa;
+export const INDUSTRIAL_SODIUM_AMBER_COLOR = 0xffaa44;
+export const INDUSTRIAL_HALOGEN_COLOR = 0xc8d8e6;
 /**
  * A lit pane's emissive at full night. Under the renderer's neutral tone
  * mapping this keeps the warm pane's brightest channel under white, so a
@@ -423,7 +436,7 @@ const _yAxis = new THREE.Vector3(0, 1, 0);
 export class BuildingInstancer {
   private readonly scene: THREE.Scene;
   private readonly heightAt: (x: number, z: number) => number;
-  private readonly geometry = new THREE.BoxGeometry(1, 1, 1);
+  private readonly geometry = buildBeveledBoxGeometry(0.025);
   private readonly buckets = new Map<string, Bucket>();
   /** building id -> catalogId, tracks which bucket currently holds an id (levels migrate buckets). */
   private readonly idLocation = new Map<number, string>();
@@ -638,14 +651,44 @@ export class BuildingInstancer {
 
     const isWall = abs(normalLocal.y).lessThan(0.5); // roof/floor caps never show windows
     const colorSeed = windowSeed.mul(7.0).add(3.0); // decorrelated from the lit threshold above
-    const isCool = hash(colorSeed).lessThan(WINDOW_COOL_PROBABILITY);
-    const warmColor = new THREE.Color(WARM_WINDOW_COLOR);
-    const coolColor = new THREE.Color(COOL_WINDOW_COLOR);
-    const windowColorNode = select(
-      isCool,
-      vec3(coolColor.r, coolColor.g, coolColor.b),
-      vec3(warmColor.r, warmColor.g, warmColor.b),
-    );
+    const colorHash = hash(colorSeed);
+
+    let windowColorNode: Node<'vec3'>;
+    if (entry.category === 'res') {
+      const cTungsten = new THREE.Color(RESIDENTIAL_TUNGSTEN_COLOR);
+      const cAmber = new THREE.Color(STOREFRONT_GOLDEN_AMBER_COLOR);
+      const cCool = new THREE.Color(COMMERCIAL_COOL_LED_COLOR);
+      windowColorNode = select(
+        colorHash.lessThan(0.68),
+        vec3(cTungsten.r, cTungsten.g, cTungsten.b),
+        select(
+          colorHash.lessThan(0.88),
+          vec3(cAmber.r, cAmber.g, cAmber.b),
+          vec3(cCool.r, cCool.g, cCool.b),
+        ),
+      );
+    } else if (entry.category === 'com') {
+      const cCool = new THREE.Color(COMMERCIAL_COOL_LED_COLOR);
+      const cNeutral = new THREE.Color(COMMERCIAL_NEUTRAL_WHITE_COLOR);
+      const cTungsten = new THREE.Color(RESIDENTIAL_TUNGSTEN_COLOR);
+      windowColorNode = select(
+        colorHash.lessThan(0.55),
+        vec3(cCool.r, cCool.g, cCool.b),
+        select(
+          colorHash.lessThan(0.85),
+          vec3(cNeutral.r, cNeutral.g, cNeutral.b),
+          vec3(cTungsten.r, cTungsten.g, cTungsten.b),
+        ),
+      );
+    } else {
+      const cSodium = new THREE.Color(INDUSTRIAL_SODIUM_AMBER_COLOR);
+      const cHalogen = new THREE.Color(INDUSTRIAL_HALOGEN_COLOR);
+      windowColorNode = select(
+        colorHash.lessThan(0.65),
+        vec3(cSodium.r, cSodium.g, cSodium.b),
+        vec3(cHalogen.r, cHalogen.g, cHalogen.b),
+      );
+    }
 
     // --- window grid: pane vs mullion frame -------------------------------
     // Computed BEFORE the emissive so a lit window at night is exactly the
@@ -699,11 +742,19 @@ export class BuildingInstancer {
     const isWindowLit = storefrontLit
       ? select(isGroundFloor, this.nightFactorUniform.greaterThan(STOREFRONT_LIT_FROM), isLit)
       : isLit;
+    const storefrontColor = new THREE.Color(STOREFRONT_GOLDEN_AMBER_COLOR);
     const paneColorNode = storefrontLit
-      ? select(isGroundFloor, vec3(warmColor.r, warmColor.g, warmColor.b), windowColorNode)
+      ? select(
+          isGroundFloor,
+          vec3(storefrontColor.r, storefrontColor.g, storefrontColor.b),
+          windowColorNode,
+        )
       : windowColorNode;
     const gate = isWall.and(isWindowLit).and(isPane).and(activeAttr.greaterThan(0.5));
-    const emissiveOn = paneColorNode.mul(this.nightFactorUniform).mul(WINDOW_EMISSIVE_STRENGTH);
+    const emissiveStrength = storefrontLit
+      ? select(isGroundFloor, float(2.2), float(WINDOW_EMISSIVE_STRENGTH))
+      : float(WINDOW_EMISSIVE_STRENGTH);
+    const emissiveOn = paneColorNode.mul(this.nightFactorUniform).mul(emissiveStrength);
     material.emissiveNode = select(gate, emissiveOn, vec3(0, 0, 0));
 
     // --- day facade -------------------------------------------------------
@@ -846,7 +897,13 @@ export class BuildingInstancer {
     // EXISTING aActive attribute (no new per-instance data): glazing only
     // renders for Active buildings ("Abandoned: boarded dark cells"),
     // layering on top of instanceColor's existing dark/grey state tint.
-    const paneColor = select(activeAttr.greaterThan(0.5), glassColor, frameColor);
+    // Subtle cubic Fresnel specular sky reflections on facade glass panes:
+    const viewDir = normalize(positionViewDirection);
+    const cosView = clamp(dot(transformNormalToView(normalLocal), viewDir), 0, 1);
+    const glassFresnel = oneMinus(cosView).pow(3.0);
+    const skyHorizonTone = vec3(0.72, 0.84, 0.96);
+    const glassReflected = mix(glassColor, skyHorizonTone, glassFresnel.mul(0.38));
+    const paneColor = select(activeAttr.greaterThan(0.5), glassReflected, frameColor);
     let wallWithWindows: Node<'vec3'> = select(isPane, paneColor, frameColor);
 
     // Industrial accent stripe band at 2/3 height, red or blue by hash, on
@@ -925,14 +982,23 @@ export class BuildingInstancer {
     const envColorNode = select(isWall, snowWall, snowRoof);
     material.colorNode = envColorNode.mul(nightTintNode(this.nightFactorUniform));
 
-    // Environmental surface reflectivity: rain creates a glossy wet specular sheen
+    // PBR roughness and metalness: smooth specular glass (0.10) and metalness (0.18)
+    // on active facade glazing versus matte masonry/brick/concrete walls (0.85 roughness, 0.04 metalness)
+    const isGlazingActive = isWall.and(isPane).and(activeAttr.greaterThan(0.5));
+    const wallRoughness = float(0.85).sub(this.wetnessUniform.mul(0.55));
+    const glassRoughness = float(0.10).sub(this.wetnessUniform.mul(0.05));
+    const baseRoughness = select(isGlazingActive, glassRoughness, wallRoughness);
     material.roughnessNode = mix(
-      float(0.85).sub(this.wetnessUniform.mul(0.55)),
+      baseRoughness,
       float(0.80),
       this.snowCoverUniform,
     );
+
+    const wallMetalness = float(0.04).add(this.wetnessUniform.mul(0.24));
+    const glassMetalness = float(0.18).add(this.wetnessUniform.mul(0.08));
+    const baseMetalness = select(isGlazingActive, glassMetalness, wallMetalness);
     material.metalnessNode = mix(
-      float(0.04).add(this.wetnessUniform.mul(0.24)),
+      baseMetalness,
       float(0.0),
       this.snowCoverUniform,
     );

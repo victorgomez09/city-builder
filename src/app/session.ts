@@ -68,9 +68,23 @@ export function quitToMenu(): void {
 // --- persisted user settings ------------------------------------------------
 
 export type TerrainQuality = 'low' | 'medium' | 'high' | 'ultra';
+export type ResolutionScale = 'native' | '1080p' | '1440p' | '4k';
+export type ShadowQuality = 'off' | 'low' | 'medium' | 'high' | 'ultra';
+export type AntiAliasingMode = 'off' | 'msaa2x' | 'msaa4x' | 'msaa8x' | 'ssaa4k';
+export type AnisotropicFiltering = '1x' | '2x' | '4x' | '8x' | '16x';
+export type CloudQuality = 'off' | 'low' | 'high';
+export type GraphicsPreset = 'low' | 'medium' | 'high' | 'ultra_4k' | 'custom';
 
 /** User-facing options; persisted in localStorage across games/reloads. */
 export interface GameSettings {
+  graphicsPreset: GraphicsPreset;
+  resolutionScale: ResolutionScale;
+  shadowQuality: ShadowQuality;
+  antiAliasing: AntiAliasingMode;
+  anisotropicFiltering: AnisotropicFiltering;
+  clouds: CloudQuality;
+  vehicleLights: boolean;
+  weatherEffects: boolean;
   bloom: boolean;
   sandboxUnlockAll: boolean;
   /** Testing: ignore funds/costs so anything is buildable (cash flow still tracked; HUD shows ∞). */
@@ -85,10 +99,18 @@ export interface GameSettings {
 }
 
 export const DEFAULT_SETTINGS: GameSettings = {
+  graphicsPreset: 'high',
+  resolutionScale: 'native',
+  shadowQuality: 'high',
+  antiAliasing: 'msaa4x',
+  anisotropicFiltering: '16x',
+  clouds: 'high',
+  vehicleLights: true,
+  weatherEffects: true,
+  terrainQuality: 'high',
   bloom: true,
   sandboxUnlockAll: false,
   unlimitedMoney: false,
-  terrainQuality: 'high',
   masterVolume: 0.7,
   muted: false,
   musicVolume: 0.6,

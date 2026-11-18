@@ -139,6 +139,9 @@ const TREE_GAIN = 0.5;
 // even when derived from the same seed.
 const TREE_SEED_SALT = 0x9e3779b9;
 const FEATURE_SEED_SALT = 0x85ebca6b;
+const MOUNTAIN_SEED_SALT = 0x6c8e9cf5;
+const WARP_SEED_SALT_X = 0x3f5a1b8d;
+const WARP_SEED_SALT_Z = 0x7e2d4c9a;
 
 /**
  * Deterministic simplex-noise FBM terrain influenced by MapOptions:
@@ -170,13 +173,20 @@ export function createProceduralWorldEvaluator(
   const terrainNoise = createNoise2D(mulberry32(seed));
   const treeNoise = createNoise2D(mulberry32((seed ^ TREE_SEED_SALT) >>> 0));
   const featureNoise = createNoise2D(mulberry32((seed ^ FEATURE_SEED_SALT) >>> 0));
+  const mountainNoise = createNoise2D(mulberry32((seed ^ MOUNTAIN_SEED_SALT) >>> 0));
+  const warpNoiseX = createNoise2D(mulberry32((seed ^ WARP_SEED_SALT_X) >>> 0));
+  const warpNoiseZ = createNoise2D(mulberry32((seed ^ WARP_SEED_SALT_Z) >>> 0));
 
-  const maxPeakAltitude = 400 + relief * 3200;
+  const maxPeakAltitude = 220 + relief * 1180;
 
   function heightAt(tileX: number, tileZ: number): number {
     const nx = (tileX / (size - 1)) * 2 - 1;
     const nz = (tileZ / (size - 1)) * 2 - 1;
     const distFromCenter = Math.sqrt(nx * nx + nz * nz);
+
+    // Natural 2D domain warping: breaks up planar bias into organic geological contours
+    const wx = tileX + warpNoiseX(tileX * 0.003, tileZ * 0.003) * 50;
+    const wz = tileZ + warpNoiseZ(tileX * 0.003, tileZ * 0.003) * 50;
 
     let baseLandform: number;
     let mountainMask: number;
@@ -184,46 +194,66 @@ export function createProceduralWorldEvaluator(
     switch (archetype) {
       case 'coastal': {
         baseLandform = (nx + 0.05) * 12 - (waterLevel - 0.4) * 14;
-        mountainMask = Math.max(0, (nx - 0.2) * 1.5);
+        const coastalMountain = (mountainNoise(wx * 0.004, wz * 0.004) + 1) * 0.5;
+        const inlandBias = Math.max(0, nx - 0.1);
+        const rawM = Math.max(0, (coastalMountain * inlandBias - 0.18) / 0.5);
+        const t = Math.min(1.0, rawM * 1.5);
+        mountainMask = t * t * (3 - 2 * t);
         break;
       }
 
       case 'island': {
         const radial = 0.65 - distFromCenter;
         baseLandform = radial * 18 - (waterLevel - 0.4) * 16;
-        mountainMask = Math.max(0, (radial - 0.15) * 1.6);
+        const islandMountain = (mountainNoise(wx * 0.005, wz * 0.005) + 1) * 0.5;
+        const rawM = Math.max(0, (islandMountain * Math.max(0, radial) - 0.14) / 0.4);
+        const t = Math.min(1.0, rawM * 1.5);
+        mountainMask = t * t * (3 - 2 * t);
         break;
       }
 
       case 'plains': {
         baseLandform = 8 - (waterLevel - 0.4) * 16;
-        mountainMask = 0.05;
+        mountainMask = 0.01;
         break;
       }
 
       case 'mountain': {
         baseLandform = 10 - (waterLevel - 0.4) * 16;
-        const pass = (featureNoise(tileX * 0.008, tileZ * 0.008) + 1) * 0.5;
-        mountainMask = Math.max(0.3, pass * 1.3);
+        // 100% procedural, random 2D mountain distribution driven entirely by seed:
+        // combines macro massif noise with mid-frequency ridge noise.
+        // There is NO hardcoded corridor, NO preferred axis, NO fixed geometric template.
+        const macroMassif = (featureNoise(wx * 0.0035, wz * 0.0035) + 1) * 0.5;
+        const subMassif = (mountainNoise(wx * 0.007, wz * 0.007) + 1) * 0.5;
+        const mountainField = macroMassif * 0.65 + subMassif * 0.35;
+
+        // Mountain threshold: open plateaus, basins, and valleys form organically
+        // wherever mountainField < 0.46 (~35-45% of the map), while mountain massifs
+        // and jagged alpine peaks rise organically across the remaining terrain.
+        const threshold = 0.46;
+        const rawM = Math.max(0, (mountainField - threshold) / (1.0 - threshold));
+        // Smooth cubic Hermite curve ensures zero slope derivative at the transition into plains
+        const t = Math.min(1.0, rawM * 1.5);
+        mountainMask = t * t * (3 - 2 * t);
         break;
       }
 
       case 'custom': {
-        const continent = featureNoise(tileX * 0.008, tileZ * 0.008);
-        baseLandform = continent * 14 - (waterLevel - 0.4) * 16;
-        mountainMask = Math.max(0, (continent - 0.1) * 1.4);
+        const continent = (featureNoise(wx * 0.005, wz * 0.005) + 1) * 0.5;
+        baseLandform = (continent - 0.5) * 24 - (waterLevel - 0.4) * 16;
+        const rawM = Math.max(0, (continent - 0.42) / 0.58);
+        const t = Math.min(1.0, rawM * 1.4);
+        mountainMask = t * t * (3 - 2 * t);
         break;
       }
 
       case 'valley':
       default: {
-        const flankDist = Math.abs(nx);
         baseLandform = 8 - (waterLevel - 0.4) * 16;
-        mountainMask = Math.max(0, (flankDist - 0.28) * 1.8);
 
-        // Meandering river flowing through the center of the valley
-        const riverCenter =
-          size / 2 + Math.sin(tileZ * 0.04) * 18 + featureNoise(0, tileZ * 0.02) * 12;
+        // River meanders organically across the map guided by feature noise:
+        const riverMeander = featureNoise(wx * 0.003, wz * 0.003) * (size * 0.28);
+        const riverCenter = size / 2 + Math.sin(tileZ * 0.035) * 24 + riverMeander;
         const distToRiver = Math.abs(tileX - riverCenter);
 
         const riverWidth = 8;
@@ -233,6 +263,15 @@ export function createProceduralWorldEvaluator(
           const trench = 1 - t * t * (3 - 2 * t);
           baseLandform -= trench * 14;
         }
+
+        // Random organic mountain distribution framing the river basin:
+        const macroRelief = (mountainNoise(wx * 0.0035, wz * 0.0035) + 1) * 0.5;
+        const valleyProximity = Math.max(0, 1.0 - (distToRiver / (size * 0.35)));
+        // River corridor stays open, mountains rise organically based on noise:
+        const mountainPresence = macroRelief * (1.0 - valleyProximity * 0.85);
+        const rawM = Math.max(0, (mountainPresence - 0.38) / 0.62);
+        const t = Math.min(1.0, rawM * 1.5);
+        mountainMask = t * t * (3 - 2 * t);
         break;
       }
     }
@@ -240,8 +279,8 @@ export function createProceduralWorldEvaluator(
     const rollingNoise =
       fbm(
         terrainNoise,
-        tileX * TERRAIN_FREQUENCY,
-        tileZ * TERRAIN_FREQUENCY,
+        wx * TERRAIN_FREQUENCY,
+        wz * TERRAIN_FREQUENCY,
         TERRAIN_OCTAVES,
         TERRAIN_LACUNARITY,
         TERRAIN_GAIN,
@@ -249,8 +288,8 @@ export function createProceduralWorldEvaluator(
 
     const mFreq1 = 1 / 140;
     const mFreq2 = 1 / 70;
-    const r1 = 1.0 - Math.abs(terrainNoise(tileX * mFreq1, tileZ * mFreq1));
-    const r2 = 1.0 - Math.abs(terrainNoise((tileX + 127) * mFreq2, (tileZ + 311) * mFreq2));
+    const r1 = 1.0 - Math.abs(terrainNoise(wx * mFreq1, wz * mFreq1));
+    const r2 = 1.0 - Math.abs(mountainNoise((wx + 127) * mFreq2, (wz + 311) * mFreq2));
     const ridgeSample = Math.pow(r1 * 0.7 + r2 * 0.3, 1.4);
     const mountainAltitude = ridgeSample * maxPeakAltitude * mountainMask;
 

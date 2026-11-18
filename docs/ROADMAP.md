@@ -73,6 +73,27 @@ Discipline specifications start at [README.md](README.md); the player-facing gui
   - Persistent soil toxicity on brownfield heavy industrial lots requiring bioremediation passes before residential redevelopment (`advisor.ts`).
 - [ ] **UI Modernization & Aesthetic Redesign**:
   - Visual overhaul of panel chrome, HUD layout, typography, iconography, and micro-interactions ([ux/](ux/README.md), [ui-style-guide.md](art/ui-style-guide.md)).
+- [x] **Zoom-Adaptive Directional Shadows & Calibrated Contact Lighting**:
+  - Zoom-dependent dynamic shadow frustum span (tight near-field focus at street level, expansive horizon coverage at overview) ([lighting.md](visual-render/lighting.md), `src/render/scene.ts`, `src/render/sun.ts`).
+  - Contact shadow softening and PCF filter radius adjustment based on solar elevation and time-of-day (`[R-render-018]`, `[R-render-020]`).
+  - Calibrated earth ground bounce fill illumination preventing shaded building faces from crushing to flat black.
+- [x] **Atmospheric Aerial Perspective & Dynamic Twilight Scattering**:
+  - Rayleigh and Mie atmospheric scattering color gradients for dawn, golden hour, and twilight sky domes (`src/render/sky.ts`).
+  - Aerial perspective depth tinting where distant alpine peaks and horizon features softly blend into atmospheric haze ([terrain.md](visual-render/terrain.md), `src/render/terrain.ts`).
+- [x] **Procedural Water Articulation, Coastal Waves & Weather Interaction**:
+  - Animated water surface micro-glint and depth-based color absorption from azure shallows to deep navy trenches ([water.md](visual-render/water.md), `src/render/water.ts`).
+  - Procedural coastal wave break and dynamic foam line along sand and rock contacts (`[R-render-010]`).
+  - Puddle gloss and wet surface specular reflections during rain transitions, and seasonal snow drift coverage on roofs and roadsides ([vfx.md](visual-render/vfx.md), `src/render/weather.ts`).
+- [x] **Night City Glow, Vehicle Headlights & Interior Windows**:
+  - Active vehicle headlight projection cones and braking taillights on road surfaces at night (`src/render/vehicles.ts`).
+  - Organically varied window emissive tones (warm tungsten, cool office LED) across residential and commercial buildings (`src/render/facade.ts`, `src/render/nightlook.ts`).
+  - Ambient storefront glow and smooth light pools on sidewalks under street lamps (`src/render/lamps.ts`).
+- [x] **Architectural Edge Beveling & Window Specular Reflections**:
+  - Vertex normal edge beveling along building silhouettes and roof eaves to catch crisp specular highlights (`src/render/buildingkit.ts`, `src/render/buildings.ts`).
+  - Subtle Fresnel specular sky reflections on facade glass panes ([materials.md](visual-render/materials.md)).
+- [ ] **Hierarchical GPU Frustum Culling & Dense Foliage Mesh LOD**:
+  - Chunk-level bounding volume hierarchy (BVH) frustum culling for instanced building kits, urban props, and tree stands ([lod.md](visual-render/lod.md), `src/render/trees.ts`).
+  - Dynamic distance-based LOD mesh transitions for high-altitude camera overviews to sustain locked 60 fps on large metropolis maps (`[R-render-004]`, [performance-budget.md](engineering/performance-budget.md)).
 - [x] **Visual Defects Punchlist**:
   - Triage and resolution of logged screenshot audit defects ([open-visual-defects.md](roadmap/open-visual-defects.md)).
 - [x] **Junction Turn Radii & Curve Transitions**:
