@@ -285,7 +285,7 @@ export function poleLateralOffset(profile: RoadProfile): number {
   const half = carriagewayHalfWidthOf(profile);
   const radius = POLE_SPECS.street.radius;
   if (!hasKerbs(profile)) return Math.max(TILE_METERS / 2, half + POLE_BEHIND_KERB_M + radius);
-  return Math.max(half + kerbWidthOf(profile) + radius, half + POLE_BEHIND_KERB_M + radius);
+  return half + POLE_BEHIND_KERB_M + radius;
 }
 
 /** Whether the street's own line runs along this tile: sealed, powered, on the ground, not a motorway or a ramp. */

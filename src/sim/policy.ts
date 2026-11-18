@@ -19,6 +19,12 @@ export const HIGH_TAX_MULT = 1.3;
 export const NO_HEAVY_TRAFFIC_MULT = 1.6;
 /** greenEnergy pollution-emission multiplier for a district's tiles (a reduction). */
 export const GREEN_ENERGY_POLLUTION_MULT = 0.5;
+/** tourismQuarter hotel occupancy & hospitality surcharge multiplier. */
+export const TOURISM_TAX_MULT = 1.15;
+/** highTechCampus high-wage office demand acceleration multiplier. */
+export const HIGH_TECH_OFFICE_MULT = 1.25;
+/** cleanEcoDistrict municipal resource recovery bonus multiplier. */
+export const ECO_DISTRICT_RECYCLING_BONUS = 1.2;
 
 export type DistrictPolicySet = ReadonlySet<Policy>;
 export type DistrictPolicyMap = ReadonlyMap<number, DistrictPolicySet>;
@@ -75,16 +81,15 @@ export class PolicyStore {
     let mult = 1;
     if (policies.has('lowTax')) mult *= LOW_TAX_MULT;
     if (policies.has('highTax')) mult *= HIGH_TAX_MULT;
+    if (policies.has('tourismQuarter')) mult *= TOURISM_TAX_MULT;
     return mult;
   }
 }
 
 /**
  * `baseTax`, multiplied by LOW_TAX_MULT if `districtId`'s policies include
- * 'lowTax' and/or HIGH_TAX_MULT if they include 'highTax' — both multipliers
- * apply if somehow both are on (an explicit composition, not a special
- * case). `districtId` 0 (unassigned) or a district with no policies enabled
- * returns `baseTax` unchanged.
+ * 'lowTax' and/or HIGH_TAX_MULT if they include 'highTax', and TOURISM_TAX_MULT
+ * if 'tourismQuarter' is active.
  */
 export function effectiveTaxRate(
   baseTax: number,
@@ -96,31 +101,31 @@ export function effectiveTaxRate(
   let rate = baseTax;
   if (policies.has('lowTax')) rate *= LOW_TAX_MULT;
   if (policies.has('highTax')) rate *= HIGH_TAX_MULT;
+  if (policies.has('tourismQuarter')) rate *= TOURISM_TAX_MULT;
   return rate;
 }
 
 /**
  * `base` pathfind edge cost, multiplied by NO_HEAVY_TRAFFIC_MULT when
- * `policies` includes 'noHeavyTraffic' (routes heavy/through traffic around
- * the district's roads) — otherwise unchanged. Takes the district's OWN
- * policy set directly (not the whole map): pathfind cost is evaluated
- * per-edge, with the district already resolved by the caller.
- * `policies === undefined` (e.g. an edge with no district) is a no-op.
+ * `policies` includes 'noHeavyTraffic' or 'cleanEcoDistrict'.
  */
 export function trafficWeight(base: number, policies: DistrictPolicySet | undefined): number {
   if (!policies) return base;
-  return policies.has('noHeavyTraffic') ? base * NO_HEAVY_TRAFFIC_MULT : base;
+  return policies.has('noHeavyTraffic') || policies.has('cleanEcoDistrict')
+    ? base * NO_HEAVY_TRAFFIC_MULT
+    : base;
 }
 
 /**
  * `basePollution` (a Pollution-field emission value), multiplied by
- * GREEN_ENERGY_POLLUTION_MULT when `policies` includes 'greenEnergy' —
- * otherwise unchanged. `policies === undefined` is a no-op.
+ * GREEN_ENERGY_POLLUTION_MULT when `policies` includes 'greenEnergy' or 'cleanEcoDistrict'.
  */
 export function effectivePollution(
   basePollution: number,
   policies: DistrictPolicySet | undefined,
 ): number {
   if (!policies) return basePollution;
-  return policies.has('greenEnergy') ? basePollution * GREEN_ENERGY_POLLUTION_MULT : basePollution;
+  return policies.has('greenEnergy') || policies.has('cleanEcoDistrict')
+    ? basePollution * GREEN_ENERGY_POLLUTION_MULT
+    : basePollution;
 }

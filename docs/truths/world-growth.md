@@ -327,3 +327,36 @@ Back to [the index](../GROUND-TRUTHS.md).
   sim clock as demand × desirability. Civic and utility buildings are plopped;
   zones, districts, landfill and power lines are painted. —
   [gdd.md](../game-design/gdd.md), [gameplay-loop.md](../game-design/gameplay-loop.md)
+
+- [R-world-052] Protests emerge dynamically from civic discontent (happiness < 40 or
+  acute tax/service stressors), forming instanced crowds along street frontages
+  that restrict road flow and issue ultimatums through the Advisor. —
+  [civic-unrest-and-protests.md](../specs/civic-unrest-and-protests.md)
+
+- [R-world-053] Demographics simulate three socio-economic income tiers (low,
+  medium, high) statistically per residential building; household disposable
+  income balances wages against living costs and taxes, driving tier-specific
+  satisfaction and migration. —
+  [socio-demographics-and-household-economics.md](../specs/socio-demographics-and-household-economics.md)
+
+- [R-world-054] Commercial supply chains require physical road connectivity to industrial
+  zones or highway edge connections; unsupplied shops suffer goods stockouts,
+  compressing profit margins and triggering commercial insolvency and blight. —
+  [commercial-supply-chains-and-business-viability.md](../specs/commercial-supply-chains-and-business-viability.md)
+
+- [R-world-055] Systemic municipal crises emerge from structural neglect: debt near the cap
+  under negative cash flow downgrades municipal bond ratings to penalty interest;
+  service underfunding (<70%) provokes public worker strikes; and severe
+  garbage backlogs ignite hospital-overloading health epidemics. —
+  [systemic-crises-and-municipal-default.md](../specs/systemic-crises-and-municipal-default.md)
+
+- [R-world-057] District specializations enact localized economic and zoning mandates:
+  Tourism Quarters boost commercial hospitality revenues; High-Tech Campuses attract
+  graduate-driven office demand; and Clean Eco-Districts mandate rooftop solar and ban heavy freight. —
+  [district-specializations-and-urban-policies.md](../specs/district-specializations-and-urban-policies.md)
+
+- [R-world-058] The labor market segments workforce capacity across educational tiers:
+  elementary, secondary, and college degrees; advanced commercial and office towers
+  mandate skilled labor, generating vacancies during education shortages while
+  unskilled labor experiences structural unemployment. —
+  [labor-market-and-education-skill-matching.md](../specs/labor-market-and-education-skill-matching.md)

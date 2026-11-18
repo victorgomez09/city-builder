@@ -18,6 +18,7 @@ import { level3Schooling, type EducationRung } from '../shared/schooling';
 import {
   BuildingState,
   Problem,
+  type ActiveProtest,
   type BuildingCatalogEntry,
   type BuildingInstance,
   type CityStats,
@@ -218,6 +219,7 @@ export function cityIssues(
   deathCare: DeathCareReport = NO_DEATH_CARE,
   incidents: readonly Incident[] = [],
   unlimitedMoney = false,
+  protests: readonly ActiveProtest[] = [],
 ): CityIssue[] {
   const counts = new Map<number, number>();
   const focus = new Map<number, BuildingInstance>();
@@ -274,6 +276,7 @@ export function cityIssues(
     ...unservedIssues(unserved),
     ...deathCareIssues(deathCare, stats),
     ...unansweredCallIssues(incidents),
+    ...protestIssues(protests),
     ...cityWideIssues(stats, unlimitedMoney),
   );
 
@@ -452,6 +455,25 @@ function unansweredCallIssues(incidents: readonly Incident[]): CityIssue[] {
   ];
 }
 
+/** Active citizen protests and civil demonstrations. */
+function protestIssues(protests: readonly ActiveProtest[]): CityIssue[] {
+  return protests.map((p) => {
+    let title = 'Citizen Demonstration in Progress';
+    if (p.kind === 'tax') title = 'Citizen Tax Revolt';
+    else if (p.kind === 'unemployment') title = 'Labor & Employment Demonstration';
+    else if (p.kind === 'services') title = 'Utility Outage Protest';
+
+    return {
+      id: `protest-${p.id}`,
+      severity: 'critical' as const,
+      title,
+      detail: p.grievance,
+      count: 1,
+      focus: { x: p.x, z: p.z },
+    };
+  });
+}
+
 /** The problems that live in the totals rather than on any one building. */
 function cityWideIssues(stats: CityStats, unlimitedMoney: boolean): CityIssue[] {
   const issues: CityIssue[] = [];
@@ -474,6 +496,130 @@ function cityWideIssues(stats: CityStats, unlimitedMoney: boolean): CityIssue[] 
       detail: `Losing ¢${Math.round(stats.monthlyExpenses - stats.monthlyIncome)}/month — adjust taxes or service funding.`,
       count: 0,
     });
+  }
+
+  // Systemic crises & municipal default
+  if (warn && stats.crises?.creditRating === 'Default') {
+    issues.push({
+      id: 'fiscal-default',
+      severity: 'critical',
+      title: 'Municipal Fiscal Default (Junk Bond Status)',
+      detail: 'Debt is near maximum under chronic deficit. Interest rates escalated to 5%/mo. Enact immediate austerity or raise revenues.',
+      count: 0,
+    });
+  } else if (warn && stats.crises?.creditRating === 'BBB') {
+    issues.push({
+      id: 'credit-downgrade',
+      severity: 'warning',
+      title: 'Municipal Credit Rating Downgraded to BBB',
+      detail: 'Escalating loan debt under monthly deficit has raised bond borrowing costs to 3.5%/mo.',
+      count: 0,
+    });
+  }
+
+  // Public sector strikes
+  if (stats.crises?.activeStrikes && stats.crises.activeStrikes.length > 0) {
+    issues.push({
+      id: 'service-strikes',
+      severity: 'critical',
+      title: `Public Service Strike: ${stats.crises.activeStrikes.map((s) => s.toUpperCase()).join(', ')}`,
+      detail: 'Slashing service funding below 70% caused municipal workers to walk out. Restore funding to 70%+ immediately.',
+      count: stats.crises.activeStrikes.length,
+    });
+  }
+
+  // Active natural and industrial disasters
+  if (stats.disasters?.activeDisasters) {
+    for (const d of stats.disasters.activeDisasters) {
+      let title = 'Emergency: Disaster In Progress';
+      if (d.kind === 'wildfire') title = 'Wildfire Spreading Across Woodland';
+      else if (d.kind === 'flood') title = 'River Floodplain Inundation';
+      else if (d.kind === 'chemical_leak') title = 'Hazardous Toxic Chemical Leak';
+
+      issues.push({
+        id: `disaster-${d.id}`,
+        severity: 'critical',
+        title,
+        detail: `Estimated damage: ¢${d.damageCost.toLocaleString()}. Evacuate area and deploy emergency services.`,
+        count: 1,
+        focus: { x: d.x, z: d.z },
+      });
+    }
+  }
+
+  // Contagious health epidemics
+  if (stats.crises?.epidemicActive) {
+    issues.push({
+      id: 'health-epidemic',
+      severity: 'critical',
+      title: 'Contagious Disease Epidemic Outbreak',
+      detail: 'Uncollected trash or heavy industrial pollution has ignited disease. Clean up garbage backlogs and expand hospital coverage.',
+      count: 0,
+    });
+  }
+
+  // Crime hotspots and justice system bottlenecks
+  if (stats.justice) {
+    if (stats.justice.jailOccupancy >= 0.85) {
+      issues.push({
+        id: 'jail-overcrowded',
+        severity: 'critical',
+        title: 'Municipal Detention Overcrowded (Recidivism Spiking)',
+        detail: `Jail occupancy is at ${Math.round(stats.justice.jailOccupancy * 100)}%. Build additional police precincts to expand holding capacity.`,
+        count: stats.justice.inmatesCount,
+      });
+    } else if (stats.justice.crimeHotspotsCount >= 5) {
+      issues.push({
+        id: 'crime-hotspots',
+        severity: 'warning',
+        title: `${stats.justice.crimeHotspotsCount} Severe Crime Hotspots Identified`,
+        detail: 'Criminal activity concentrated around dark unlit streets and abandoned lots. Increase police funding and patrol beats.',
+        count: stats.justice.crimeHotspotsCount,
+      });
+    }
+  }
+
+  // Commercial supply chain stockouts
+  if (stats.supplyChain && stats.supplyChain.deliveryRate < 0.5 && stats.jobs > 0) {
+    issues.push({
+      id: 'commercial-stockouts',
+      severity: 'warning',
+      title: `${Math.round((1 - stats.supplyChain.deliveryRate) * 100)}% of Commercial Shops Suffer Goods Stockouts`,
+      detail: 'Shops are cut off from industrial freight or highway connections. Connect road networks or zone local factories.',
+      count: stats.supplyChain.insolventCount,
+    });
+  }
+
+  // Labor market education skill mismatch
+  if (stats.laborMarket && stats.laborMarket.skilledShortage > 50) {
+    issues.push({
+      id: 'skilled-labor-shortage',
+      severity: 'warning',
+      title: `${stats.laborMarket.skilledShortage} High-Tech & Office Desks Empty (College Graduate Shortage)`,
+      detail: 'Corporate offices require university graduates. Build high schools and college campuses to upskill the workforce.',
+      count: stats.laborMarket.skilledShortage,
+    });
+  }
+
+  // Groundwater aquifer table depletion & saltwater intrusion
+  if (stats.aquifer) {
+    if (stats.aquifer.saltwaterIntrusion) {
+      issues.push({
+        id: 'saltwater-intrusion',
+        severity: 'critical',
+        title: 'Coastal Aquifer Saltwater Intrusion',
+        detail: 'Excessive groundwater extraction has drawn seawater into the municipal water table, spoiling freshwater intake. Cut extraction immediately.',
+        count: 0,
+      });
+    } else if (stats.aquifer.aquiferLevelRatio < 0.25) {
+      issues.push({
+        id: 'aquifer-depletion',
+        severity: 'warning',
+        title: `Groundwater Reservoir Depleting (${Math.round(stats.aquifer.aquiferLevelRatio * 100)}% Remaining)`,
+        detail: 'Municipal extraction exceeds natural recharge rates. Build water towers or surface water reservoirs to replenish levels.',
+        count: 0,
+      });
+    }
   }
 
   // The rung before sewers are needed, with no drain yet: the one warning a

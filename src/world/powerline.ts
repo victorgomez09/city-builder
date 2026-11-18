@@ -273,3 +273,50 @@ export function powerLineCount(g: Pick<GridState, 'powerLine'>): number {
   for (let i = 0; i < g.powerLine.length; i++) if (g.powerLine[i] !== 0) n += 1;
   return n;
 }
+
+/**
+ * Detects orphaned power line tiles that have no connected neighbors
+ * (no adjacent power line, power station, substation, or conducting road).
+ */
+export function findOrphanedLineTiles(
+  g: PowerLineGridSource & { roadTier?: Uint8Array; buildingId?: Uint32Array },
+  clearedTiles: readonly TilePoint[],
+): TilePoint[] {
+  const orphans: TilePoint[] = [];
+  const checked = new Set<number>();
+  for (const t of clearedTiles) {
+    for (const [dx, dz] of [
+      [-1, 0],
+      [1, 0],
+      [0, -1],
+      [0, 1],
+    ] as const) {
+      const nx = t.x + dx;
+      const nz = t.z + dz;
+      if (!inBoundsOf(g.size, nx, nz)) continue;
+      const idx = indexOf(g.size, nx, nz);
+      if (checked.has(idx)) continue;
+      checked.add(idx);
+      if ((g.powerLine[idx] ?? 0) === 0) continue;
+      let neighbors = 0;
+      for (const [adjX, adjZ] of [
+        [-1, 0],
+        [1, 0],
+        [0, -1],
+        [0, 1],
+      ] as const) {
+        const ax = nx + adjX;
+        const az = nz + adjZ;
+        if (!inBoundsOf(g.size, ax, az)) continue;
+        const aidx = indexOf(g.size, ax, az);
+        if ((g.powerLine[aidx] ?? 0) !== 0) neighbors++;
+        if (g.buildingId && g.buildingId[aidx] !== 0) neighbors++;
+        if (g.roadTier && (g.roadTier[aidx] ?? 0) !== 0) neighbors++;
+      }
+      if (neighbors === 0) {
+        orphans.push({ x: nx, z: nz });
+      }
+    }
+  }
+  return orphans;
+}

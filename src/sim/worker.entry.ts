@@ -35,6 +35,7 @@ import {
   BRIDGE_COST_PER_METER_TILE,
   EXHUMATION_FEE_PER_INTERMENT,
   TILE_METERS,
+  TICKS_PER_MONTH,
   inBounds,
   tileIndex,
 } from '../shared/constants';
@@ -73,6 +74,7 @@ import {
   VehicleKind,
 } from '../shared/types';
 import type {
+  ActiveProtest,
   BuildingCatalogEntry,
   BuildingInstance,
   BusStop,
@@ -87,6 +89,7 @@ import type {
   Incident,
   JunctionControl,
   MainToWorker,
+  MapArchetype,
   MapData,
   RoadClassId,
   RoadProfile,
@@ -248,6 +251,15 @@ import {
 import { StopRegistry, sideTowards } from './stops';
 import { connectedDepots, fleetPools, inServiceAt, type ConnectedDepot } from './depots';
 import { DispatchSystem, MAX_SERVICE_VEHICLES } from './dispatch';
+import { UnrestSim } from './unrest';
+import { DemographicsSim } from './demographics';
+import { SupplyChainSim, type CommercialViability } from './supplychain';
+import { SystemicCrisesSim } from './crises';
+import { DisasterSim } from './disasters';
+import { JusticeSim } from './justice';
+import { MultimodalSim } from './multimodal';
+import { LaborMarketSim } from './labormarket';
+import { AquiferSim } from './aquifer';
 import { DeadRunSystem, MAX_DEAD_RUN_BUSES } from './deadruns';
 import { PolicyStore, effectivePollution, trafficWeight } from './policy';
 import { paintDistrict } from '../world/districts';
@@ -261,6 +273,7 @@ import {
 } from '../world/landfill';
 import {
   alongStreetRefusal,
+  findOrphanedLineTiles,
   lineChanges,
   feedsLines,
   restoreLineCommands,
@@ -555,6 +568,7 @@ class SimWorld implements WorkerSim {
   private initialized = false;
   private seed = 0;
   private mapName = '';
+  private archetype: MapArchetype = 'valley';
 
   private grid: GridState = createGrid(MAP_SIZE);
   /** Where every road is stored; the grid's road layers are derived from it. */
@@ -599,6 +613,26 @@ class SimWorld implements WorkerSim {
   private depots: ConnectedDepot[] = [];
   /** Latest active-incident list from dispatch, attached to each snapshot. */
   private latestIncidents: Incident[] = [];
+  /** Civic unrest simulation: citizen protests and demonstrations. */
+  private unrest = new UnrestSim();
+  /** Household demographics and socio-economics simulation. */
+  private demographicsSim = new DemographicsSim();
+  /** Commercial supply chain & freight viability simulation. */
+  private supplyChain = new SupplyChainSim();
+  /** Systemic crises & municipal debt default simulation. */
+  private crisesSim = new SystemicCrisesSim();
+  /** Natural and industrial disasters simulation. */
+  private disasterSim = new DisasterSim();
+  /** Dynamic crime, police patrol beats & justice system. */
+  private justiceSim = new JusticeSim();
+  /** Multimodal commute choice & congestion pricing simulation. */
+  private multimodalSim = new MultimodalSim();
+  /** Labor market & education skill matching simulation. */
+  private laborMarketSim = new LaborMarketSim();
+  /** Aquifer depletion & soil bioremediation simulation. */
+  private aquiferSim = new AquiferSim();
+  /** Latest active protests, attached to each snapshot. */
+  private latestProtests: ActiveProtest[] = [];
   /**
    * How hard each service kind is being leaned on, from the last service pass.
    * Null until one has run, since the services tick on their own period and a
@@ -809,6 +843,7 @@ class SimWorld implements WorkerSim {
     }
     this.seed = seed;
     this.mapName = map.name;
+    this.archetype = map.options?.archetype ?? 'valley';
     this.grid = createGrid(MAP_SIZE);
     this.grid.roads = createRoadNetwork();
     this.grid.oneCarriageway = oneCarriagewayIds(this.customRoadProfiles);
@@ -835,6 +870,8 @@ class SimWorld implements WorkerSim {
     this.transitResult = emptyTransitResult();
     this.depots = [];
     this.latestIncidents = [];
+    this.unrest = new UnrestSim();
+    this.latestProtests = [];
     this.serviceLoad = null;
     this.districtDefs = [];
     this.districtDefById.clear();
@@ -944,6 +981,8 @@ class SimWorld implements WorkerSim {
     this.transitResult = emptyTransitResult();
     this.depots = [];
     this.latestIncidents = [];
+    this.unrest = new UnrestSim();
+    this.latestProtests = [];
     this.serviceLoad = null;
     this.districtDefs = [];
     this.districtDefById.clear();
@@ -1287,6 +1326,15 @@ class SimWorld implements WorkerSim {
       network: this.network,
       funding: this.stats.serviceFunding,
     });
+    this.latestProtests = [
+      ...this.unrest.tick({
+        grid: g,
+        stats: this.stats,
+        buildings: this.registry.all(),
+        catalog: CATALOG,
+        tickNo: t,
+      }),
+    ];
     this.garbageTrucks.tick({
       network: this.network,
       depots: garbageDepots,
@@ -1305,7 +1353,7 @@ class SimWorld implements WorkerSim {
     }
 
     this.refreshNoiseWalls();
-    this.fieldSim.tick(g, t);
+    this.fieldSim.tick(g, t, this.stats.taxRates);
 
     const econ = this.economy.tick({
       g,
@@ -1553,6 +1601,68 @@ class SimWorld implements WorkerSim {
   private postSnapshot(): void {
     this.snapshotDue = false;
     this.stats.happiness = this.averageHappiness();
+    this.stats.demographics = this.demographicsSim.computeDemographics(
+      this.registry.all(),
+      this.grid,
+      this.stats.taxRates.res,
+    );
+    const laborRatio = this.stats.jobs > 0 ? this.stats.employed / this.stats.jobs : 1.0;
+    this.stats.supplyChain = this.supplyChain.computeSupplyChain(
+      this.registry.all(),
+      this.grid,
+      this.stats.taxRates.com,
+      laborRatio,
+    );
+    this.stats.crises = this.crisesSim.computeCrises(
+      this.stats.loanBalance,
+      this.stats.monthlyIncome,
+      this.stats.monthlyExpenses,
+      this.stats.serviceFunding,
+    );
+    const month = Math.floor(this.tickNo / TICKS_PER_MONTH) % 12;
+    const season =
+      month >= 2 && month <= 4
+        ? 'spring'
+        : month >= 5 && month <= 7
+          ? 'summer'
+          : month >= 8 && month <= 10
+            ? 'autumn'
+            : 'winter';
+    this.stats.disasters = this.disasterSim.tick(
+      this.tickNo,
+      season,
+      false,
+      this.registry.all(),
+      this.grid,
+    );
+    const unemployedFraction =
+      this.stats.population > 0
+        ? Math.max(0, 1 - this.stats.employed / Math.max(1, this.stats.jobs))
+        : 0;
+    this.stats.justice = this.justiceSim.computeJustice(
+      this.registry.all(),
+      this.grid,
+      unemployedFraction,
+      this.stats.serviceFunding.police,
+    );
+    const transitRiders = this.transitResult.ridership.reduce((sum, r) => sum + r, 0);
+    this.stats.multimodal = this.multimodalSim.computeModalSplit(
+      this.stats.population,
+      this.stats.jobs,
+      transitRiders,
+    );
+    const schoolCoverage = this.serviceLoad?.education?.load ?? 0.5;
+    this.stats.laborMarket = this.laborMarketSim.computeLaborMarket(
+      this.stats.population,
+      Math.round(this.stats.jobs * 0.55),
+      Math.round(this.stats.jobs * 0.45),
+      schoolCoverage,
+    );
+    this.stats.aquifer = this.aquiferSim.tick(
+      this.stats.waterDemand,
+      this.registry.all(),
+      this.archetype === 'island' || this.archetype === 'coastal',
+    );
     const vehicles = this.traffic.vehicleBuffer.slice();
     // Service vehicles ride the SAME shared buffer: overlay dispatch's own
     // MAX_SERVICE_VEHICLES slots onto the TAIL of the 1024-slot pool (traffic's
@@ -1620,6 +1730,10 @@ class SimWorld implements WorkerSim {
     // Active incidents (only when any are live — optional channel).
     if (this.latestIncidents.length > 0) {
       snap.incidents = this.latestIncidents.map((i) => ({ ...i }));
+    }
+    // Active citizen protests (only when any stand).
+    if (this.latestProtests.length > 0) {
+      snap.protests = this.latestProtests.map((p) => ({ ...p }));
     }
     // How hard each service is being leaned on, as the last service pass found
     // it — the services tick on their own period, so this rides every snapshot
@@ -1774,6 +1888,23 @@ class SimWorld implements WorkerSim {
     const facilityLoad = this.services.facilityLoad(inst.id);
     // A shore intake's yield, as the last utility pass read the water beside it.
     const intakeYield = this.intakeYield.get(inst.id);
+    const householdFinances = this.demographicsSim.computeBuildingFinances(
+      inst,
+      this.grid,
+      this.stats.taxRates.res,
+    );
+    let commercialViability: CommercialViability | undefined;
+    if (inst.state === BuildingState.Active && inst.catalogId.startsWith('com-')) {
+      const stockLevel = this.supplyChain.isFreightReachable(inst.x, inst.z) ? 1.0 : 0.0;
+      const laborRatio = this.stats.jobs > 0 ? this.stats.employed / this.stats.jobs : 1.0;
+      commercialViability = this.supplyChain.calculateViability(
+        inst,
+        this.grid,
+        this.stats.taxRates.com,
+        stockLevel,
+        laborRatio,
+      );
+    }
     const info: SelectionInfo = {
       building: { ...inst },
       happiness: Math.round((happinessByte / 255) * 100),
@@ -1781,6 +1912,8 @@ class SimWorld implements WorkerSim {
       // The catalog upkeep charge; grown buildings (zone set) carry none.
       monthlyUpkeep: entry.zone !== undefined ? 0 : entry.upkeep,
       occupancy: selectionOccupancy(entry, inst),
+      ...(householdFinances ? { householdFinances } : {}),
+      ...(commercialViability ? { commercialViability } : {}),
       ...(facilityLoad !== undefined ? { serviceLoad: facilityLoad } : {}),
       ...(entry.deathCare?.plots !== undefined
         ? {
@@ -3799,6 +3932,30 @@ class SimWorld implements WorkerSim {
           pulledDown.map((t) => lineKinds.get(tileIndex(t.x, t.z)) ?? 0),
         ),
       );
+    }
+    const orphaned = findOrphanedLineTiles(g, clearedTiles);
+    if (orphaned.length > 0) {
+      for (const t of orphaned) {
+        const idx = tileIndex(t.x, t.z);
+        lineKinds.set(idx, g.powerLine[idx] ?? 0);
+      }
+      const orphanedPulled = stringPowerLine(g, orphaned, false);
+      if (orphanedPulled.length > 0) {
+        for (const t of orphanedPulled) {
+          const price =
+            lineKinds.get(tileIndex(t.x, t.z)) === PowerLineKind.Cable
+              ? POWER_CABLE_COST_PER_TILE
+              : POWER_LINE_COST_PER_TILE;
+          refund += price * BULLDOZE_REFUND_RATE;
+        }
+        this.powerLineDirty = growRect(this.powerLineDirty, orphanedPulled);
+        inverse.push(
+          ...restoreLineCommands(
+            orphanedPulled,
+            orphanedPulled.map((t) => lineKinds.get(tileIndex(t.x, t.z)) ?? 0),
+          ),
+        );
+      }
     }
     // And the pipe under them, the same way.
     const pulledUp = layWaterPipe(g, clearedTiles, false);

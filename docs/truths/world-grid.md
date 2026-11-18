@@ -204,3 +204,9 @@ Back to [the index](../GROUND-TRUTHS.md).
   on a lot that rose behind it stood a metre above its own drive. —
   [municipal-services.md](../specs/municipal-services.md);
   `computeFlattenPatch` in `src/sim/worker.entry.ts`
+
+- [R-world-056] Disasters emerge dynamically from environmental conditions: summer heatwaves
+  ignite woodland wildfires, torrential rain induces riverbank flooding, and
+  industrial chemical leaks produce toxic plumes; emergency warning sirens trigger
+  district evacuations and unlock municipal recovery grants. —
+  [natural-and-industrial-disasters.md](../specs/natural-and-industrial-disasters.md)

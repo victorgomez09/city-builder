@@ -171,7 +171,7 @@ export function createProceduralWorldEvaluator(
   const treeNoise = createNoise2D(mulberry32((seed ^ TREE_SEED_SALT) >>> 0));
   const featureNoise = createNoise2D(mulberry32((seed ^ FEATURE_SEED_SALT) >>> 0));
 
-  const maxPeakAltitude = 10 + relief * 500;
+  const maxPeakAltitude = 400 + relief * 3200;
 
   function heightAt(tileX: number, tileZ: number): number {
     const nx = (tileX / (size - 1)) * 2 - 1;
@@ -269,12 +269,12 @@ export function createProceduralWorldEvaluator(
     );
     const baseTree = (t + 1) / 2;
 
-    const treeLineStart = Math.min(220, maxPeakAltitude * 0.5);
+    const treeLineStart = Math.min(1600, maxPeakAltitude * 0.75);
     let biomeFactor = 1.0;
     if (h < 1.5) {
       biomeFactor = 0.15;
     } else if (h > treeLineStart) {
-      biomeFactor = Math.max(0, 1 - (h - treeLineStart) / 60);
+      biomeFactor = Math.max(0, 1 - (h - treeLineStart) / 250);
     }
 
     const finalTree = baseTree * biomeFactor * (treeDensity * 1.6);

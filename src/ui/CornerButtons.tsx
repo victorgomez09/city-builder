@@ -10,6 +10,8 @@ import { PANEL_ROUNDED } from './theme';
 export interface CornerButtonsProps {
   cityInfoOpen: boolean;
   onToggleCityInfo: () => void;
+  budgetOpen: boolean;
+  onToggleBudget: () => void;
   helpOpen: boolean;
   onToggleHelp: () => void;
   statsOpen: boolean;
@@ -53,6 +55,8 @@ function CornerButton({
 export function CornerButtons({
   cityInfoOpen,
   onToggleCityInfo,
+  budgetOpen,
+  onToggleBudget,
   helpOpen,
   onToggleHelp,
   statsOpen,
@@ -66,12 +70,18 @@ export function CornerButtons({
 }: CornerButtonsProps): JSX.Element {
   return (
     <>
-      <div className="fixed left-3 top-3 z-20">
+      <div className="fixed left-3 top-3 z-20 flex items-center gap-1.5">
         <CornerButton
           label="City info"
           active={cityInfoOpen}
           onClick={onToggleCityInfo}
           icon="info"
+        />
+        <CornerButton
+          label="Municipal Budget & Taxes"
+          active={budgetOpen}
+          onClick={onToggleBudget}
+          icon="budget"
         />
       </div>
       <div className="fixed right-3 top-3 z-20 flex items-center gap-1.5">

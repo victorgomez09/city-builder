@@ -294,4 +294,12 @@ Back to [the index](../GROUND-TRUTHS.md).
   `src/shared/garage.ts`, `src/render/garagekit.ts`,
   `denseLotRequirement` in `src/shared/parkingcode.ts`,
   `footprintsOf` in `src/sim/growth.ts`
+- [R-services-041] Crime hot-spots concentrate dynamically around unlit streets, high
+  unemployment, and abandoned lots; police precinct patrol beats, municipal
+  court caseflow, and detention capacity directly suppress local criminal escalation. —
+  [crime-patrol-beats-and-justice-system.md](../specs/crime-patrol-beats-and-justice-system.md)
+- [R-services-042] Groundwater aquifers deplete under excessive municipal well extraction,
+  risking coastal saltwater intrusion; decommissioned heavy industrial brownfields
+  retain persistent soil toxicity requiring active bioremediation before residential redevelopment. —
+  [aquifer-depletion-and-soil-bioremediation.md](../specs/aquifer-depletion-and-soil-bioremediation.md)
 

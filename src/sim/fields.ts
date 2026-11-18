@@ -141,7 +141,7 @@ export class FieldSim {
    * Advances the fields by one tick. Only the fields/happiness pass whose
    * stagger slot matches `tickNo` actually run (see DIFFUSING_FIELDS above).
    */
-  tick(g: GridState, tickNo: number): void {
+  tick(g: GridState, tickNo: number, taxRates?: Record<string, number>): void {
     for (const sched of DIFFUSING_FIELDS) {
       if (tickNo % sched.period !== sched.offset) continue;
       if (sched.field === FieldId.LandValue) {
@@ -153,7 +153,7 @@ export class FieldSim {
       }
     }
     if (tickNo % HAPPINESS_PERIOD === HAPPINESS_OFFSET) {
-      this.computeHappiness(g);
+      this.computeHappiness(g, taxRates);
     }
   }
 
@@ -289,10 +289,11 @@ export class FieldSim {
    * recompute from the other fields' current values each time its slot
    * comes up:
    *   clamp(120 + edu/6 + health/6 + landValue/8 - pollution/4 - crime/4
-   *         - min(traffic, 180)/6)
+   *         - min(traffic, 180)/6 - taxPenalty)
    * All divisions are integer floor (Uint8 inputs are always >= 0).
+   * Incorporates citizen tax discontent/satisfaction relative to baseline 9%.
    */
-  private computeHappiness(g: GridState): void {
+  private computeHappiness(g: GridState, taxRates?: Record<string, number>): void {
     const happiness = g.fields[FieldId.Happiness]!;
     const education = g.fields[FieldId.Education]!;
     const health = g.fields[FieldId.Health]!;
@@ -300,6 +301,9 @@ export class FieldSim {
     const pollution = g.fields[FieldId.Pollution]!;
     const crime = g.fields[FieldId.Crime]!;
     const traffic = g.fields[FieldId.Traffic]!;
+
+    const resRate = taxRates?.res ?? 0.09;
+    const taxPenalty = Math.round((resRate - 0.09) * 160);
 
     for (let i = 0; i < MAP_TILES; i++) {
       const trafficCapped = Math.min(traffic[i]!, 180);
@@ -310,7 +314,8 @@ export class FieldSim {
         (landValue[i]! >> 3) -
         (pollution[i]! >> 2) -
         (crime[i]! >> 2) -
-        ((trafficCapped / 6) | 0);
+        ((trafficCapped / 6) | 0) -
+        taxPenalty;
       happiness[i] = clampByte(value);
     }
   }

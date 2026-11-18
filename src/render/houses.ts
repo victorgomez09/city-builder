@@ -24,7 +24,7 @@
  */
 import * as THREE from 'three';
 import { MeshStandardNodeMaterial } from 'three/webgpu';
-import { materialColor, mix, uniform, vec3 } from 'three/tsl';
+import { float, materialColor, mix, uniform, vec3 } from 'three/tsl';
 import { nightTintNode } from './nightlook';
 import {
   BuildingCatalogEntry,
@@ -99,28 +99,14 @@ const HASH_SLOT_TRIM = 75;
 const INITIAL_KIT_CAPACITY = 64;
 
 /**
- * What a house's roof is covered in, by the share of new single-family roofs
- * (Home Innovation): laminated asphalt shingle on two thirds and tile on 13%,
- * metal and the rest folded into the shingle share so the two sum to one.
- * GAF gives its 2025 shingle colours by sales rank only — charcoal, weathered
- * wood, pewter grey, barkwood — so each takes a descending rank weight,
- * 4:3:2:1, of the shingle share.
+ * European residential roof shares: warm Mediterranean / Central European terracotta clay tile (50%),
+ * natural European blue-grey slate (35%), zinc / standing-seam metal (10%), and weathered lead/pewter (5%).
  */
-const TILE_ROOF_SHARE = 0.13;
-const SHINGLE_ROOF_SHARE = 1 - TILE_ROOF_SHARE;
-const SHINGLE_RANK_WEIGHTS: readonly (readonly [number, number])[] = [
-  [materialHex('shingleCharcoal'), 4],
-  [materialHex('shingleWeathered'), 3],
-  [materialHex('shinglePewter'), 2],
-  [materialHex('shingleBarkwood'), 1],
-];
-const SHINGLE_RANK_WEIGHT_SUM = SHINGLE_RANK_WEIGHTS.reduce((sum, [, weight]) => sum + weight, 0);
-/** Each roof material's hex and the share of houses under it, summing to one. */
 export const HOUSE_ROOF_SHARES: readonly (readonly [number, number])[] = [
-  ...SHINGLE_RANK_WEIGHTS.map(
-    ([hex, weight]) => [hex, (SHINGLE_ROOF_SHARE * weight) / SHINGLE_RANK_WEIGHT_SUM] as const,
-  ),
-  [materialHex('clayRoof'), TILE_ROOF_SHARE],
+  [materialHex('clayRoof'), 0.5],
+  [materialHex('slateRoof'), 0.35],
+  [materialHex('darkBitumen'), 0.1],
+  [materialHex('metalPlates'), 0.05],
 ];
 /** Garage wall — plaster, distinct from the roof. */
 const GARAGE_WALL_COLOR = materialHex('whitePlaster');
@@ -242,9 +228,24 @@ function withoutUnderside(box: THREE.BoxGeometry): THREE.BoxGeometry {
   return box;
 }
 
-/** The fence's panels, the shutters, steps and chimneys are unit boxes with no underside. */
+/** The fence's panels, the shutters and steps are unit boxes with no underside. */
 function buildPanelGeometry(): THREE.BufferGeometry {
   return withoutUnderside(buildUnitBoxGeometry());
+}
+
+/** European brick chimney with corbelled crown and terracotta pot. */
+export function buildChimneyGeometry(): THREE.BufferGeometry {
+  const shaft = withoutUnderside(new THREE.BoxGeometry(0.88, 0.94, 0.88));
+  shaft.translate(0, 0.47, 0);
+  const crown = withoutUnderside(new THREE.BoxGeometry(1.0, 0.06, 1.0));
+  crown.translate(0, 0.94 + 0.03, 0);
+  const pot = new THREE.CylinderGeometry(0.22, 0.25, 0.16, 10);
+  pot.translate(0, 0.97 + 0.08, 0);
+  return mergeGeometryParts([
+    paintVertexColor(shaft, 0xffffff),
+    paintVertexColor(crown, 0xdddddd),
+    paintVertexColor(pot, materialHex('clayRoof')),
+  ]);
 }
 
 /**
@@ -507,6 +508,7 @@ export class HouseRoofRenderer {
   private readonly street: StreetLookup;
   private readonly catalogById: Map<string, BuildingCatalogEntry>;
   private readonly nightFactorUniform = uniform(0);
+  private readonly wetnessUniform = uniform(0);
   private readonly snowCoverUniform = uniform(0);
   private readonly pools: Record<HousePart, InstancedSlotPool>;
   private readonly carPool: VehicleKitPool;
@@ -536,7 +538,7 @@ export class HouseRoofRenderer {
     this.pools = {
       roof: kit(buildGableRoofGeometry()),
       fascia: kit(buildPanelGeometry()),
-      chimney: kit(buildPanelGeometry()),
+      chimney: kit(buildChimneyGeometry(), true),
       stoop: kit(buildPanelGeometry()),
       portico: kit(buildPorticoGeometry()),
       porch: kit(buildPanelGeometry()),
@@ -570,9 +572,21 @@ export class HouseRoofRenderer {
   private kitMaterial(vertexColors: boolean): MeshStandardNodeMaterial {
     const material = new MeshStandardNodeMaterial({ roughness: 1, metalness: 0, vertexColors });
     const nightTint = nightTintNode(this.nightFactorUniform);
+    const wetDarken = mix(vec3(1, 1, 1), vec3(0.76, 0.76, 0.80), this.wetnessUniform);
+    const baseColor = materialColor.mul(wetDarken);
     // Roofs take a white snow dusting when snowCover > 0
-    const snowLayer = mix(materialColor, vec3(0.96, 0.97, 1.0), this.snowCoverUniform.mul(0.7));
+    const snowLayer = mix(baseColor, vec3(0.96, 0.97, 1.0), this.snowCoverUniform.mul(0.75));
     material.colorNode = snowLayer.mul(nightTint);
+    material.roughnessNode = mix(
+      float(0.85).sub(this.wetnessUniform.mul(0.55)),
+      float(0.8),
+      this.snowCoverUniform,
+    );
+    material.metalnessNode = mix(
+      float(0.04).add(this.wetnessUniform.mul(0.24)),
+      float(0.0),
+      this.snowCoverUniform,
+    );
     return material;
   }
 
@@ -606,15 +620,16 @@ export class HouseRoofRenderer {
     this.carPool.finalize();
   }
 
-  /** Modulates house kit colors by nightFactor and snowCover. */
-  setEnvironment(nightFactor: number, snowCover = 0): void {
+  /** Modulates house kit colors by nightFactor, wetness (rain sheen), and snowCover. */
+  setEnvironment(nightFactor: number, wetness = 0, snowCover = 0): void {
     this.nightFactorUniform.value = Math.min(1, Math.max(0, nightFactor));
+    this.wetnessUniform.value = Math.min(1, Math.max(0, wetness));
     this.snowCoverUniform.value = Math.min(1, Math.max(0, snowCover));
   }
 
   /** 0 (day) .. 1 (night) — mixes the structure toward the same tint as the body. */
   setNightFactor(nightFactor: number): void {
-    this.setEnvironment(nightFactor, 0);
+    this.nightFactorUniform.value = Math.min(1, Math.max(0, nightFactor));
   }
 
   nightFactor(): number {

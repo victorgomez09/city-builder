@@ -357,7 +357,8 @@ export class EconomySystem {
         if (g.waterPipe[i] === 1) waterPipeUpkeep += WATER_PIPE_UPKEEP_PER_TILE;
       }
 
-      const loanInterest = stats.loanBalance * LOAN_MONTHLY_INTEREST;
+      const interestRate = stats.crises?.bondInterestRate ?? LOAN_MONTHLY_INTEREST;
+      const loanInterest = stats.loanBalance * interestRate;
       const funeralFees = (input.takeRegionalBodies?.() ?? 0) * REGIONAL_FUNERAL_FEE;
       // The fleet's own bill, apart from its depots' upkeep above: capacity
       // costs the building line, service the vehicle line.

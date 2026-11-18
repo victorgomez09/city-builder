@@ -218,8 +218,15 @@ const TENANT_ACCENTS: readonly SaturatedName[] = [
 ];
 /** A hotel's sign band is navy or green. */
 const HOTEL_ACCENTS: readonly SaturatedName[] = ['navyAccent', 'greenAccent'];
-/** A shop's awnings: dark green, burgundy or black, by building id. */
-const AWNING_LIVERIES: readonly MaterialName[] = ['greenPlaster', 'redPlaster', 'darkWood'];
+/** A shop's awnings: dark green, burgundy, French bistro blue, terracotta, ochre or dark wood, by building id. */
+export const AWNING_LIVERIES: readonly MaterialName[] = [
+  'greenPlaster',
+  'redPlaster',
+  'bluePlaster',
+  'clayRoof',
+  'yellowPlaster',
+  'darkWood',
+];
 /** An office's ribbon bands: grey or buff precast, by building id. */
 const PRECAST: readonly MaterialName[] = ['precastGrey', 'precastBuff'];
 /** A metal building's two-tone wainscot: rustic red, burnished slate or evergreen, by building id. */
@@ -307,6 +314,39 @@ function awningGeometry(): THREE.BufferGeometry {
 }
 
 /**
+ * Classical European cornice geometry:
+ * Extruded cyma/modillion moulding profile along X (from -0.5 to 0.5),
+ * height Y from -0.5 to 0.5, depth Z from -0.5 (against wall) to 0.5 (projecting out).
+ */
+function corniceGeometry(): THREE.BufferGeometry {
+  const profile: readonly (readonly [number, number])[] = [
+    [-0.5, 0.5],
+    [0.5, 0.5],
+    [0.5, 0.25],
+    [0.3, 0.05],
+    [0.3, -0.2],
+    [-0.5, -0.5],
+  ];
+  const positions: number[] = [];
+  const quad = (a: number[], b: number[], c: number[], d: number[]): void => {
+    positions.push(...a, ...b, ...c, ...a, ...c, ...d);
+  };
+  const at = (i: number, x: number): number[] => [x, profile[i]![1], profile[i]![0]];
+  for (let i = 0; i < profile.length; i += 1) {
+    const j = (i + 1) % profile.length;
+    quad(at(i, 0.5), at(i, -0.5), at(j, -0.5), at(j, 0.5));
+  }
+  for (let k = 1; k < profile.length - 1; k += 1) {
+    positions.push(...at(0, 0.5), ...at(k, 0.5), ...at(k + 1, 0.5));
+    positions.push(...at(0, -0.5), ...at(k + 1, -0.5), ...at(k, -0.5));
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+/**
  * A horizontal pressure vessel along Z: a cylinder closed by shallow domes, in
  * the proportion of a 3 m bullet 15 m long, scaled per instance to that.
  */
@@ -332,6 +372,7 @@ const PART_GEOMETRY: Partial<Record<BuildingPart, () => THREE.BufferGeometry>> =
   tanks: () => new THREE.CylinderGeometry(0.5, 0.5, 1, 14),
   bollard: () => new THREE.CylinderGeometry(0.5, 0.5, 1, 8),
   awning: awningGeometry,
+  cornice: corniceGeometry,
   processColumn: () => new THREE.CylinderGeometry(0.5, 0.5, 1, 14),
   furnace: () => new THREE.CylinderGeometry(0.5, 0.5, 1, 16),
   stove: () => new THREE.CylinderGeometry(0.5, 0.5, 1, 14),
@@ -768,12 +809,12 @@ const MIN_BAND_PIECE_M = 0.6;
 /** A box bay, 2 ft proud. A mid-rise's box bays are its colour-blocked panel fields: two or three materials by seed, the body's own only ever as the third. */
 export const BOX_BAY_PROUD_M = 0.6;
 export const MIDRISE_PANEL_MATERIALS: readonly MaterialName[] = [
-  'sidingLightGrey',
-  'sidingOffWhite',
-  'darkPanel',
+  'stoneBrick',
+  'redBrick',
+  'eifsCream',
 ];
 /** A garden walk-up is colour-blocked by stack: the body in one of its two materials, every other stack panelled 0.1 m proud in the other, from the brick base to the eave. */
-export const GARDEN_STACK_MATERIALS: readonly MaterialName[] = ['sidingLightGrey', 'redBrick'];
+export const GARDEN_STACK_MATERIALS: readonly MaterialName[] = ['stoneBrick', 'redBrick'];
 export const GARDEN_STACK_PANEL_PROUD_M = 0.1;
 /** An apartment block's parapet band, 30 in. */
 export const BLOCK_PARAPET_M = 0.76;
@@ -2921,7 +2962,7 @@ function apartmentParts(b: Block): PartPlacement[] {
     out.push(...mailKiosk(b, BREEZEWAY_WIDTH_M / 2, seedSide === 1 ? -1 : 1));
   }
 
-  if (entry.kind !== 'midrise' && entry.kind !== 'tower') return out;
+  if (entry.kind !== 'midrise' && entry.kind !== 'tower' && entry.kind !== 'mixed') return out;
   const podiumBox = b.podium ?? baseBox;
   const podiumTop = b.podium ? b.podium.yOffset + b.podium.h : 0;
   out.push(...podiumBand(entry, podiumBox, side, entry.kind === 'tower' ? LOBBY_WIDTH_M : 0));
@@ -2934,16 +2975,50 @@ function apartmentParts(b: Block): PartPlacement[] {
   };
 
   if (entry.kind === 'midrise') {
+    const span = facadeSpan(baseBox, side);
+    // Classical European roofline cornice
+    out.push(
+      onSide(
+        'cornice',
+        side,
+        0,
+        halfDepthTo(baseBox, side) + CORNICE_DEPTH_M / 2,
+        span,
+        CORNICE_DEPTH_M,
+        CORNICE_HEIGHT_M,
+        baseTop - CORNICE_HEIGHT_M / 2,
+        true,
+      ),
+    );
+    // Ground-floor storefront awnings
+    const bays = baysOf(span, SHOP_BAY_M);
+    const livery = materialUnit(pick(AWNING_LIVERIES, buildingId));
+    for (let i = 0; i < bays.count; i += 1) {
+      out.push({
+        ...onSide(
+          'awning',
+          side,
+          bayCentre(span, bays.count, i),
+          halfDepthTo(podiumBox, side) + AWNING_OUT_M / 2,
+          bays.width - AWNING_GAP_M,
+          AWNING_OUT_M,
+          AWNING_HEIGHT_M,
+          AWNING_UNDERSIDE_M + AWNING_HEIGHT_M / 2,
+          true,
+        ),
+        color: livery,
+      });
+    }
     // The box bays along a face cycle through the panel fields, so the storeys read as two or three colour blocks.
     const fields = midrisePanelFields(buildingId).map((m): RGB => materialUnit(m));
     const bayTop = baseTop - BLOCK_PARAPET_M;
     for (const face of [side, oppositeSide(side)]) {
-      const span = facadeSpan(baseBox, face);
-      const { count, width } = windowBays(entry, span);
+      const fSpan = facadeSpan(baseBox, face);
+      const { count, width } = windowBays(entry, fSpan);
       const bay = width - BALCONY_BAY_INSET_M;
       let field = 0;
       for (let i = 0; i < count; i += 1) {
-        const c = bayCentre(span, count, i);
+        const c = bayCentre(fSpan, count, i);
         if (i % 2 === 0) {
           out.push({
             ...againstFacade(
@@ -2963,6 +3038,89 @@ function apartmentParts(b: Block): PartPlacement[] {
           for (const y of upperFloors()) {
             out.push(...balcony(baseBox, face, c, bay, y, BLOCK_BALCONY_SLAB_M, true, railRgb));
           }
+        }
+      }
+    }
+    const [bw, bh, bd] = ELEVATOR_BULKHEAD_SIZE_M;
+    const bulkhead = onSide(
+      'elevatorBulkhead',
+      side,
+      0,
+      halfDepthTo(topBox, side) - ROOF_SETBACK_FROM_STREET_M - bd / 2,
+      bw,
+      bd,
+      bh,
+      roofY + bh / 2,
+    );
+    out.push(bulkhead);
+    const bulk = placementBounds(bulkhead);
+    out.push(
+      ...roofEquipment(topBox, roofY, side, null, true).filter(
+        (p) => !rectsOverlap(placementBounds(p), bulk),
+      ),
+    );
+  }
+
+  if (entry.kind === 'mixed') {
+    const span = facadeSpan(baseBox, side);
+    // Ground floor awnings over retail storefronts
+    const bays = baysOf(span, SHOP_BAY_M);
+    const livery = materialUnit(pick(AWNING_LIVERIES, buildingId));
+    for (let i = 0; i < bays.count; i += 1) {
+      out.push({
+        ...onSide(
+          'awning',
+          side,
+          bayCentre(span, bays.count, i),
+          halfDepthTo(podiumBox, side) + AWNING_OUT_M / 2,
+          bays.width - AWNING_GAP_M,
+          AWNING_OUT_M,
+          AWNING_HEIGHT_M,
+          AWNING_UNDERSIDE_M + AWNING_HEIGHT_M / 2,
+          true,
+        ),
+        color: livery,
+      });
+    }
+    // Belt-course cornice above retail podium
+    if (podiumTop > 0) {
+      out.push(
+        onSide(
+          'cornice',
+          side,
+          0,
+          halfDepthTo(baseBox, side) + CORNICE_DEPTH_M / 2,
+          span,
+          CORNICE_DEPTH_M,
+          CORNICE_HEIGHT_M,
+          podiumTop + CORNICE_HEIGHT_M / 2,
+          true,
+        ),
+      );
+    }
+    // Crown cornice at roofline
+    out.push(
+      onSide(
+        'cornice',
+        side,
+        0,
+        halfDepthTo(baseBox, side) + CORNICE_DEPTH_M / 2,
+        span,
+        CORNICE_DEPTH_M,
+        CORNICE_HEIGHT_M,
+        baseTop - CORNICE_HEIGHT_M / 2,
+        true,
+      ),
+    );
+    // Residential balconies on street and rear facades
+    for (const face of [side, oppositeSide(side)]) {
+      const fSpan = facadeSpan(baseBox, face);
+      const { count, width } = windowBays(entry, fSpan);
+      const bay = width - BALCONY_BAY_INSET_M;
+      for (let i = 0; i < count; i += 1) {
+        const c = bayCentre(fSpan, count, i);
+        for (const y of upperFloors()) {
+          out.push(...balcony(baseBox, face, c, bay, y, BLOCK_BALCONY_SLAB_M, true, railRgb));
         }
       }
     }
@@ -3336,14 +3494,16 @@ export function computePartPlacements(
       case 'cornice': {
         if (!side) break;
         out.push(
-          againstFacade(
+          onSide(
             part,
-            baseBox,
             side,
+            0,
+            halfDepthTo(baseBox, side) + CORNICE_DEPTH_M / 2,
             span,
             CORNICE_DEPTH_M,
             CORNICE_HEIGHT_M,
             baseTop - CORNICE_HEIGHT_M / 2,
+            true,
           ),
         );
         break;
@@ -4702,7 +4862,7 @@ export class BuildingKitRenderer {
   private readonly buildingSlots = new Map<number, { part: BuildingPart; slot: number }[]>();
   private readonly nightFactorUniform = uniform(0);
   /** The body parts: their instance colour, carried toward the shared night tint. */
-  private readonly material = nightBodyMaterial(this.nightFactorUniform, { vertexColors: true });
+  private readonly material = nightBodyMaterial(this.nightFactorUniform);
   /** LIT_DAY_FLOOR by day .. 1 at night: what the lit parts' glow is scaled by. */
   private readonly litIntensityUniform = uniform(LIT_DAY_FLOOR);
   /** The lit parts: their own colour by day, a warm glow in that colour that follows the night factor. */

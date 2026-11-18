@@ -837,6 +837,130 @@ export interface CityStats {
   loanBalance: number;
   taxRates: Record<Sector, number>;
   serviceFunding: Record<FundingKey, number>;
+  /**
+   * Socio-demographic breakdown and household economics:
+   * Low/medium/high income household distribution, poverty rate, and average disposable income.
+   */
+  demographics?: DemographicsStats;
+  /**
+   * Commercial supply chain metrics: freight delivery rate, average margin, and insolvency count.
+   */
+  supplyChain?: SupplyChainStats;
+  /**
+   * Systemic municipal crises: bond credit rating, penalty interest, active strikes, and epidemics.
+   */
+  crises?: SystemicCrisesStats;
+  /**
+   * Natural & industrial disasters: wildfires, floods, chemical leaks, and relief funds.
+   */
+  disasters?: DisasterStats;
+  /**
+   * Crime, police patrol beats & justice pipeline: hotspots, jail occupancy, and recidivism.
+   */
+  justice?: JusticeStats;
+  /**
+   * Multimodal commute choice & congestion pricing: modal split and toll revenue.
+   */
+  multimodal?: MultimodalStats;
+  /**
+   * Labor market & education skill matching: workforce segmentation, shortages, and surplus.
+   */
+  laborMarket?: LaborMarketStats;
+  /**
+   * Aquifer depletion & soil bioremediation: groundwater reservoir level and toxic brownfields.
+   */
+  aquifer?: AquiferStats;
+}
+
+export interface AquiferStats {
+  aquiferLevelRatio: number; // 0..1
+  waterExtractedKL: number;
+  rechargeRateKL: number;
+  saltwaterIntrusion: boolean;
+  toxicBrownfieldTilesCount: number;
+}
+
+export interface LaborTiers {
+  uneducated: number;
+  elementary: number;
+  secondary: number;
+  college: number;
+}
+
+export interface LaborMarketStats {
+  laborSupply: LaborTiers;
+  jobDemand: LaborTiers;
+  skilledShortage: number;
+  unskilledSurplus: number;
+  mismatchIndex: number;
+}
+
+export interface ModalSplit {
+  walking: number;
+  cycling: number;
+  transit: number;
+  vehicle: number;
+}
+
+export interface MultimodalStats {
+  modalSplit: ModalSplit;
+  congestionTollRevenue: number;
+  lezActive: boolean;
+  averageCommuteDistance: number;
+}
+
+export interface JusticeStats {
+  crimeHotspotsCount: number;
+  jailOccupancy: number; // 0..1
+  inmatesCount: number;
+  jailCapacity: number;
+  courtBacklog: number;
+  recidivismRate: number; // 0..1
+}
+
+export type DisasterKind = 'wildfire' | 'flood' | 'chemical_leak';
+
+export interface ActiveDisaster {
+  id: number;
+  kind: DisasterKind;
+  x: number;
+  z: number;
+  radius: number;
+  durationTicks: number;
+  maxDurationTicks: number;
+  severity: number;
+  evacuated: boolean;
+  damageCost: number;
+}
+
+export interface DisasterStats {
+  activeDisasters: ActiveDisaster[];
+  reliefGrantAvailable: boolean;
+  totalDamageIncurred: number;
+}
+
+export interface DemographicsStats {
+  lowIncome: number;
+  mediumIncome: number;
+  highIncome: number;
+  povertyRate: number; // 0..1 fraction of households in deficit
+  avgDisposableIncome: number; // ¢/month
+}
+
+export interface SupplyChainStats {
+  deliveryRate: number; // 0..1 fraction of shops receiving goods
+  commercialViability: number; // average profit margin %
+  insolventCount: number;
+}
+
+export type CreditRating = 'AAA' | 'A' | 'BBB' | 'Default';
+
+export interface SystemicCrisesStats {
+  creditRating: CreditRating;
+  bondInterestRate: number;
+  activeStrikes: FundingKey[];
+  epidemicActive: boolean;
+  epidemicSeverity: number;
 }
 
 export const BuildingState = {
@@ -1059,6 +1183,11 @@ export interface SimSnapshot {
    * existing `vehicles` buffer via VehicleKind.Fire/Police/Ambulance.
    */
   incidents?: Incident[];
+  /**
+   * Civic unrest & citizen demonstrations: active protest crowds on streets/plazas.
+   * Cosmetic crowd instancing plus road capacity reduction.
+   */
+  protests?: ActiveProtest[];
   /**
    * Districts & policies. Mirrors how zones patch: `patches` are
    * ZonePatch-shaped regions whose `data` bytes are per-tile district ids
@@ -2018,6 +2147,25 @@ export interface SelectionInfo {
    * Absent for anything that is not a depot.
    */
   depot?: { holds: number; fields: number; inService: number };
+  /**
+   * Socio-economic household balance sheet (residential buildings only).
+   */
+  householdFinances?: {
+    incomeTier: 'low' | 'medium' | 'high';
+    monthlyWage: number;
+    livingCosts: number;
+    disposableIncome: number;
+    inDeficit: boolean;
+  };
+  /**
+   * Commercial business profitability and goods supply status (commercial buildings only).
+   */
+  commercialViability?: {
+    profitMargin: number;
+    stockLevel: number;
+    status: 'thriving' | 'profitable' | 'struggling' | 'insolvent';
+    monthlyRevenue: number;
+  };
 }
 
 /**
@@ -2209,6 +2357,23 @@ export interface Incident {
 }
 
 /**
+ * Civic protest — dynamic citizen demonstrations emerging from high tax
+ * burdens, unemployment, severe pollution or broken services.
+ * Renders instanced picketer crowds and applies traffic flow penalties to
+ * adjacent road edges.
+ */
+export interface ActiveProtest {
+  id: number;
+  kind: 'tax' | 'unemployment' | 'pollution' | 'services' | 'general';
+  x: number;
+  z: number;
+  severity: number; // 0..1
+  grievance: string;
+  durationTicks: number;
+  targetBuildingId?: number;
+}
+
+/**
  * Districts & policies — a named region the player paints onto
  * GridState.district (per-tile id). `id` is 1..255 (0 is reserved for
  * "unassigned" in the tile layer); `color` is packed hex RGB for the overlay
@@ -2229,7 +2394,14 @@ export interface District {
  *   greenEnergy     — a pollution reduction on the district's tiles
  * Additive string-union; extend by appending new members.
  */
-export type Policy = 'lowTax' | 'highTax' | 'noHeavyTraffic' | 'greenEnergy';
+export type Policy =
+  | 'lowTax'
+  | 'highTax'
+  | 'noHeavyTraffic'
+  | 'greenEnergy'
+  | 'tourismQuarter'
+  | 'highTechCampus'
+  | 'cleanEcoDistrict';
 
 /**
  * Map archetype — the general terrain type of the map, influencing its

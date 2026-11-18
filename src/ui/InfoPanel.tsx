@@ -297,10 +297,81 @@ export function InfoPanel(): JSX.Element | null {
           {info && isZoned && (
             <Row label="Tax" value={`¢${Math.round(info.monthlyTax)}/mo`} testId="tax-row" />
           )}
+          {info?.householdFinances && (
+            <>
+              <Row
+                label="Income Tier"
+                value={
+                  info.householdFinances.incomeTier === 'low'
+                    ? 'Low Income'
+                    : info.householdFinances.incomeTier === 'medium'
+                      ? 'Middle Class'
+                      : 'Affluent'
+                }
+                testId="income-tier-row"
+              />
+              <Row
+                label="Household Net"
+                value={`${info.householdFinances.disposableIncome >= 0 ? '+' : '-'}¢${Math.abs(info.householdFinances.disposableIncome)}/mo`}
+                testId="household-net-row"
+              />
+            </>
+          )}
+          {info?.commercialViability && (
+            <>
+              <Row
+                label="Viability"
+                value={
+                  info.commercialViability.status === 'thriving'
+                    ? 'Thriving'
+                    : info.commercialViability.status === 'profitable'
+                      ? 'Profitable'
+                      : info.commercialViability.status === 'struggling'
+                        ? 'Struggling'
+                        : 'Insolvent'
+                }
+                testId="commercial-viability-row"
+              />
+              <Row
+                label="Margin"
+                value={`${info.commercialViability.profitMargin >= 0 ? '+' : ''}${info.commercialViability.profitMargin}%`}
+                testId="commercial-margin-row"
+              />
+              <Row
+                label="Inventory"
+                value={
+                  info.commercialViability.stockLevel >= 0.8
+                    ? 'Stocked'
+                    : info.commercialViability.stockLevel >= 0.3
+                      ? 'Low Stock'
+                      : 'Stockout'
+                }
+                testId="commercial-stock-row"
+              />
+            </>
+          )}
         </div>
 
-        {activeProblems.length > 0 && (
+        {(activeProblems.length > 0 ||
+          info?.householdFinances?.inDeficit ||
+          info?.commercialViability?.status === 'insolvent') && (
           <div className="flex flex-wrap gap-1">
+            {info?.householdFinances?.inDeficit && (
+              <span
+                data-testid="household-deficit-tag"
+                className="rounded-full bg-[#e5533f]/20 px-2 py-0.5 text-xs text-[#e5533f]"
+              >
+                Household Deficit
+              </span>
+            )}
+            {info?.commercialViability?.status === 'insolvent' && (
+              <span
+                data-testid="commercial-insolvent-tag"
+                className="rounded-full bg-[#e5533f]/20 px-2 py-0.5 text-xs text-[#e5533f]"
+              >
+                Commercial Blight
+              </span>
+            )}
             {activeProblems.map((p) => (
               <span
                 key={p.label}

@@ -60,6 +60,16 @@ const SIGN_COLOR = 0x294d85;
 const POLE_COLOR = 0x73787f;
 const BIN_COLOR = 0x384d42;
 
+/** Projection frame for free-form road curves: heading (hx, hz), normal (nx, nz), centre (cx, cz). */
+export interface CurveProjectionFrame {
+  hx: number;
+  hz: number;
+  nx: number;
+  nz: number;
+  cx: number;
+  cz: number;
+}
+
 /** A road tile as a stop needs to read it. */
 export interface StopRoad {
   tier: RoadTier;
@@ -69,6 +79,8 @@ export interface StopRoad {
   flow: number;
   /** The world axis a stop's side is offset along: 'z' for a road running east-west. */
   lateral: FurnitureAxis;
+  /** Optional free-form curve projection frame. */
+  curveFrame?: CurveProjectionFrame | undefined;
 }
 
 export interface StopSpot {
@@ -120,6 +132,7 @@ export function busStopPlacement(
   profile: RoadProfile | undefined,
   flow: number,
   lateral: FurnitureAxis,
+  curveFrame?: CurveProjectionFrame,
 ): BusStopPlacement {
   const section = profile ?? presetProfileForTier(tier);
   const side: 1 | -1 = stop.side === 0 ? -1 : 1;
@@ -132,13 +145,29 @@ export function busStopPlacement(
   const leading = leadingSign(lateral, side, flow);
   const cx = tileToWorld(stop.x);
   const cz = tileToWorld(stop.z);
-  const at = (along: number, out: number): StopSpot => ({
-    x: lateral === 'z' ? cx + along : cx + side * out,
-    z: lateral === 'z' ? cz + side * out : cz + along,
-    out,
-  });
-  const yaw =
-    lateral === 'z' ? (side === 1 ? Math.PI : 0) : side === 1 ? -Math.PI / 2 : Math.PI / 2;
+  const at = (along: number, out: number): StopSpot => {
+    if (curveFrame) {
+      return {
+        x: curveFrame.cx + curveFrame.hx * along + curveFrame.nx * side * out,
+        z: curveFrame.cz + curveFrame.hz * along + curveFrame.nz * side * out,
+        out,
+      };
+    }
+    return {
+      x: lateral === 'z' ? cx + along : cx + side * out,
+      z: lateral === 'z' ? cz + side * out : cz + along,
+      out,
+    };
+  };
+  const yaw = curveFrame
+    ? Math.atan2(-side * curveFrame.nx, -side * curveFrame.nz)
+    : lateral === 'z'
+      ? side === 1
+        ? Math.PI
+        : 0
+      : side === 1
+        ? -Math.PI / 2
+        : Math.PI / 2;
   const padMid = kerbOut + BUS_STOP_PAD.out / 2;
   const frontOut = kerbOut + BUS_STOP_SHELTER_FRONT_M;
   const shelterOut = frontOut + BUS_SHELTER.d / 2;
@@ -262,7 +291,14 @@ export class BusStopRenderer {
       if (!road) continue;
       this.drawn.push({
         stop,
-        placement: busStopPlacement(stop, road.tier, road.profile, road.flow, road.lateral),
+        placement: busStopPlacement(
+          stop,
+          road.tier,
+          road.profile,
+          road.flow,
+          road.lateral,
+          road.curveFrame,
+        ),
       });
     }
     const shelters = this.drawn.filter((d) => d.placement.shelter);
@@ -326,7 +362,14 @@ export class BusStopRenderer {
   setGhost(stop: BusStop | null, road: StopRoad | null, valid: boolean): void {
     this.clearGhost();
     if (!stop || !road) return;
-    const placement = busStopPlacement(stop, road.tier, road.profile, road.flow, road.lateral);
+    const placement = busStopPlacement(
+      stop,
+      road.tier,
+      road.profile,
+      road.flow,
+      road.lateral,
+      road.curveFrame,
+    );
     const material = new THREE.MeshBasicMaterial({
       color: valid ? GHOST_OK : GHOST_BAD,
       transparent: true,

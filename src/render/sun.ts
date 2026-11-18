@@ -7,9 +7,14 @@
  */
 export function sunDirection(t: number): { x: number; y: number; z: number } {
   const angle = t * Math.PI * 2;
-  const elevation = -Math.cos(angle);
+  const elev = -Math.cos(angle);
+  // Cap noon elevation to ~58° (European latitude) so buildings cast clear diagonal shadows instead of collapsing underneath
+  const elevation = elev > 0 ? elev * 0.82 : elev;
   const rawX = Math.sin(angle);
-  const rawZ = 0.15; // small fixed tilt: keeps the shadow azimuth well-defined at zenith/nadir
+  // Dynamic southern sky arc: azimuth sweeps smoothly from East-South-East at sunrise,
+  // reaches full South (+Z) at solar noon, and sets West-South-West at sunset.
+  const dayFactor = Math.max(0, elev);
+  const rawZ = 0.22 + 0.3 * dayFactor;
   const len = Math.hypot(rawX, elevation, rawZ) || 1;
   return { x: rawX / len, y: elevation / len, z: rawZ / len };
 }

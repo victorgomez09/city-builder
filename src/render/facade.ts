@@ -350,58 +350,44 @@ export interface MaterialShare {
   readonly share: number;
 }
 
-/** Principal exterior wall of 2024 single-family starts (NAHB on the Census Survey of Construction): vinyl 26%, stucco 25%, fibre cement 23%, brick 16%, wood 6%. */
-const VINYL_SIDING_SHARE = 0.26;
-const STUCCO_SHARE = 0.25;
-const FIBRE_CEMENT_SIDING_SHARE = 0.23;
-const BRICK_SHARE = 0.16;
-const WOOD_SHARE = 0.06;
-/** Vinyl and fibre cement both read as lap siding at 40 m. */
-const LAP_SIDING_SHARE = VINYL_SIDING_SHARE + FIBRE_CEMENT_SIDING_SHARE;
-/** What the five claddings leave (stone, block and the rest), drawn as the chart's coloured plasters in equal parts. */
-const OTHER_CLADDING_SHARE = 1 - LAP_SIDING_SHARE - STUCCO_SHARE - BRICK_SHARE - WOOD_SHARE;
-const OTHER_CLADDING_MATERIALS: readonly MaterialName[] = ['yellowPlaster', 'greenPlaster'];
-
-/** Siding colours sold (Alside's 2025 survey): off-white 18%, white 16%, light brown 13%, light grey 11%, medium blue 8%, normalised over the lap siding share. */
-const SIDING_COLOUR_WEIGHTS: readonly MaterialShare[] = [
-  { material: 'sidingOffWhite', share: 18 },
-  { material: 'sidingWhite', share: 16 },
-  { material: 'sidingLightBrown', share: 13 },
-  { material: 'sidingLightGrey', share: 11 },
-  { material: 'sidingBlue', share: 8 },
+/** European residential claddings: lime & ochre stucco plasters, clay brick, cut ashlar stone, and timber accents. */
+export const HOUSE_BODY_SHARES: readonly MaterialShare[] = [
+  { material: 'eifsCream', share: 0.22 }, // Parisian limestone / warm cream stucco
+  { material: 'whitePlaster', share: 0.18 }, // Mediterranean / Continental whitewash
+  { material: 'yellowPlaster', share: 0.16 }, // Tuscan / Central European ochre plaster
+  { material: 'redBrick', share: 0.16 }, // Northern / Western European red brick
+  { material: 'stoneBrick', share: 0.12 }, // Ashlar stone masonry
+  { material: 'redPlaster', share: 0.08 }, // Venetian / Mediterranean terracotta stucco
+  { material: 'darkWood', share: 0.05 }, // Alpine / Tudor half-timbering accent
+  { material: 'sand', share: 0.03 }, // Sandstone finish
 ];
 
-/** `weights` scaled so they sum to `total`. */
-function scaledToShare(weights: readonly MaterialShare[], total: number): readonly MaterialShare[] {
-  const sum = weights.reduce((acc, w) => acc + w.share, 0);
-  return weights.map((w) => ({ material: w.material, share: (total * w.share) / sum }));
-}
-
-/** `materials` in equal shares summing to one. */
 function evenShares(materials: readonly MaterialName[]): readonly MaterialShare[] {
   return materials.map((material) => ({ material, share: 1 / materials.length }));
 }
 
-/** A house's body: lap siding by colour, stucco, brick, wood and the rest. The duplex, fourplex, townhouse and multiplex are a house's form and take the same. */
-export const HOUSE_BODY_SHARES: readonly MaterialShare[] = [
-  ...scaledToShare(SIDING_COLOUR_WEIGHTS, LAP_SIDING_SHARE),
-  { material: 'whitePlaster', share: STUCCO_SHARE },
-  { material: 'redBrick', share: BRICK_SHARE },
-  { material: 'brightWood', share: WOOD_SHARE },
-  ...scaledToShare(evenShares(OTHER_CLADDING_MATERIALS), OTHER_CLADDING_SHARE),
-];
-/** A garden walk-up is fibre cement and brick colour-blocked: the body in one, its alternate stacks in the other. */
+/** European courtyard walk-ups: warm plaster, limestone, and red brick. */
 export const GARDEN_BODY_SHARES: readonly MaterialShare[] = evenShares([
-  'sidingLightGrey',
+  'eifsCream',
+  'yellowPlaster',
+  'redBrick',
+  'stoneBrick',
+]);
+
+/** European mid-rise blocks (Haussmannian / Continental perimeter blocks): limestone, ashlar stone, and brick dressings. */
+export const MIDRISE_BODY_SHARES: readonly MaterialShare[] = evenShares([
+  'eifsCream',
+  'whitePlaster',
+  'stoneBrick',
   'redBrick',
 ]);
-/** A 5-over-1's storeys are fibre cement panels over the brick podium. */
-export const MIDRISE_BODY_SHARES: readonly MaterialShare[] = evenShares([
-  'sidingLightGrey',
-  'sidingOffWhite',
+
+/** European high-rise towers: glass curtain wall with precast limestone and bronze/slate spandrels. */
+export const TOWER_BODY_SHARES: readonly MaterialShare[] = evenShares([
+  'curtainWall',
+  'precastBuff',
+  'stoneBrick',
 ]);
-/** A tower is a curtain wall. */
-export const TOWER_BODY_SHARES: readonly MaterialShare[] = evenShares(['curtainWall']);
 
 /** The shares a residential kind's body is drawn by, or null for anything that is not one. */
 export function residentialBodyShares(
@@ -411,6 +397,7 @@ export function residentialBodyShares(
     case 'garden':
       return GARDEN_BODY_SHARES;
     case 'midrise':
+    case 'mixed':
       return MIDRISE_BODY_SHARES;
     case 'tower':
       return TOWER_BODY_SHARES;

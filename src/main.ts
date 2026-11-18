@@ -22,6 +22,7 @@ import type {
   BuildingCatalogEntry,
   BuildingInstance,
   BusStopState,
+  ActiveProtest,
   CityStats,
   Command,
   CommandAck,
@@ -92,6 +93,7 @@ import { createBloomPipeline, type BloomPipeline } from './render/bloom';
 import { CloudLayer } from './render/clouds';
 import { WeatherManager, type WeatherType } from './render/weather';
 import { PrecipitationRenderer } from './render/precipitation';
+import { setGlobalEnvironment } from './render/nightlook';
 import { TerrainRenderer } from './render/terrain';
 import { WaterRenderer } from './render/water';
 import { TreeRenderer } from './render/trees';
@@ -148,6 +150,7 @@ import {
 } from './render/transit';
 import { PedestrianRenderer, type StopIdleInput } from './render/pedestrians';
 import { ServiceVehicleRenderer } from './render/servicevehicles';
+import { ProtestRenderer } from './render/protests';
 import { DistrictsRenderer } from './render/districts';
 import { LandfillRenderer } from './render/landfill';
 import { PhotoModeController } from './render/photomode';
@@ -426,6 +429,8 @@ async function startGame(session: Extract<AppSession, { screen: 'playing' }>): P
   const overlays = new OverlayRenderer(world.scene);
   overlays.setSoil(clientGrid.soil);
   const idPicker = new IdPicker();
+  const protestRenderer = new ProtestRenderer();
+  world.scene.add(protestRenderer.group);
 
   // World feedback & selection FX.
   const ghosts = new GhostRenderer(world.scene, heightAt);
@@ -1674,6 +1679,7 @@ async function startGame(session: Extract<AppSession, { screen: 'playing' }>): P
   let zonedUnserved: ZonedUnserved = { power: 0, water: 0, sewer: 0 };
   let deathCare: DeathCareReport = { facilities: [], uncollected: 0, regionalThisMonth: 0 };
   let incidents: readonly Incident[] = [];
+  let protests: readonly ActiveProtest[] = [];
   /** Latest flattened transit stop tile-points, mirrored so pedestrian
    * idlers can be re-applied on building-only deltas (PedestrianRenderer does
    * not cache stops itself — same pattern as knownBuildings above). */
@@ -2367,6 +2373,7 @@ async function startGame(session: Extract<AppSession, { screen: 'playing' }>): P
     if (snap.deathCare) deathCare = snap.deathCare;
     // Incidents travel only while any stand, so absent is none.
     incidents = snap.incidents ?? [];
+    protests = snap.protests ?? [];
     if (++snapshotsSinceAdvice >= ADVISOR_REFRESH_SNAPSHOTS) {
       snapshotsSinceAdvice = 0;
       state.setAdvisorIssues(
@@ -2378,6 +2385,7 @@ async function startGame(session: Extract<AppSession, { screen: 'playing' }>): P
           deathCare,
           incidents,
           state.settings.unlimitedMoney,
+          protests,
         ),
       );
     }
@@ -2771,6 +2779,8 @@ async function startGame(session: Extract<AppSession, { screen: 'playing' }>): P
     }
     // Incidents: place/clear the marker pins (empty array clears them).
     serviceVehicles.setIncidents(devIncidents ?? snap.incidents ?? []);
+    // Protests: update instanced crowd demonstrators & placards at active protest sites.
+    protestRenderer.update(snap.protests ?? [], (x, z) => heightAt(tileToWorld(x), tileToWorld(z)));
     // Districts: fold patches into the tint/boundary overlay + publish defs.
     if (snap.districts) {
       districtsRenderer.applyDistrictPatches(snap.districts.patches, snap.districts.defs);
@@ -3190,9 +3200,10 @@ async function startGame(session: Extract<AppSession, { screen: 'playing' }>): P
   handle.start((dtMs) => {
     lastFrameMs = dtMs;
     rig.update(dtMs);
+    const focusGroundY = heightAt(rig.state.targetX, rig.state.targetZ);
     // Shadow sweep: keep the limited-span sun shadow frustum centred on the
     // camera target so lamp/prop/pedestrian shadows stay resolved on screen.
-    world.setShadowFocus(rig.state.targetX, rig.state.targetZ);
+    world.setShadowFocus(rig.state.targetX, rig.state.targetZ, focusGroundY);
     terrain.update();
     water.update(dtMs, lastNightFactor);
 
@@ -3206,12 +3217,14 @@ async function startGame(session: Extract<AppSession, { screen: 'playing' }>): P
     }
 
     // Surface environment: puddle sheen, wet asphalt darkening, snow accumulation, and seasonal ground tones
+    setGlobalEnvironment(atmo.wetness, atmo.snowCover);
     terrain.setEnvironment(lastNightFactor, atmo.wetness, atmo.snowCover, currentMonth);
     roadsMesh.setEnvironment(lastNightFactor, atmo.wetness, atmo.snowCover);
     freeRoads.setEnvironment(lastNightFactor, atmo.wetness, atmo.snowCover);
-    houseRoofs.setEnvironment(lastNightFactor, atmo.snowCover);
+    instancer.setEnvironment(lastNightFactor, atmo.wetness, atmo.snowCover);
+    houseRoofs.setEnvironment(lastNightFactor, atmo.wetness, atmo.snowCover);
+    vehicles.setEnvironment(lastNightFactor, atmo.wetness, atmo.snowCover);
 
-    const focusGroundY = heightAt(rig.state.targetX, rig.state.targetZ);
     precipitation.update(
       dtMs,
       rig.state.targetX,

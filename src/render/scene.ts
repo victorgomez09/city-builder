@@ -33,6 +33,7 @@ export async function createRenderer(container: HTMLElement): Promise<RendererHa
   const renderer = new WebGPURenderer({ antialias: true });
   await renderer.init();
   renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   // Filmic tone mapping so the night city's emissive windows/
   // lamps (HDR values > 1 at WINDOW_EMISSIVE_STRENGTH) roll off into a soft
   // glow instead of clamping to flat white sheets.
@@ -155,31 +156,31 @@ const NIGHT_KEYFRAME: Keyframe = {
   sunIntensity: 0.55,
   hemiSkyColor: [0.478, 0.533, 0.769], // CityRT night sky hs #7A88C4
   hemiGroundColor: [0.235, 0.267, 0.408], // CityRT night ground hg #3C4468
-  hemiIntensity: 0.65,
+  hemiIntensity: 0.55,
   backgroundColor: [0.184, 0.227, 0.408], // CityRT night sky #2F3A68
-  shadowIntensity: 0.2,
+  shadowIntensity: 0.3,
   nightFactor: 1,
 };
 
 const DUSK_KEYFRAME: Keyframe = {
   sunColor: [0.75, 0.68, 0.86], // cooling toward violet
-  sunIntensity: 0.65,
+  sunIntensity: 0.70,
   hemiSkyColor: [0.65, 0.62, 0.8],
   hemiGroundColor: [0.25, 0.22, 0.3],
   hemiIntensity: 0.65,
   backgroundColor: [0.35, 0.3, 0.45], // violet dusk sky
-  shadowIntensity: 0.3,
+  shadowIntensity: 0.50,
   nightFactor: 0.65,
 };
 
 const GOLDEN_KEYFRAME: Keyframe = {
   sunColor: [1.0, 0.804, 0.651], // CityRT evening sun #FFCDA6
-  sunIntensity: 1.1,
+  sunIntensity: 1.2,
   hemiSkyColor: [0.902, 0.816, 0.886], // CityRT evening hs #E6D0E2
   hemiGroundColor: [0.659, 0.573, 0.604], // CityRT evening hg #A8929A
   hemiIntensity: 0.85,
   backgroundColor: [0.949, 0.725, 0.58], // CityRT evening bot #F2B994
-  shadowIntensity: 0.6,
+  shadowIntensity: 0.70,
   nightFactor: 0.2,
 };
 
@@ -188,9 +189,9 @@ const DAY_KEYFRAME: Keyframe = {
   sunIntensity: 1.45,
   hemiSkyColor: [0.914, 0.894, 0.949], // CityRT daytime hs lavender #E9E4F2
   hemiGroundColor: [0.725, 0.663, 0.549], // CityRT daytime hg warm earth #B9A98C
-  hemiIntensity: 1.15,
+  hemiIntensity: 1.10, // balanced sky fill prevents shaded faces from crushing to black
   backgroundColor: [0.945, 0.902, 0.824], // CityRT daytime paper horizon #F1E6D2
-  shadowIntensity: 0.55, // silky soft architectural shadows
+  shadowIntensity: 0.72, // crisp, clear architectural shadows with readable shaded details
   nightFactor: 0,
 };
 
@@ -309,7 +310,7 @@ export interface WorldScene {
   scene: THREE.Scene;
   setTimeOfDay(t: number): void;
   /** Slews the (limited-span) sun shadow frustum to centre on a world XZ point — the camera target — so shadows stay resolved where the player is looking. */
-  setShadowFocus(x: number, z: number): void;
+  setShadowFocus(x: number, z: number, y?: number): void;
   /** Modulates atmospheric fog, sun/ambient lighting, sky and sun disc by dynamic weather. */
   setWeatherAtmosphere(atmo: WeatherAtmosphere): void;
 }
@@ -326,7 +327,8 @@ export function createWorldScene(): WorldScene {
   const sun = new THREE.DirectionalLight(0xffffff, 1.5);
   sun.castShadow = true;
   sun.shadow.mapSize.set(4096, 4096);
-  sun.shadow.bias = -0.0006;
+  sun.shadow.bias = 0.00005;
+  sun.shadow.normalBias = 0.03;
 
   // Shadow sweep: rather than stretch one map over the
   // whole 4096m map (~1.1 m/texel — far too coarse to resolve a lamp pole, a
@@ -338,13 +340,14 @@ export function createWorldScene(): WorldScene {
   // reading as a detached floating patch. Distant props fall outside the
   // frustum, which is fine for a top-down RTS.
   const SHADOW_SPAN_METERS = 360;
+  const sunDistance = 2500;
   const shadowCamera = sun.shadow.camera;
   shadowCamera.left = -SHADOW_SPAN_METERS;
   shadowCamera.right = SHADOW_SPAN_METERS;
   shadowCamera.top = SHADOW_SPAN_METERS;
   shadowCamera.bottom = -SHADOW_SPAN_METERS;
-  shadowCamera.near = mapMeters * 0.2;
-  shadowCamera.far = mapMeters * 3.2;
+  shadowCamera.near = 50;
+  shadowCamera.far = sunDistance + SHADOW_SPAN_METERS * 2.5;
   shadowCamera.updateProjectionMatrix();
 
   // The point the shadow frustum + sun rig are centred on (world XZ). Defaults
@@ -369,11 +372,10 @@ export function createWorldScene(): WorldScene {
   sky.mesh.updateMatrix();
   const sunBillboard = new SunBillboard(scene);
 
-  const sunDistance = mapMeters * 1.4;
   // Minimum elevation (as sin θ) the shadow-casting direction is lifted to when
-  // the sun is low — ~27°, capping cast-shadow length at ~2× object height so
-  // dawn/dusk tree shadows stay tight instead of raking across the ground.
-  const MIN_SHADOW_SUN_ELEVATION_SIN = 0.45;
+  // the sun is low — ~11.5° (sin ~0.20), capping cast-shadow length at ~5× object height so
+  // dawn/dusk tree and building shadows stretch dynamically across the terrain without raking to infinity.
+  const MIN_SHADOW_SUN_ELEVATION_SIN = 0.2;
 
   // Re-places the sun light so it sits `sunDistance` up-sun of the current
   // shadow focus, with its target ON the focus. Called whenever either the
@@ -424,6 +426,7 @@ export function createWorldScene(): WorldScene {
       shadowFocus.z + dz * sunDistance,
     );
     sun.target.position.copy(shadowFocus);
+    sun.updateMatrixWorld();
     sun.target.updateMatrixWorld();
   };
 
@@ -432,9 +435,9 @@ export function createWorldScene(): WorldScene {
    * tracks the camera target, keeping the shadowed region wherever the player
    * is looking. Cheap — just repositions the existing sun/target, no allocation.
    */
-  const setShadowFocus = (x: number, z: number): void => {
-    if (x === shadowFocus.x && z === shadowFocus.z) return;
-    shadowFocus.set(x, 0, z);
+  const setShadowFocus = (x: number, z: number, y = 0): void => {
+    if (x === shadowFocus.x && y === shadowFocus.y && z === shadowFocus.z) return;
+    shadowFocus.set(x, y, z);
     placeSun();
   };
 

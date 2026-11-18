@@ -124,6 +124,7 @@ export function StatusStrip(): JSX.Element {
   const previousMonthPopulation = useCityStore((s) => s.previousMonthPopulation);
   const previousMonthFunds = useCityStore((s) => s.previousMonthFunds);
   const setOverlay = useCityStore((s) => s.setOverlay);
+  const setBudgetOpen = useCityStore((s) => s.setBudgetOpen);
 
   const date = tickToDate(tick);
   const displayYear = 2025 + (date.year - 1);
@@ -168,7 +169,14 @@ export function StatusStrip(): JSX.Element {
         )}
       </div>
       <Divider />
-      <div className="flex shrink-0 items-center gap-1.5">
+      <button
+        type="button"
+        data-testid="funds-trigger"
+        onClick={() => setBudgetOpen(true)}
+        aria-label="Open Municipal Budget & Taxes"
+        title="Open Municipal Budget & Taxes"
+        className="flex shrink-0 cursor-pointer items-center gap-1.5 rounded px-1.5 py-0.5 hover:bg-white/10 transition-colors"
+      >
         <span
           data-testid="funds-amount"
           className={`font-medium ${!unlimitedMoney && fundsNegative ? 'funds-negative text-[#e5533f]' : ''}`}
@@ -187,7 +195,7 @@ export function StatusStrip(): JSX.Element {
           {deltaPositive ? '+' : '-'}¢{Math.round(Math.abs(monthlyDelta)).toLocaleString('en-US')}
           /mo
         </span>
-      </div>
+      </button>
       <Divider />
       <button
         type="button"

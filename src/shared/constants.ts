@@ -476,3 +476,13 @@ export const LANDFILL_TRUCKS_PER_TILES = 16;
 export const LANDFILL_TRUCKS_MAX = 4;
 /** Smallest connected landfill area (tiles) that can operate — room for the gatehouse office plus a truck dump run. Paint batches leaving a smaller new fragment are rejected. */
 export const LANDFILL_MIN_AREA_TILES = 4;
+
+// --- Civic Unrest & Protests ------------------------------------------------
+/** Below this happiness level (0..255 byte), citizen demonstrations can emerge. */
+export const PROTEST_HAPPINESS_THRESHOLD = 40;
+/** Residential tax rate above this provokes citizen tax revolts (default is 0.09). */
+export const PROTEST_TAX_THRESHOLD = 0.15;
+/** Road capacity reduced to this factor (30% throughput) on corridors blocked by protests. */
+export const PROTEST_ROAD_CAPACITY_FACTOR = 0.30;
+/** Minimum duration of an active protest in sim ticks (~2 game days). */
+export const PROTEST_MIN_DURATION_TICKS = 40;

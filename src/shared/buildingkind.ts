@@ -36,6 +36,7 @@ const APARTMENT_KINDS: ReadonlySet<BuildingKind> = new Set<BuildingKind>([
   'garden',
   'midrise',
   'tower',
+  'mixed',
 ]);
 
 /** The two walk-ups, which park a car park on their lot and carry a hip roof. */

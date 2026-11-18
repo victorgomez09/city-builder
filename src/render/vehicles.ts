@@ -25,7 +25,7 @@
  *    nightFactor uniform crossing a fixed threshold (setNightFactor(f)).
  */
 import * as THREE from 'three';
-import { MeshLambertNodeMaterial, type MeshStandardNodeMaterial } from 'three/webgpu';
+import { MeshStandardNodeMaterial } from 'three/webgpu';
 import {
   attribute,
   diffuseColor,
@@ -33,6 +33,7 @@ import {
   float,
   mix,
   mul,
+  normalGeometry,
   select,
   step,
   uniform,
@@ -609,14 +610,25 @@ export function buildVehicleGeometry(kind: number): THREE.BufferGeometry {
  * public `attribute()` accessor, independent of the automatic pipeline we
  * just suppressed.
  */
-type DiffuseColorBuilder = Parameters<MeshLambertNodeMaterial['setupDiffuseColor']>[0];
+type DiffuseColorBuilder = Parameters<MeshStandardNodeMaterial['setupDiffuseColor']>[0];
 
-export class VehiclePartMaterial extends MeshLambertNodeMaterial {
-  // NodeMaterial's shared lighting setup reads `this.emissiveNode` generically
-  // (used by MeshStandardNodeMaterial et al.), but MeshLambertNodeMaterial's
-  // own type doesn't declare it -- add it here with the same type so
-  // `material.emissiveNode = ...` type-checks; the runtime already supports it.
-  emissiveNode: MeshStandardNodeMaterial['emissiveNode'] = null;
+export class VehiclePartMaterial extends MeshStandardNodeMaterial {
+  static readonly wetnessUniform = uniform(0);
+  static readonly snowCoverUniform = uniform(0);
+
+  constructor() {
+    super({ roughness: 0.55, metalness: 0.08 });
+    this.roughnessNode = mix(
+      float(0.55).sub(VehiclePartMaterial.wetnessUniform.mul(0.4)),
+      float(0.75),
+      VehiclePartMaterial.snowCoverUniform,
+    );
+    this.metalnessNode = mix(
+      float(0.08).add(VehiclePartMaterial.wetnessUniform.mul(0.25)),
+      float(0.0),
+      VehiclePartMaterial.snowCoverUniform,
+    );
+  }
 
   setupDiffuseColor(builder: DiffuseColorBuilder) {
     const object = builder.object as THREE.InstancedMesh;
@@ -633,6 +645,23 @@ export class VehiclePartMaterial extends MeshLambertNodeMaterial {
       );
       diffuseColor.rgb = mix(diffuseColor.rgb, mul(diffuseColor.rgb, tint), float(isBody));
     }
+
+    // Wetness darkening: vehicle paint, tyres, and cabin darken slightly when drenched
+    const wetDarken = mix(
+      vec3(1, 1, 1),
+      vec3(0.78, 0.78, 0.82),
+      VehiclePartMaterial.wetnessUniform,
+    );
+    diffuseColor.rgb = mul(diffuseColor.rgb, wetDarken);
+
+    // Snow accumulation: horizontal vehicle roofs, hoods and boots catch snow dusting
+    const isTopSurface = normalGeometry.y.greaterThan(0.4);
+    const snowVehicle = mix(
+      diffuseColor.rgb,
+      vec3(0.96, 0.97, 1.0),
+      VehiclePartMaterial.snowCoverUniform.mul(0.75),
+    );
+    diffuseColor.rgb = select(isTopSurface, snowVehicle, diffuseColor.rgb);
   }
 }
 
@@ -917,6 +946,13 @@ export class VehicleRenderer {
       mesh.instanceMatrix.needsUpdate = true;
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     }
+  }
+
+  /** Modulates vehicles by nightFactor, wetness (reflective rain sheen), and snowCover. */
+  setEnvironment(nightFactor: number, wetness = 0, snowCover = 0): void {
+    this.nightFactorUniform.value = Math.min(1, Math.max(0, nightFactor));
+    VehiclePartMaterial.wetnessUniform.value = Math.min(1, Math.max(0, wetness));
+    VehiclePartMaterial.snowCoverUniform.value = Math.min(1, Math.max(0, snowCover));
   }
 
   /** 0 (day, lights off) .. 1 (night, lights on above VEHICLE_NIGHT_LIGHT_THRESHOLD). */

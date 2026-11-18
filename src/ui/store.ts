@@ -9,6 +9,8 @@ import { create } from 'zustand';
 import {
   BRIDGE_MAX_ELEVATION,
   DEFAULT_TAX_RATE,
+  MAX_LOAN,
+  MAX_TAX_RATE,
   SERVICE_FUNDING_MAX,
   SERVICE_FUNDING_MIN,
   START_FUNDS,
@@ -29,6 +31,7 @@ import type {
   OpenSpace,
   RoadFlow,
   Policy,
+  Sector,
   SelectionInfo,
   ServiceKind,
   ResponderLoad,
@@ -167,6 +170,25 @@ export function createInitialStats(): CityStats {
     loanBalance: 0,
     taxRates: { res: DEFAULT_TAX_RATE, com: DEFAULT_TAX_RATE, ind: DEFAULT_TAX_RATE },
     serviceFunding: { police: 1, fire: 1, health: 1, education: 1, park: 1 },
+    demographics: {
+      lowIncome: 0,
+      mediumIncome: 0,
+      highIncome: 0,
+      povertyRate: 0,
+      avgDisposableIncome: 0,
+    },
+    supplyChain: {
+      deliveryRate: 1.0,
+      commercialViability: 22,
+      insolventCount: 0,
+    },
+    crises: {
+      creditRating: 'AAA',
+      bondInterestRate: 0.01,
+      activeStrikes: [],
+      epidemicActive: false,
+      epidemicSeverity: 0,
+    },
   };
 }
 
@@ -333,6 +355,15 @@ export interface CityStoreState {
   setStatsSamples: (samples: StatsSample[]) => void;
   /** Opens/closes the stats charts panel. */
   setStatsOpen: (open: boolean) => void;
+  /** Opens/closes the municipal budget & tax panel. */
+  budgetOpen: boolean;
+  setBudgetOpen: (open: boolean) => void;
+  /** Sets a sector tax rate (0%..30%), emitting setTaxRate. */
+  setTaxRate: (sector: Sector, rate: number) => void;
+  /** Borrows funds up to MAX_LOAN (¢100,000), emitting takeLoan. */
+  takeLoan: (amount: number) => void;
+  /** Repays outstanding loan debt limited by available funds, emitting repayLoan. */
+  repayLoan: (amount: number) => void;
   /** Sets the photo-mode active flag (chrome hiding). */
   setPhotoMode: (active: boolean) => void;
   /** Replaces the ranked advisor issues. */
@@ -361,6 +392,7 @@ export const useCityStore = create<CityStoreState>((set, get) => ({
   selectedStop: null,
   canUndo: false,
   canRedo: false,
+  budgetOpen: false,
   bound: null,
   toolFlags: createInitialToolFlags(),
   toolMode: 'lpath',
@@ -510,6 +542,48 @@ export const useCityStore = create<CityStoreState>((set, get) => ({
     }),
   setStatsSamples: (samples) => set({ statsSamples: samples }),
   setStatsOpen: (open) => set({ statsOpen: open }),
+  setBudgetOpen: (open) => set({ budgetOpen: open }),
+  setTaxRate: (sector, rate) =>
+    set((state) => {
+      const clamped = Math.max(0, Math.min(MAX_TAX_RATE, rate));
+      state.bound?.sendCommands('Set tax rate', [
+        { kind: 'setTaxRate', sector, rate: clamped },
+      ]);
+      return {
+        stats: {
+          ...state.stats,
+          taxRates: { ...state.stats.taxRates, [sector]: clamped },
+        },
+      };
+    }),
+  takeLoan: (amount) =>
+    set((state) => {
+      const maxAvailable = Math.max(0, MAX_LOAN - state.stats.loanBalance);
+      const delta = Math.min(amount, maxAvailable);
+      if (delta <= 0) return {};
+      state.bound?.sendCommands('Take loan', [{ kind: 'takeLoan', amount: delta }]);
+      return {
+        stats: {
+          ...state.stats,
+          loanBalance: state.stats.loanBalance + delta,
+          funds: state.stats.funds + delta,
+        },
+      };
+    }),
+  repayLoan: (amount) =>
+    set((state) => {
+      const maxRepay = Math.max(0, Math.min(state.stats.funds, state.stats.loanBalance));
+      const delta = Math.min(amount, maxRepay);
+      if (delta <= 0) return {};
+      state.bound?.sendCommands('Repay loan', [{ kind: 'repayLoan', amount: delta }]);
+      return {
+        stats: {
+          ...state.stats,
+          loanBalance: state.stats.loanBalance - delta,
+          funds: state.stats.funds - delta,
+        },
+      };
+    }),
   setAdvisorIssues: (issues) => set({ advisorIssues: issues }),
   setAdvisorOpen: (open) => set({ advisorOpen: open }),
   setPhotoMode: (active) => set({ photoMode: active }),

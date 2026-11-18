@@ -70,7 +70,6 @@
 
 **Open:**
 
-- Industrial lots are too shallow for the yard the heavy kinds are given; deeper lots in the lot layout (truck courts run 120–135 ft) are a lots-and-land change.
 - Not built, by choice: land market, wealth classes, land-value feedback from what is built, manufactured homes.
 
 ## Why the rules are what they are

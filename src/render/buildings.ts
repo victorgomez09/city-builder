@@ -433,6 +433,8 @@ export class BuildingInstancer {
    * once, no per-bucket bookkeeping needed.
    */
   private readonly nightFactorUniform = uniform(0);
+  private readonly wetnessUniform = uniform(0);
+  private readonly snowCoverUniform = uniform(0);
   /** Catalog ids rendered as a low plinth (see createPlinthMaterial/writeInstance) instead of the full facade box. Empty unless the 4th constructor arg is passed. */
   private readonly plinthIds: ReadonlySet<string>;
   /** Answers "is this grid tile a road" for the frontage parking setback (see writeInstance); the default never finds one. */
@@ -494,6 +496,13 @@ export class BuildingInstancer {
       // stay culled forever once buildings appear).
       bucket.mesh.boundingSphere = null;
     }
+  }
+
+  /** Modulates building facade and plinth materials by nightFactor, wetness (rain sheen), and snowCover. */
+  setEnvironment(nightFactor: number, wetness = 0, snowCover = 0): void {
+    this.nightFactorUniform.value = Math.min(1, Math.max(0, nightFactor));
+    this.wetnessUniform.value = Math.min(1, Math.max(0, wetness));
+    this.snowCoverUniform.value = Math.min(1, Math.max(0, snowCover));
   }
 
   /** 0 (day) .. 1 (night) — drives every archetype's window emissive + night body tint at once. */
@@ -783,10 +792,54 @@ export class BuildingInstancer {
     const glassColor = vec3(...glassBase).mul(
       mix(GLASS_REFLECTANCE_MIN, GLASS_REFLECTANCE_MAX, reflectance),
     );
+    // Sculpted European window articulation: stone sill below window, stone lintel above, and reveal frame
+    const isSill = insidePaneX
+      .and(cellV.greaterThan(float(marginY).sub(0.06)))
+      .and(cellV.lessThan(marginY))
+      .and(isGroundFloor.not());
+    const isSillShadow = insidePaneX
+      .and(cellV.greaterThan(float(marginY).sub(0.09)))
+      .and(cellV.lessThan(float(marginY).sub(0.06)))
+      .and(isGroundFloor.not());
+    const isHeader = insidePaneX
+      .and(cellV.greaterThan(float(1).sub(marginY)))
+      .and(cellV.lessThan(float(1).sub(marginY).add(0.05)))
+      .and(isGroundFloor.not());
+
+    const isFrameX = cellU
+      .greaterThan(float(marginX).sub(0.03))
+      .and(cellU.lessThan(float(1).sub(marginX).add(0.03)));
+    const isFrameY = cellV
+      .greaterThan(float(marginY).sub(0.03))
+      .and(cellV.lessThan(float(1).sub(marginY).add(0.03)));
+    const isWindowOpening = isFrameX.and(isFrameY);
+
+    const articulatedWall = select(
+      isSill,
+      solidWall.mul(1.22),
+      select(
+        isSillShadow,
+        solidWall.mul(0.7),
+        select(isHeader, solidWall.mul(1.1), solidWall),
+      ),
+    );
+    const wallSurfaceColor = select(isWindowOpening, solidWall.mul(FRAME_DARKEN), articulatedWall);
+    // Entrance rectangle: the box's local +Z face, its front. `normalGeometry`
+    // is the unrotated vertex normal (`normalLocal` is the one three.js turns
+    // by the instance matrix), and the instance matrix turns the box by
+    // rotation * 90 degrees, so the door/storefront rides the building's front.
+    const isEntranceFace = normalGeometry.z.greaterThan(0.5);
+    // Only commercial storefront window openings on the entrance face take the dark storefront frame;
+    // all residential, industrial, office and non-storefront walls retain their actual surface color.
+    const isStorefrontOpening = storefront
+      ? isEntranceFace
+          .and(uvNode.y.greaterThan(storefront.sillFraction))
+          .and(uvNode.y.lessThan(storefront.headFraction))
+      : bool(false);
     const frameColor = select(
-      isGroundFloor,
+      isStorefrontOpening,
       vec3(...DARK_STOREFRONT_FRAME),
-      solidWall.mul(FRAME_DARKEN),
+      wallSurfaceColor,
     );
 
     // Boarded/plain look for Constructing/Abandoned instances reuses the
@@ -815,13 +868,7 @@ export class BuildingInstancer {
       wallWithWindows = select(isAccentBand, accentColor, wallWithWindows);
     }
 
-    // Entrance rectangle: the box's local +Z face, its front. `normalGeometry`
-    // is the unrotated vertex normal (`normalLocal` is the one three.js turns
-    // by the instance matrix), and the instance matrix turns the box by
-    // rotation * 90 degrees, so the door rides the building's front to whichever
-    // side that turn puts it on, as a kit's street side does (shared/kitfront.ts),
-    // with no per-instance data and no change to the one draw per bucket.
-    const isEntranceFace = normalGeometry.z.greaterThan(0.5);
+    // Entrance rectangle: the box's local +Z face, its front.
     const isEntranceX = uvNode.x
       .greaterThan(0.5 - ENTRANCE_HALF_WIDTH)
       .and(uvNode.x.lessThan(0.5 + ENTRANCE_HALF_WIDTH));
@@ -865,8 +912,30 @@ export class BuildingInstancer {
     const texturedRoof = select(isRollSeam, roofColorNode.mul(0.88), roofColorNode.mul(aggregateTone));
     const roofExpression = select(isRoofEdge, copingColor, texturedRoof);
 
-    const dayColorNode = select(isWall, wallExpression, roofExpression);
-    material.colorNode = dayColorNode.mul(nightTintNode(this.nightFactorUniform));
+    const wetDarken = mix(vec3(1, 1, 1), vec3(0.76, 0.76, 0.80), this.wetnessUniform);
+    const dayColorNode = select(isWall, wallExpression, roofExpression).mul(wetDarken);
+
+    // Snow accumulation on roofs and horizontal parapet heads
+    const snowRoof = mix(dayColorNode, vec3(0.96, 0.97, 1.0), this.snowCoverUniform.mul(0.85));
+    const snowWall = mix(
+      dayColorNode,
+      vec3(0.96, 0.97, 1.0),
+      select(isParapet, this.snowCoverUniform.mul(0.6), float(0)),
+    );
+    const envColorNode = select(isWall, snowWall, snowRoof);
+    material.colorNode = envColorNode.mul(nightTintNode(this.nightFactorUniform));
+
+    // Environmental surface reflectivity: rain creates a glossy wet specular sheen
+    material.roughnessNode = mix(
+      float(0.85).sub(this.wetnessUniform.mul(0.55)),
+      float(0.80),
+      this.snowCoverUniform,
+    );
+    material.metalnessNode = mix(
+      float(0.04).add(this.wetnessUniform.mul(0.24)),
+      float(0.0),
+      this.snowCoverUniform,
+    );
 
     return material;
   }
@@ -894,7 +963,20 @@ export class BuildingInstancer {
       vec3(catalogColor.r, catalogColor.g, catalogColor.b),
       saturationAdjustment,
     );
-    material.colorNode = desaturated.mul(nightTintNode(this.nightFactorUniform));
+    const wetDarken = mix(vec3(1, 1, 1), vec3(0.76, 0.76, 0.80), this.wetnessUniform);
+    const dayPlinth = desaturated.mul(wetDarken);
+    const snowPlinth = mix(dayPlinth, vec3(0.96, 0.97, 1.0), this.snowCoverUniform.mul(0.8));
+    material.colorNode = snowPlinth.mul(nightTintNode(this.nightFactorUniform));
+    material.roughnessNode = mix(
+      float(0.9).sub(this.wetnessUniform.mul(0.5)),
+      float(0.85),
+      this.snowCoverUniform,
+    );
+    material.metalnessNode = mix(
+      float(0.02).add(this.wetnessUniform.mul(0.2)),
+      float(0.0),
+      this.snowCoverUniform,
+    );
     return material;
   }
 

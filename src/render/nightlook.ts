@@ -15,10 +15,21 @@
 import * as THREE from 'three';
 import { MeshLambertNodeMaterial } from 'three/webgpu';
 import type { Node, UniformNode } from 'three/webgpu';
-import { materialColor, mix, vec3 } from 'three/tsl';
+import { materialColor, mix, uniform, vec3 } from 'three/tsl';
 
 /** The night factor as a shader uniform: 0 by day, 1 at full night. */
 export type NightFactorUniform = UniformNode<'float', number>;
+
+/** Global surface wetness uniform (0 dry .. 1 drenched from rain). */
+export const globalWetnessUniform = uniform(0);
+/** Global surface snow accumulation uniform (0 none .. 1 frosty winter snow dusting). */
+export const globalSnowCoverUniform = uniform(0);
+
+/** Updates global environmental surface uniforms (wetness and snowCover). */
+export function setGlobalEnvironment(wetness: number, snowCover: number): void {
+  globalWetnessUniform.value = Math.min(1, Math.max(0, wetness));
+  globalSnowCoverUniform.value = Math.min(1, Math.max(0, snowCover));
+}
 
 /**
  * Blue channel highest, red lowest, so the shade reads cool. Relative
@@ -37,6 +48,7 @@ export function nightTintNode(nightFactor: NightFactorUniform): Node<'vec3'> {
  * material multiplies vertex and instance colours into colorNode itself,
  * and the material's own `color` stays live through `materialColor`, so a
  * caller that paints by `material.color` (the trees' season) keeps working.
+ * Also responds to global wetness darkening and snow accumulation.
  */
 export function nightBodyMaterial(
   nightFactor: NightFactorUniform,
@@ -48,11 +60,13 @@ export function nightBodyMaterial(
     side: params.side ?? THREE.FrontSide,
   });
   const tint = nightTintNode(nightFactor);
+  const wetDarken = mix(vec3(1, 1, 1), vec3(0.78, 0.78, 0.82), globalWetnessUniform);
+  const snowDust = mix(vec3(1, 1, 1), vec3(0.96, 0.97, 1.0), globalSnowCoverUniform.mul(0.65));
   if (params.color === undefined) {
-    material.colorNode = materialColor.mul(tint);
+    material.colorNode = materialColor.mul(wetDarken).mul(snowDust).mul(tint);
   } else {
     const c = new THREE.Color(params.color);
-    material.colorNode = vec3(c.r, c.g, c.b).mul(tint);
+    material.colorNode = vec3(c.r, c.g, c.b).mul(wetDarken).mul(snowDust).mul(tint);
   }
   return material;
 }

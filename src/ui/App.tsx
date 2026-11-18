@@ -25,6 +25,7 @@ import { DistrictPanel } from './DistrictPanel';
 import { ServicesPanel } from './ServicesPanel';
 import { StatsPanel } from './StatsPanel';
 import { AdvisorPanel } from './AdvisorPanel';
+import { BudgetPanel } from './BudgetPanel';
 import { criticalCount } from './advisor';
 import { StatusStrip } from './StatusStrip';
 import { useCityStore } from './store';
@@ -45,6 +46,8 @@ export default function App() {
   const statsOpen = useCityStore((s) => s.statsOpen);
   const setStatsOpen = useCityStore((s) => s.setStatsOpen);
   const statsSamples = useCityStore((s) => s.statsSamples);
+  const budgetOpen = useCityStore((s) => s.budgetOpen);
+  const setBudgetOpen = useCityStore((s) => s.setBudgetOpen);
   const photoMode = useCityStore((s) => s.photoMode);
   const advisorOpen = useCityStore((s) => s.advisorOpen);
   const advisorIssues = useCityStore((s) => s.advisorIssues);
@@ -88,6 +91,8 @@ export default function App() {
           <CornerButtons
             cityInfoOpen={cityInfoOpen}
             onToggleCityInfo={() => setCityInfoOpen((v) => !v)}
+            budgetOpen={budgetOpen}
+            onToggleBudget={() => setBudgetOpen(!budgetOpen)}
             helpOpen={helpOpen}
             onToggleHelp={() => setHelpOpen((v) => !v)}
             statsOpen={statsOpen}
@@ -118,6 +123,7 @@ export default function App() {
           <TransitLinesPanel />
           <ServicesPanel />
           <StatsPanel open={statsOpen} onClose={() => setStatsOpen(false)} samples={statsSamples} />
+          {budgetOpen && <BudgetPanel onClose={() => setBudgetOpen(false)} />}
           <AdvisorPanel
             open={advisorOpen}
             onClose={() => useCityStore.getState().setAdvisorOpen(false)}

@@ -91,14 +91,14 @@ const ATTACHED_GARAGE_SETBACK_M = 1;
 /** Lawn between the house's back wall and a detached garage. */
 const DETACHED_GARAGE_GAP_M = 3;
 
-/** NAHB, 2024 single-family completions: 65% a two-car garage, 15% three or more, 9% one-car; the rest none. */
-export const GARAGE_TWO_CAR_SHARE = 0.65;
-export const GARAGE_THREE_CAR_SHARE = 0.15;
-export const GARAGE_ONE_CAR_SHARE = 0.09;
-/** NAHB, 2025: 67% of new single-family homes have a porch. */
-export const PORCH_SHARE = 0.67;
-/** Census characteristics of new housing: over 60% of new houses have no fireplace, so under 40% carry a chimney. */
-export const CHIMNEY_SHARE = 0.4;
+/** European residential completions: pedestrian frontages, compact car parking, and low garage dominance. */
+export const GARAGE_TWO_CAR_SHARE = 0.08;
+export const GARAGE_THREE_CAR_SHARE = 0.0;
+export const GARAGE_ONE_CAR_SHARE = 0.28;
+/** European single-family homes with a covered entrance / porch. */
+export const PORCH_SHARE = 0.55;
+/** European traditional homes with prominent masonry chimneys. */
+export const CHIMNEY_SHARE = 0.65;
 /** How many cars a house's garage holds; none is a spot or a carport. */
 export type GarageBays = 0 | 1 | 2 | 3;
 /** A garage door is 9 ft wide single, 16 ft double; a row home's is 8 ft. */
@@ -231,15 +231,15 @@ export function chimneyRolled(buildingId: number): boolean {
   return roll(buildingId, SLOT_CHIMNEY) < CHIMNEY_SHARE;
 }
 
-/** Rise per metre of run (5:12 low, 8:12 steep) and how far the roof overhangs its walls, eaves and rakes. */
+/** European steep pitched roofs (10:12 to 12:12 / ~40°-45°) and eaves. */
 const ROOFS: Record<HouseStyle, { slope: number; eaveM: number; rakeM: number }> = {
-  ranch: { slope: 5 / 12, eaveM: 0.46, rakeM: 0.46 },
-  craftsman: { slope: 5 / 12, eaveM: 0.6, rakeM: 0.6 },
-  splitLevel: { slope: 5 / 12, eaveM: 0.46, rakeM: 0.46 },
-  cape: { slope: 8 / 12, eaveM: 0.2, rakeM: 0.2 },
-  colonial: { slope: 8 / 12, eaveM: 0.46, rakeM: 0.2 },
-  attached: { slope: 8 / 12, eaveM: 0.46, rakeM: 0.2 },
-  row: { slope: 5 / 12, eaveM: 0.46, rakeM: 0.2 },
+  ranch: { slope: 10 / 12, eaveM: 0.46, rakeM: 0.46 },
+  craftsman: { slope: 10 / 12, eaveM: 0.55, rakeM: 0.55 },
+  splitLevel: { slope: 10 / 12, eaveM: 0.46, rakeM: 0.46 },
+  cape: { slope: 11 / 12, eaveM: 0.3, rakeM: 0.3 },
+  colonial: { slope: 12 / 12, eaveM: 0.46, rakeM: 0.25 },
+  attached: { slope: 11 / 12, eaveM: 0.46, rakeM: 0.25 },
+  row: { slope: 10 / 12, eaveM: 0.46, rakeM: 0.25 },
 };
 
 /** How high a gable roof stands over a body `spanM` across at `slope` rise per metre of run, within the cap. */

@@ -40,7 +40,7 @@ export const TERRAIN_QUALITY_SUBDIVISIONS: Record<TerrainQuality, number> = {
   ultra: 8, // 8 quads per tile (128 segments per chunk, 2.5m vertex spacing) - UHD
 };
 
-const GRASS_MAX_HEIGHT = 130; // meters at which elevation-driven effects (patchiness) saturate
+const GRASS_MAX_HEIGHT = 900; // meters at which elevation-driven effects (patchiness) saturate
 const ROCK_BLEND_RANGE = 3; // meters of slope beyond MAX_BUILD_SLOPE to fully saturate to rock
 const TREE_DARKEN_MAX = 0.35; // fraction darkened at full (255) tree density (canopy-shadow read)
 
@@ -52,9 +52,9 @@ const ROCK_LIGHT_STONE: readonly [number, number, number] = [0.56, 0.54, 0.49];
 const SNOW_COLOR: readonly [number, number, number] = [0.93, 0.95, 0.98];
 
 /** Altitude in meters where alpine snowcaps begin to appear. */
-export const SNOW_MIN_HEIGHT = 400;
+export const SNOW_MIN_HEIGHT = 1600;
 /** Vertical transition range in meters over which snow reaches full coverage. */
-export const SNOW_BLEND_RANGE = 50;
+export const SNOW_BLEND_RANGE = 350;
 
 // ---------------------------------------------------------------------------
 // Seasonal ground grass/terrain tints
@@ -554,8 +554,8 @@ export function vertexColorFor(
       MAX_BUILD_SLOPE - 1.0 + ROCK_BLEND_RANGE,
       slope + rockNoise * 0.5,
     );
-    // 2. High altitude transition (rock emerges naturally above 36m, dominates above 68m)
-    const altitudeRock = quinticStep(36, 68, height + rockNoise * 4);
+    // 2. High altitude transition (rock emerges naturally above 550m, dominates above 1400m)
+    const altitudeRock = quinticStep(550, 1400, height + rockNoise * 20);
     const rockT = Math.max(slopeRock, altitudeRock * 0.9);
 
     if (rockT > 0) {

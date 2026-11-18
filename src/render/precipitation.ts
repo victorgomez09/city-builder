@@ -19,23 +19,23 @@ import * as THREE from 'three';
 // ---------------------------------------------------------------------------
 
 /** Total instanced rain streaks in the pool. */
-export const RAIN_INSTANCE_COUNT = 2400;
+export const RAIN_INSTANCE_COUNT = 4096;
 /** Half-width of the rain volume box (meters) centered on camera focus. */
-export const RAIN_BOX_RADIUS = 95;
+export const RAIN_BOX_RADIUS = 320;
 /** Vertical height of the rain volume box (meters). */
-export const RAIN_BOX_HEIGHT = 50;
+export const RAIN_BOX_HEIGHT = 150;
 /** Downward terminal velocity of raindrops (meters per second). */
-export const RAIN_FALL_SPEED = 32.0;
+export const RAIN_FALL_SPEED = 42.0;
 /** Horizontal wind drift speed for rain (meters per second). */
-export const RAIN_WIND_SPEED = 4.8;
+export const RAIN_WIND_SPEED = 5.2;
 /** Shared wind direction angle in radians (aligned with clouds.ts). */
 export const PRECIPITATION_WIND_DIRECTION = 0.62;
 /** Maximum opacity of rain streaks at 100% rainIntensity. */
-export const RAIN_MAX_OPACITY = 0.55;
+export const RAIN_MAX_OPACITY = 0.65;
 /** Length of each individual rain streak (meters). */
-export const RAIN_STREAK_LENGTH = 1.35;
+export const RAIN_STREAK_LENGTH = 3.2;
 /** Width/thickness of each rain streak (meters). */
-export const RAIN_STREAK_WIDTH = 0.032;
+export const RAIN_STREAK_WIDTH = 0.14;
 /** Hex tint of the rain streaks. */
 export const RAIN_COLOR = 0xb4d0eb;
 
@@ -44,23 +44,23 @@ export const RAIN_COLOR = 0xb4d0eb;
 // ---------------------------------------------------------------------------
 
 /** Total instanced snowflakes in the pool. */
-export const SNOW_INSTANCE_COUNT = 1600;
+export const SNOW_INSTANCE_COUNT = 3200;
 /** Half-width of the snow volume box (meters) centered on camera focus. */
-export const SNOW_BOX_RADIUS = 85;
+export const SNOW_BOX_RADIUS = 300;
 /** Vertical height of the snow volume box (meters). */
-export const SNOW_BOX_HEIGHT = 45;
+export const SNOW_BOX_HEIGHT = 140;
 /** Gentle downward fall velocity of snowflakes (meters per second). */
-export const SNOW_FALL_SPEED = 2.4;
+export const SNOW_FALL_SPEED = 3.6;
 /** Horizontal wind drift speed for snow (meters per second). */
-export const SNOW_WIND_SPEED = 1.6;
+export const SNOW_WIND_SPEED = 2.2;
 /** Lateral flutter wobble speed (radians per second). */
 export const SNOW_WOBBLE_FREQUENCY = 2.4;
 /** Maximum lateral drift distance during snowflake flutter (meters). */
-export const SNOW_WOBBLE_AMPLITUDE = 0.45;
+export const SNOW_WOBBLE_AMPLITUDE = 0.7;
 /** Maximum opacity of snowflakes at 100% snowIntensity. */
 export const SNOW_MAX_OPACITY = 0.85;
 /** Geometric size/radius of each snowflake (meters). */
-export const SNOW_FLAKE_SIZE = 0.18;
+export const SNOW_FLAKE_SIZE = 0.42;
 /** Hex tint of the snowflakes. */
 export const SNOW_COLOR = 0xf5f8ff;
 
@@ -90,8 +90,6 @@ function modWrap(value: number, span: number): number {
 // Pre-allocated scratch objects to ensure zero per-frame allocation
 const _matrix = new THREE.Matrix4();
 const _position = new THREE.Vector3();
-const _quaternion = new THREE.Quaternion();
-const _scale = new THREE.Vector3(1, 1, 1);
 
 // ---------------------------------------------------------------------------
 // Particle State Arrays
@@ -236,16 +234,27 @@ export class PrecipitationRenderer {
         const p = this.rainParticles[i]!;
         const speed = RAIN_FALL_SPEED * p.speedMult;
 
-        // Fall downward and drift with wind
-        const localY = modWrap(p.seedY - this.elapsedSeconds * speed, RAIN_BOX_HEIGHT);
+        // Unbounded world-space trajectory
         const driftX = this.elapsedSeconds * windDx * p.speedMult;
         const driftZ = this.elapsedSeconds * windDz * p.speedMult;
+        const fallY = this.elapsedSeconds * speed;
 
-        const localX = modWrap(p.seedX + driftX + RAIN_BOX_RADIUS, boxSpanXZ) - RAIN_BOX_RADIUS;
-        const localZ = modWrap(p.seedZ + driftZ + RAIN_BOX_RADIUS, boxSpanXZ) - RAIN_BOX_RADIUS;
+        const unboundedX = p.seedX + driftX;
+        const unboundedZ = p.seedZ + driftZ;
+        const unboundedY = p.seedY - fallY;
 
-        _position.set(focusX + localX, focusGroundY + localY, focusZ + localZ);
-        _matrix.compose(_position, _quaternion, _scale);
+        // Toroidal wrap relative to focus: particles stay fixed in world space
+        // while the toroidal bounds track the camera view
+        const relX = unboundedX - focusX;
+        const relZ = unboundedZ - focusZ;
+        const relY = unboundedY - focusGroundY;
+
+        const wrappedX = modWrap(relX + RAIN_BOX_RADIUS, boxSpanXZ) - RAIN_BOX_RADIUS;
+        const wrappedZ = modWrap(relZ + RAIN_BOX_RADIUS, boxSpanXZ) - RAIN_BOX_RADIUS;
+        const wrappedY = modWrap(relY + 20, RAIN_BOX_HEIGHT) - 20;
+
+        _position.set(focusX + wrappedX, focusGroundY + wrappedY, focusZ + wrappedZ);
+        _matrix.setPosition(_position);
         this.rainMesh.setMatrixAt(i, _matrix);
       }
       this.rainMesh.instanceMatrix.needsUpdate = true;
@@ -266,26 +275,32 @@ export class PrecipitationRenderer {
         const p = this.snowParticles[i]!;
         const speed = SNOW_FALL_SPEED * p.speedMult;
 
-        const localY = modWrap(p.seedY - this.elapsedSeconds * speed, SNOW_BOX_HEIGHT);
         const driftX = this.elapsedSeconds * windDx;
         const driftZ = this.elapsedSeconds * windDz;
+        const fallY = this.elapsedSeconds * speed;
 
         // Lateral flutter wobble
         const wobble = Math.sin(this.elapsedSeconds * p.wobbleSpeed + p.wobblePhase);
         const flutterX = wobble * SNOW_WOBBLE_AMPLITUDE;
         const flutterZ = Math.cos(this.elapsedSeconds * p.wobbleSpeed * 0.8) * SNOW_WOBBLE_AMPLITUDE;
 
-        const localX =
-          modWrap(p.seedX + driftX + flutterX + SNOW_BOX_RADIUS, boxSpanXZ) - SNOW_BOX_RADIUS;
-        const localZ =
-          modWrap(p.seedZ + driftZ + flutterZ + SNOW_BOX_RADIUS, boxSpanXZ) - SNOW_BOX_RADIUS;
+        const unboundedX = p.seedX + driftX + flutterX;
+        const unboundedZ = p.seedZ + driftZ + flutterZ;
+        const unboundedY = p.seedY - fallY;
 
-        _position.set(focusX + localX, focusGroundY + localY, focusZ + localZ);
-        _scale.setScalar(p.scaleMult);
-        _matrix.compose(_position, _quaternion, _scale);
+        const relX = unboundedX - focusX;
+        const relZ = unboundedZ - focusZ;
+        const relY = unboundedY - focusGroundY;
+
+        const wrappedX = modWrap(relX + SNOW_BOX_RADIUS, boxSpanXZ) - SNOW_BOX_RADIUS;
+        const wrappedZ = modWrap(relZ + SNOW_BOX_RADIUS, boxSpanXZ) - SNOW_BOX_RADIUS;
+        const wrappedY = modWrap(relY + 20, SNOW_BOX_HEIGHT) - 20;
+
+        _position.set(focusX + wrappedX, focusGroundY + wrappedY, focusZ + wrappedZ);
+        _matrix.makeScale(p.scaleMult, p.scaleMult, p.scaleMult);
+        _matrix.setPosition(_position);
         this.snowMesh.setMatrixAt(i, _matrix);
       }
-      _scale.set(1, 1, 1); // Reset scratch scale
       this.snowMesh.instanceMatrix.needsUpdate = true;
     } else {
       this.snowMesh.visible = false;

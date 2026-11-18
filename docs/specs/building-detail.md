@@ -40,7 +40,7 @@
 | Synthetic Metropolis | about 9,000 zoned buildings, ~10,000 with kits, built in about 80 | s | dial |
 | Frame statistic | 95th percentile of eight-frame averages | frames | dial |
 | Night body band | 30–50% of noon, at 03:00 and midnight | % | `tools/nightlook-shots.mjs` |
-| Roof pitch, level 1 / levels 2 and 3 | 5:12 (0.42) / 8:12, rise under 4.5 | m | [house parts](../art/buildings/residential-kinds/the-house-kits-parts.md) |
+| European roof pitch, detached / row | 10:12 to 12:12, rise under 4.5 | m | `houselot.ts` |
 | Window grid | two columns a tile, a row a storey; 9.5 m face = three bays of 3.17 m | m | `windowGrid` |
 | Porch | 1.8 m deep, floor 0.6 m up on three risers | m | `houselot.ts` |
 | Colonial chimney over ridge | 0.6 | m | `houselot.ts` |
@@ -160,7 +160,7 @@ Result: draw calls fell by half to two-thirds and every view shed 10 M triangles
 
 ### Houses
 
-The detached house is a ranch at level 1, a Cape at level 2 and a colonial at level 3, which is what its three catalog heights are. Duplex, fourplex and townhouse row follow. `HousePart` is the part pool; `houselot.ts` plans it in metres, pure and seeded.
+The residential houses adopt European vernacular forms: steep 10:12 to 12:12 terracotta clay tile (50%) and Welsh slate (35%) roofs, warm cream lime stucco, whitewash, ochre plaster, and ashlar brick claddings, corbelled brick chimneys with terracotta flue pots, and pedestrian stone stoops. Duplex, fourplex, townhouse row, and detached dwellings share this kit. `HousePart` is the part pool; `houselot.ts` plans it in metres, pure and seeded.
 
 Parts are chimney, stoop, portico, porch, porchRoof, dormer, shutter, garageLeaf and parapet, each one low-poly geometry on the roof's day and night tint. Pitch is fixed by level as a share of the half-span, and the ridge runs along the frontage. A ranch has no shutters, a Cape has two dormers, a colonial's chimney stands at a gable end.
 
@@ -188,7 +188,7 @@ Farms extend their own kit from `planFarm`: loft door, cupola, sliding doors, si
 
 ### Apartment blocks and towers
 
-The multiplex, garden apartments, midrise and tower get one body at every level in place of stepped tiers, and an `APARTMENT_PARTS` table per kind. The tower and midrise keep a podium; the midrise's is a metre constant, not a storey count, because the 15 ft retail floor is taller than a storey.
+The multiplex, garden apartments, midrise, mixed-use block, and tower get one body at every level in place of stepped tiers, and an `APARTMENT_PARTS` table per kind. European midrise blocks and mixed-use avenue buildings feature classical stepped cornices with cyma moulding profiles, cantilevered balconies with decorative metal guards, ground-floor retail awnings in bistro palettes, and retail podium belt-courses. The tower and midrise keep a podium; the midrise's is a metre constant, not a storey count, because the 15 ft retail floor is taller than a storey.
 
 The hip roof reuses the house kit's geometry as a kit part, so the body stays the instancer's box. Box bays, balconies and patios go by the window columns. The alternate bay colour is the instance colour.
 
@@ -205,6 +205,10 @@ The station reads its track edge as the sewage works reads its water edge: the e
 One shelter builder serves the line's stop and the bus-stop kit. `TransitRenderer.apply` takes a `hasStopBuilding(x, z)` predicate and draws no shelter where a stop building stands. The bus stop has its own 500-triangle row.
 
 The six earliest kits get a layout and builders each, pure from the footprint; shore kits keep `waterSideOf`. Merged geometries serve the heap, riprap, gallery, bridges and dome; nothing animates. Scale houses and switchyards are reused across kits, and the kit registry and coexistence tests change by addition only.
+
+### Shadows and lighting
+
+European summer solar noon elevation is calibrated to ~58° (z-axis offset ~0.52 in `sun.ts`), casting diagonal shadows across lots and streets rather than falling vertically under building footprints. The renderer uses `PCFSoftShadowMap` filtering with tightened near/far bounds (50 m to 2040 m over 1500 m distance) and calibrated day keyframe shadow intensity (0.90) so shadows remain crisp and distinct from the camera.
 
 ### Night
 

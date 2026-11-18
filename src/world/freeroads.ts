@@ -208,6 +208,14 @@ function armRefusal(arms: readonly Arm[], mine: Arm): string | null {
     const refusal = joinRefusal(mine.cls, arm.cls);
     if (refusal) return refusal;
   }
+  // Class-based minimum turn radius on bends: high-speed classes cannot make sharp angle bends at a node
+  if (arms.length === 1 && arms[0]!.cls === mine.cls) {
+    const dot = arms[0]!.dir.x * mine.dir.x + arms[0]!.dir.z * mine.dir.z;
+    const needed = MIN_CURVE_RADIUS_M[mine.cls];
+    if (needed >= 80 && dot > -0.5) {
+      return `Too tight for this road: it needs a ${needed} m radius`;
+    }
+  }
   const all = [...arms, mine];
   for (let i = 0; i < all.length; i++) {
     for (let j = i + 1; j < all.length; j++) {

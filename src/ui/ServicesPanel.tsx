@@ -87,11 +87,14 @@ export function ServicesPanel(): JSX.Element | null {
   const serviceLoad = useCityStore((s) => s.serviceLoad);
   const responders = useCityStore((s) => s.responders);
   const openSpace = useCityStore((s) => s.openSpace);
+  const crises = useCityStore((s) => s.stats.crises);
   const setServiceFunding = useCityStore((s) => s.setServiceFunding);
 
   const holdingService = catalogEntryForTool(selectedTool)?.service !== undefined;
   const visible = holdingService || (overlay !== null && SERVICE_LENSES.has(overlay));
   if (!visible) return null;
+
+  const activeStrikes = crises?.activeStrikes ?? [];
 
   return (
     <div className="pointer-events-none fixed left-3 top-16 z-10 w-80">
@@ -102,6 +105,15 @@ export function ServicesPanel(): JSX.Element | null {
           <Icon name="city" className="h-5 w-5 text-white/70" />
           Services
         </div>
+
+        {activeStrikes.length > 0 && (
+          <div
+            data-testid="service-strikes-banner"
+            className="rounded bg-[#e5533f]/20 border border-[#e5533f]/40 p-2 text-xs text-[#e5533f] font-medium leading-tight"
+          >
+            Worker Strike Active: {activeStrikes.map((s) => s.toUpperCase()).join(', ')} underfunded (&lt;70%). Operational capacity severely crippled.
+          </div>
+        )}
 
         <div className="flex items-center gap-1.5 px-2">
           <span className={`${LABEL} w-16 shrink-0`}>Service</span>
