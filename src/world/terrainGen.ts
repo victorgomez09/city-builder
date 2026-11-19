@@ -196,6 +196,51 @@ export function generateTerrain(seed: number, map: string) {
     }
   }
 
+  const nFertile = U.makeNoise(seed + 314);
+  const nOre = U.makeNoise(seed + 628);
+  const nOil = U.makeNoise(seed + 942);
+
+  for (let y = 0; y < W; y++) {
+    for (let x = 0; x < W; x++) {
+      const i = U.idx(x, y);
+      if (World.isWater(i)) {
+        World.resource[i] = C.RES_NONE;
+        continue;
+      }
+      const avg = World.tileAvg(i);
+      const slope = World.slope(i);
+
+      // Ore: concentrated on higher rocky ground and mountains
+      const fOre = U.fbm(nOre, x * 0.038, y * 0.038, 3);
+      if (avg >= 12 && fOre > 0.18) {
+        World.resource[i] = C.RES_ORE;
+        continue;
+      }
+
+      // Oil: concentrated in underground coastal and lowland basins
+      const fOil = U.fbm(nOil, x * 0.032, y * 0.032, 3);
+      if (avg >= 0.4 && avg <= 9 && slope <= 3.5 && fOil > 0.24) {
+        World.resource[i] = C.RES_OIL;
+        continue;
+      }
+
+      // Fertile Land: flat river valleys, meadow plains, and lakeshores
+      const fFertile = U.fbm(nFertile, x * 0.03, y * 0.03, 3);
+      if (avg >= 0.4 && avg <= 15 && slope <= 2.8 && fFertile > 0.16) {
+        World.resource[i] = C.RES_FERTILE;
+        continue;
+      }
+
+      // Forest: dense tree stands and woodlands
+      if (World.tree[i] >= 2 || (World.tree[i] >= 1 && slope < 6)) {
+        World.resource[i] = C.RES_FOREST;
+        continue;
+      }
+
+      World.resource[i] = C.RES_NONE;
+    }
+  }
+
   World.outside = [];
   const HW = C.START_HW;
   const xe = C.P0 + 15;

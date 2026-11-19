@@ -25,6 +25,7 @@ const PROB: Record<string, [string, string]> = {
     'Residents and goods cannot reach this building. Connect its road to the rest of the city.',
   ],
   garbage: ['Garbage is piling up', 'Build a Waste Transfer Station within range.'],
+  stockout: ['No goods to sell', 'Commercial business lacks stock. Build freight connections or local industry to supply goods.'],
   workers: ['Not enough workers', 'More housing nearby, or better transit, will fill these jobs.'],
   customers: ['Not enough customers', 'Shops need residents nearby. Zone more housing or add transit.'],
   fire: ['On fire', 'A fire truck is needed. Build a Fire Station within range.'],
@@ -238,7 +239,17 @@ export function renderBuilding(p: HTMLElement, b: Building): void {
          res
            ? `<div class="row"><span>Residents</span><b data-v="res"></b></div><div class="row"><span>Employed</span><b data-v="emp"></b></div><div class="row"><span>Average commute</span><b data-v="comm"></b></div>`
            : `<div class="row"><span>Workers</span><b data-v="wk"></b></div><div class="row"><span>From out of town</span><b data-v="out"></b></div>${
-               z.cat === 'com' ? '<div class="row"><span>Customers</span>' + meter('cust') + '</div>' : ''
+               z.cat === 'com'
+                 ? '<div class="row"><span>Customers</span>' +
+                   meter('cust') +
+                   '</div><div class="row"><span>Inventory Stock</span>' +
+                   meter('stock') +
+                   '</div>'
+                 : z.cat === 'ind'
+                 ? '<div class="row"><span>Industry Type</span><b data-v="indSpec"></b></div><div class="row"><span>Production Rate</span><b data-v="indRate"></b></div><div class="row"><span>Goods Buffer</span>' +
+                   meter('indStock') +
+                   '</div><div class="row"><span>Natural Deposit</span><b data-v="indDeposit"></b></div>'
+                 : ''
              }`
        }
        <div class="row"><span>Happiness</span>${meter('happy')}</div>
@@ -324,7 +335,19 @@ export function updBuilding(p: HTMLElement, b: Building): void {
   } else {
     sv(p, 'wk', b.filled + ' / ' + b.cap);
     sv(p, 'out', (b.outTown || 0) + ' commuters');
-    if (z.cat === 'com') sm(p, 'cust', (b.cust || 0) / 100, goodCol((b.cust || 0) / 70));
+    if (z.cat === 'com') {
+      sm(p, 'cust', (b.cust || 0) / 100, goodCol((b.cust || 0) / 70));
+      const sMax = b.stockMax || 50;
+      const sCur = b.stock || 0;
+      sm(p, 'stock', sCur / sMax, sCur <= 0 ? 'var(--bad)' : sCur < sMax * 0.3 ? 'var(--warn)' : 'var(--good)');
+    } else if (z.cat === 'ind') {
+      sv(p, 'indSpec', (b.industryType || 'generic').toUpperCase());
+      sv(p, 'indRate', (b.outputRate || 0) + ' units/h');
+      const sMax = b.stockMax || 150;
+      sm(p, 'indStock', (b.stock || 0) / sMax, 'var(--accent)');
+      const tileRes = World.resource ? World.resource[i] : 0;
+      sv(p, 'indDeposit', C.RESOURCE_NAMES[tileRes] || 'None');
+    }
   }
   sm(p, 'happy', b.happy / 100, goodCol(b.happy / 100));
   sm(p, 'lv', cv.lv[i] / 80, goodCol(cv.lv[i] / 70));

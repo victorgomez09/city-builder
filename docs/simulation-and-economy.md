@@ -72,6 +72,7 @@ Los servicios no actúan por simple radio euclídeo, sino que se propagan a lo l
 ### 4.1 Ingresos Mensuales
 - **Impuestos RCI:** Tipos independientes configurables de $0\%$ a $30\%$ (el $10\%$ se considera fiscalmente neutro).
 - **Tarifas de Transporte:** Ingresos cobrados por billete en líneas de autobús, tranvía y tren.
+- **Exportaciones de Mercancías:** Ingresos recaudados por la venta de excedentes de bienes manufacturados y materias primas a los mercados exteriores a través de la autopista (`last.inc.export`).
 
 ### 4.2 Gastos Mensuales
 - **Mantenimiento de Edificios Cívicos:** Coste fijo por comisaría, parque de bomberos, clínicas, escuelas, etc.
@@ -80,12 +81,74 @@ Los servicios no actúan por simple radio euclídeo, sino que se propagan a lo l
 - **Suministros de Agua y Luz:** Calculados automáticamente en base a la población ($\text{pop} \cdot 0.35$).
 - **Coste de Políticas Municipales:** Gastos mensuales por cada 100 casillas de distrito activadas (reciclaje, detectores, etc.).
 - **Amortización de Préstamos:** Devolución mensual de créditos bancarios con un $12\%$ de interés en 24 plazos.
+- **Sobrecostes de Importación de Bienes:** Aranceles y fletes sufragados por la ciudad al importar productos comerciales cuando la industria local es deficitaria (`last.exp.imports`).
 
 ---
 
 ## 5. Serialización y Persistencia de Partidas (Save/Load)
 
 En `Sim.serialize()` y `Sim.load(d)`, el estado completo se comprime mediante codificación por longitud de series (**RLE - Run-Length Encoding**) a través de `U.encodeRLE` y `U.decodeRLE`:
-- Se serializan todos los arrays del mapa (`road`, `link`, `rdir`, `rpart`, `curv`, `pcell`, `rail`, `zone`, `tree`, `district`).
+- Se serializan todos los arrays del mapa (`road`, `link`, `rdir`, `rpart`, `curv`, `pcell`, `rail`, `zone`, `tree`, `resource`, `district`).
 - Se serializan las modificaciones de terreno (`hce`), configuraciones de cruces (`jcfg`), líneas de transporte y objetos de distrito.
+- Se persisten los atributos de la cadena de suministro por edificio: `stock`, `stockMax`, `stockoutHours`, `industryType` y `outputRate`.
 - El archivo resultante es JSON compacto, ultraligero y compatible hacia atrás.
+
+---
+
+## 6. Recursos Naturales y Cadenas de Suministro (Supply Chains)
+
+Open Skylines incorpora un sistema de economía productiva de 4 niveles inspirado en *Cities: Skylines* y *CityRT*:
+
+```mermaid
+flowchart TD
+    subgraph T1["1. Extracción de Recursos Naturales"]
+        F1["Tierra Fértil (Oro)"] --> AG["Industria Agrícola / Granjas"]
+        F2["Bosque (Verde)"] --> FO["Industria Forestal / Maderera"]
+        F3["Yacimiento Mineral (Pizarra)"] --> MI["Minería y Metales"]
+        F4["Crudo Subterráneo (Violeta)"] --> OI["Industria Petrolífera"]
+    end
+
+    subgraph T2["2. Refinado y Procesamiento"]
+        AG --> P1["Alimentos y Harinas"]
+        FO --> P2["Madera Aserrada y Papel"]
+        MI --> P3["Acero y Maquinaria"]
+        OI --> P4["Plásticos y Combustible"]
+    end
+
+    subgraph T3["3. Manufactura"]
+        P1 & P2 & P3 & P4 --> MF["Industria Ligera / Fábricas"]
+        MF --> CG["Bienes de Consumo (Goods)"]
+    end
+
+    subgraph T4["4. Comercio Minorista y Logística"]
+        CG -->|"Camiones de Reparto Locales"| CS["Tiendas y Comercios (b.stock)"]
+        CG -->|"Excedente (Camión de Exportación)"| EX["Exportación Autopista (+Ingresos)"]
+        HW["Conexión Exterior"] -.->|"Déficit de Producción Local"| CS
+    end
+```
+
+### 6.1 Capa de Recursos en Memoria
+El array plano continuo `World.resource: Uint8Array(W * W)` ($43.264$ casillas) almacena:
+- `0`: Sin recurso (`C.RES_NONE`)
+- `1`: Tierra Fértil (`C.RES_FERTILE`, amarillo dorado `#eab308`)
+- `2`: Masa Forestal (`C.RES_FOREST`, verde esmeralda `#16a34a`)
+- `3`: Minerales / Mena (`C.RES_ORE`, azul pizarra `#64748b`)
+- `4`: Petróleo / Crudo (`C.RES_OIL`, negro/violeta oscuro `#1e1b4b`)
+
+### 6.2 Bonificaciones de Extracción y Especialización
+Cuando un polígono industrial se declara con especialización de distrito (`farming`, `forestry`, `mining`, `oil`) y sus fábricas se asientan sobre el recurso correspondiente, disfrutan de un $+60\%$ a $+80\%$ de eficiencia extractiva. En caso de asentarse sobre terreno estéril o sin recurso coincidente, su producción cae y deben procesar materias importadas.
+
+### 6.3 Desabastecimiento Comercial (*Stockouts*)
+Cada comercio dispone de un almacén `b.stock` con capacidad máxima `b.stockMax = 50 \cdot \text{nivel}`.
+- Cada hora de simulación, las compras ciudadanas consumen mercancías:
+  $$\Delta \text{stock} = \max(0.4, (0.12 \cdot \text{cap} + 0.06 \cdot \text{cust}) \cdot \text{custRatio})$$
+- Si `b.stock <= 0`, el comercio entra en estado de alerta `b.prob = 'stockout'` ("No goods to sell"):
+  - Se genera un icono de aviso en la vista de la ciudad.
+  - La satisfacción de clientes cae en picado ($-26\%$).
+  - Si el desabastecimiento persiste durante más de $48$ horas consecutivas, el comercio entra en quiebra y queda **abandonado** (`b.state = 'aband'`).
+
+### 6.4 Logística Física de Reparto y Comercio Exterior
+- **Reposición:** Cuando las existencias caen por debajo del $40\%$, el comercio solicita una entrega.
+- Si existe una fábrica local con existencias, se despacha un camión de mercancías físico (`kind: 'truck'`) que circula por la red viaria hasta el comercio para reponer hasta $25$ unidades.
+- Si no hay industria local suficiente, el camión entra desde la conexión exterior (`World.outIn`), acarreando un coste por flete arancelario para la ciudad.
+- **Exportación:** Las fábricas locales con almacén superior al $75\%$ despachan camiones hacia `World.outOut`, generando divisas de exportación directas para el presupuesto municipal.

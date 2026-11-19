@@ -133,6 +133,25 @@ export interface MapDef {
   desc: string;
 }
 
+export type ResourceType = 0 | 1 | 2 | 3 | 4; // 0: none, 1: fertile, 2: forest, 3: ore, 4: oil
+
+export interface SupplyChainStats {
+  rawFood: number;
+  rawTimber: number;
+  rawOre: number;
+  rawOil: number;
+  processedGoods: number;
+  consumerGoods: number;
+  localProduction: number;
+  cityDemand: number;
+  importedGoods: number;
+  exportedGoods: number;
+  importCost: number;
+  exportRevenue: number;
+  stockoutStores: number;
+  commercialStockRate: number;
+}
+
 export type IntersectionControl = 'auto' | 'none' | 'lights' | 'stop' | 'allstop' | 'round';
 
 export interface JunctionConfig {
@@ -250,6 +269,12 @@ export interface Building {
   age?: number;
   waterNear?: boolean;
   waterEdge?: boolean;
+  stock?: number;
+  stockMax?: number;
+  stockoutHours?: number;
+  industryType?: 'generic' | 'farming' | 'forestry' | 'mining' | 'oil';
+  outputRate?: number;
+  rawDemand?: number;
   _door?: {
     road?: number;
     x?: number;
@@ -382,6 +407,7 @@ export interface VehicleSpawnRequest {
   kind?: string;
   col?: string | number[] | null;
   purpose?: string;
+  cargo?: string;
   data?: unknown;
   onArrive?: ((v?: Vehicle, ok?: boolean) => void) | null;
   onFail?: ((reason?: string) => void) | null;
@@ -580,6 +606,8 @@ export type DistrictSpecialization =
   | 'organic'
   | 'farming'
   | 'forestry'
+  | 'mining'
+  | 'oil'
   | 'tech';
 
 export interface DistrictPolicies {
@@ -672,6 +700,7 @@ export interface SimStats {
   unhappyHealth?: number;
   unhappyCrime?: number;
   unhappyPollution?: number;
+  supply?: SupplyChainStats;
 }
 
 export interface Loan {
@@ -821,6 +850,7 @@ export interface SerializedCity {
   rail: string;
   zone: string;
   tree: string;
+  resource?: string;
   district?: string;
   districts?: SerializedDistrict[];
   hce?: number[];

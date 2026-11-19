@@ -41,6 +41,7 @@ export interface WorldState {
   zone: Uint8Array;
   bld: Int32Array;
   tree: Uint8Array;
+  resource: Uint8Array;
   zonable: Uint8Array;
   conn: Uint8Array;
   outside: number[];
@@ -179,6 +180,7 @@ export const World: WorldState = {
   zone: null as unknown as Uint8Array,
   bld: null as unknown as Int32Array,
   tree: null as unknown as Uint8Array,
+  resource: null as unknown as Uint8Array,
   zonable: null as unknown as Uint8Array,
   conn: null as unknown as Uint8Array,
   outside: [],
@@ -213,6 +215,7 @@ export const World: WorldState = {
     World.zone = new Uint8Array(W * W);
     World.bld = new Int32Array(W * W);
     World.tree = new Uint8Array(W * W);
+    World.resource = new Uint8Array(W * W);
     World.zonable = new Uint8Array(W * W);
     World.conn = new Uint8Array(W * W);
     World.hcEdits = new Map();

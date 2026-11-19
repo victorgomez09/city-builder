@@ -34,6 +34,8 @@ export const SPEC_CARDS = [
   ['organic', 'Organic Produce', 'Commercial shops sell local produce. +7 health & happiness.'],
   ['farming', 'Farming & Ag', 'Zero heavy industrial pollution, boosts local food security.'],
   ['forestry', 'Forestry', 'Sustainable timber harvesting. -50% industrial pollution.'],
+  ['mining', 'Ore Mining', 'Extracts mineral ores & metals from mountain ridges. Heavy industrial output, high profit.'],
+  ['oil', 'Oil Industry', 'Extracts and refines crude petroleum & plastics. Extremely lucrative tax base, high pollution.'],
   ['tech', 'High-Tech', 'Clean tech & research: +25% revenue, highly educated workforce.'],
 ];
 

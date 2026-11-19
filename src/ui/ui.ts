@@ -34,6 +34,7 @@ import { renderTransitPanel, updTransit } from '@/ui/panels/transit';
 import { renderStatsPanel, updStats } from '@/ui/panels/stats';
 import { renderDistrictsPanel, updDistricts, openDistrict } from '@/ui/panels/districts';
 import { renderSettingsPanel } from '@/ui/panels/settings';
+import { renderSupplyPanel, updSupply } from '@/ui/panels/supply';
 
 import { CATS, catItems, MenuItem, refreshBadges, idOf } from '@/ui/catalog';
 import { openJunction, setJunctionCtrl } from '@/ui/panels/junction';
@@ -507,6 +508,7 @@ UI.milestone = function (m: Milestone) {
 // ---------------- side panels registration ----------------
 const PANELS: Record<string, (p: HTMLElement) => void> = {
   views: renderViewsPanel,
+  supply: renderSupplyPanel,
   budget: renderBudgetPanel,
   transit: renderTransitPanel,
   stats: renderStatsPanel,
@@ -616,6 +618,7 @@ UI.update = function () {
   const sp = $('sidePanel');
   if (!sp.hidden) {
     if (UI.panel === 'budget') updBudget(sp);
+    else if (UI.panel === 'supply' && tick % 4 === 0) updSupply(sp);
     else if (UI.panel === 'transit') updTransit(sp);
     else if (UI.panel === 'stats' && tick % 4 === 0) updStats(sp);
     else if (UI.panel === 'districts' && tick % 4 === 0) updDistricts(sp);

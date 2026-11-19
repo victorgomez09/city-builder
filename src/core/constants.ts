@@ -68,6 +68,14 @@ export const C = {
   QUALITY: {} as Record<string, QualityPreset>,
   MAPS: [] as MapDef[],
 
+  RES_NONE: 0,
+  RES_FERTILE: 1,
+  RES_FOREST: 2,
+  RES_ORE: 3,
+  RES_OIL: 4,
+  RESOURCE_NAMES: ['None', 'Fertile Land', 'Forestry', 'Ore', 'Oil'] as string[],
+  RESOURCE_COLORS: ['transparent', '#eab308', '#16a34a', '#64748b', '#1e1b4b'] as string[],
+
   layout: null as unknown as (R: RoadDef) => RoadLayout,
   bikeScore: null as unknown as (R: RoadDef) => number,
 };

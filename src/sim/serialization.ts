@@ -66,6 +66,11 @@ export function serializeCity(sim: SimSerializationHost): SerializedCity {
       custRatio: b.custRatio,
       commute: Math.round(b.commute ?? 0),
       age: b.age,
+      stock: b.stock,
+      stockMax: b.stockMax,
+      stockoutHours: b.stockoutHours,
+      industryType: b.industryType,
+      outputRate: b.outputRate,
     })
   );
 
@@ -97,6 +102,7 @@ export function serializeCity(sim: SimSerializationHost): SerializedCity {
     rail: U.encodeRLE(World.rail),
     zone: U.encodeRLE(World.zone),
     tree: U.encodeRLE(World.tree),
+    resource: U.encodeRLE(World.resource),
     district: U.encodeRLE(World.district),
     districts: Array.from(World.districts.values()),
     nextDistrictId: World.nextDistrictId,
@@ -169,6 +175,10 @@ export function loadCity(
   World.zone.set(U.decodeRLE(d.zone, Uint8Array, N));
   World.tree.set(U.decodeRLE(d.tree, Uint8Array, N));
 
+  if (d.resource) {
+    World.resource.set(U.decodeRLE(d.resource, Uint8Array, N));
+  }
+
   if (d.district) {
     World.district.set(U.decodeRLE(d.district, Uint8Array, N));
   } else {
@@ -203,8 +213,21 @@ export function loadCity(
   World.roadVer++;
 
   for (const o of d.buildings) {
+    const isCom = o.zone && C.ZONES[o.zone]?.cat === 'com';
+    const isInd = o.zone && C.ZONES[o.zone]?.cat === 'ind';
     const b: Building = Object.assign(
-      { cust: 0, gTarget: false, vehOut: 0, fire: 0, prob: null },
+      {
+        cust: 0,
+        gTarget: false,
+        vehOut: 0,
+        fire: 0,
+        prob: null,
+        stock: isCom ? 25 * (o.level || 1) : 0,
+        stockMax: isCom ? 50 * (o.level || 1) : 0,
+        stockoutHours: 0,
+        industryType: isInd ? 'generic' : undefined,
+        outputRate: 0,
+      },
       o
     ) as Building;
     let mx = -1e9;

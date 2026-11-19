@@ -24,8 +24,8 @@ export interface BudgetReport {
 
 export function blankBudget(): BudgetReport {
   return {
-    inc: { res: 0, com: 0, ind: 0, off: 0, fares: 0 },
-    exp: { services: 0, roads: 0, transit: 0, utilities: 0, loans: 0 },
+    inc: { res: 0, com: 0, ind: 0, off: 0, fares: 0, export: 0 },
+    exp: { services: 0, roads: 0, transit: 0, utilities: 0, loans: 0, imports: 0 },
   };
 }
 

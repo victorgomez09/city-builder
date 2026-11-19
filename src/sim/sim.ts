@@ -3,7 +3,7 @@ import { U } from '../core/utils';
 import { World } from '../world/world';
 import { Traffic } from '../traffic/traffic';
 import { Transit } from '../transit/transit';
-import { Building, Vehicle, Milestone, TaxRates, BuildingSpec, ServiceLotResult, SimIcon, SimNotice, SerializedCity } from '../types';
+import { Building, Vehicle, Milestone, TaxRates, BuildingSpec, ServiceLotResult, SimIcon, SimNotice, SerializedCity, SupplyChainStats, SimStats } from '../types';
 import { LoanItem } from './budget';
 import { COV_KEYS, computeCoverage as runComputeCoverage, computeWaterNear } from './coverage';
 import {
@@ -147,6 +147,160 @@ function startFire(b: Building) {
   });
 }
 
+function blankSupply(): SupplyChainStats {
+  return {
+    rawFood: 0,
+    rawTimber: 0,
+    rawOre: 0,
+    rawOil: 0,
+    processedGoods: 0,
+    consumerGoods: 0,
+    localProduction: 0,
+    cityDemand: 0,
+    importedGoods: 0,
+    exportedGoods: 0,
+    importCost: 0,
+    exportRevenue: 0,
+    stockoutStores: 0,
+    commercialStockRate: 1,
+  };
+}
+
+function dispatchFreightDelivery(comStore: Building) {
+  if (!comStore.road || !World.road[comStore.road] || !World.conn[comStore.road] || comStore.vehOut) return;
+
+  const cargoWant = Math.min(
+    (comStore.stockMax || 50) - (comStore.stock || 0),
+    25
+  );
+  if (cargoWant <= 0) return;
+
+  // 1. Look for nearest local industrial factory with goods
+  let supplier: Building | null = null;
+  let bestDist = 1e9;
+  for (const b of Sim.buildings.values()) {
+    if (b.kind !== 'zone' || b.state !== 'live') continue;
+    const z = C.ZONES[b.zone];
+    if (z?.cat !== 'ind') continue;
+    if ((b.stock || 0) < 15 || b.vehOut) continue;
+    if (!b.road || !World.road[b.road] || !World.conn[b.road]) continue;
+    const d = Math.hypot(b.x - comStore.x, b.y - comStore.y);
+    if (d < bestDist) {
+      bestDist = d;
+      supplier = b;
+    }
+  }
+
+  if (supplier) {
+    const factory = supplier as Building;
+    factory.vehOut = (factory.vehOut || 0) + 1;
+    factory.stock = Math.max(0, (factory.stock || 0) - cargoWant);
+    comStore.vehOut = (comStore.vehOut || 0) + 1;
+
+    Traffic.request({
+      from: factory.road!,
+      to: comStore.road!,
+      kind: 'truck',
+      purpose: 'Delivering goods',
+      cargo: 'Consumer goods',
+      onArrive: (_v, ok) => {
+        if (ok && Sim.buildings.has(comStore.id)) {
+          comStore.stock = Math.min(comStore.stockMax || 50, (comStore.stock || 0) + cargoWant);
+          if (comStore.prob === 'stockout') {
+            comStore.prob = null;
+            comStore.stockoutHours = 0;
+          }
+        }
+        comStore.vehOut = Math.max(0, (comStore.vehOut || 0) - 1);
+        Traffic.request({
+          from: comStore.road!,
+          to: factory.road!,
+          kind: 'truck',
+          purpose: 'Returning to factory',
+          onArrive: () => {
+            factory.vehOut = Math.max(0, (factory.vehOut || 0) - 1);
+          },
+          onFail: () => {
+            factory.vehOut = Math.max(0, (factory.vehOut || 0) - 1);
+          },
+        });
+      },
+      onFail: () => {
+        factory.vehOut = Math.max(0, (factory.vehOut || 0) - 1);
+        comStore.vehOut = Math.max(0, (comStore.vehOut || 0) - 1);
+        factory.stock = (factory.stock || 0) + cargoWant;
+      },
+    });
+  } else if (World.outIn && World.road[World.outIn]) {
+    // 2. Import from highway outside connection
+    comStore.vehOut = (comStore.vehOut || 0) + 1;
+    Sim.supply.importedGoods += cargoWant;
+    const importFee = cargoWant * 3;
+    Sim.supply.importCost += importFee;
+    Sim.budget.exp.imports = (Sim.budget.exp.imports || 0) + importFee;
+
+    Traffic.request({
+      from: World.outIn,
+      to: comStore.road!,
+      kind: 'truck',
+      purpose: 'Imported freight',
+      cargo: 'Imported goods',
+      onArrive: (_v, ok) => {
+        if (ok && Sim.buildings.has(comStore.id)) {
+          comStore.stock = Math.min(comStore.stockMax || 50, (comStore.stock || 0) + cargoWant);
+          if (comStore.prob === 'stockout') {
+            comStore.prob = null;
+            comStore.stockoutHours = 0;
+          }
+        }
+        comStore.vehOut = Math.max(0, (comStore.vehOut || 0) - 1);
+        if (World.outOut && World.road[World.outOut]) {
+          Traffic.request({
+            from: comStore.road!,
+            to: World.outOut,
+            kind: 'truck',
+            purpose: 'Leaving city',
+            onArrive: () => {},
+            onFail: () => {},
+          });
+        }
+      },
+      onFail: () => {
+        comStore.vehOut = Math.max(0, (comStore.vehOut || 0) - 1);
+      },
+    });
+  }
+}
+
+function dispatchFreightExport(factory: Building) {
+  if (!World.outOut || !World.road[World.outOut] || !World.conn[World.outOut] || factory.vehOut || !factory.road) return;
+  const cargoAmount = 20;
+  factory.stock = Math.max(0, (factory.stock || 0) - cargoAmount);
+  factory.vehOut = (factory.vehOut || 0) + 1;
+
+  Traffic.request({
+    from: factory.road,
+    to: World.outOut,
+    kind: 'truck',
+    purpose: 'Exporting goods',
+    cargo: 'Export freight',
+    onArrive: (_v, ok) => {
+      factory.vehOut = Math.max(0, (factory.vehOut || 0) - 1);
+      if (ok) {
+        const revenue = cargoAmount * 8;
+        Sim.money += revenue;
+        Sim.supply.exportedGoods += cargoAmount;
+        Sim.supply.exportRevenue += revenue;
+        Sim.budget.inc.export = (Sim.budget.inc.export || 0) + revenue;
+      }
+    },
+    onFail: () => {
+      factory.vehOut = Math.max(0, (factory.vehOut || 0) - 1);
+      factory.stock = (factory.stock || 0) + cargoAmount;
+    },
+  });
+}
+
 function hourlyBuildings() {
   moveBudget = 24;
   const cv = Sim.cov;
@@ -160,7 +314,18 @@ function hourlyBuildings() {
     eduSum = 0,
     outsideIn = 0,
     comm = 0,
-    commN = 0;
+    commN = 0,
+    rawFood = 0,
+    rawTimber = 0,
+    rawOre = 0,
+    rawOil = 0,
+    processedGoods = 0,
+    consumerGoods = 0,
+    localProduction = 0,
+    cityDemand = 0,
+    stockoutStores = 0,
+    totalComStores = 0,
+    stockedComStores = 0;
   const icons: SimIcon[] = [];
   const toRemove: Building[] = [];
   const resDemand = Math.max(Sim.demand.rlow, Sim.demand.rmed, Sim.demand.rhigh);
@@ -247,6 +412,31 @@ function hourlyBuildings() {
         fr * 22 -
         (tax - 10) * 2.2;
       if (z.cat === 'com') {
+        totalComStores++;
+        const sMax = b.stockMax || (b.stockMax = 50 * (b.level || 1));
+        if (b.stock === undefined) b.stock = Math.round(sMax * 0.6);
+        const demand = Math.max(0.4, (b.cap * 0.12 + (b.cust || 5) * 0.06) * (b.custRatio || 0.7));
+        cityDemand += demand;
+        b.stock = Math.max(0, b.stock - demand);
+
+        if (b.stock <= 0) {
+          stockoutStores++;
+          b.stockoutHours = (b.stockoutHours || 0) + 1;
+          h -= 26;
+          if (b.stockoutHours > 48) {
+            b.state = 'aband';
+            b.abandT = 0;
+            Sim.notify(b.name + ' shut down (No goods to sell).', 'bad');
+          }
+        } else {
+          stockedComStores++;
+          b.stockoutHours = Math.max(0, (b.stockoutHours || 0) - 2);
+        }
+
+        if (b.stock < sMax * 0.4 && !b.vehOut && !noConn) {
+          dispatchFreightDelivery(b);
+        }
+
         h += (b.custRatio - 0.6) * 30;
         if (dist?.spec === 'nightlife') {
           b.custRatio = Math.min(2.0, b.custRatio * 1.25);
@@ -256,8 +446,55 @@ function hourlyBuildings() {
         if (dist?.policies.smokingBan) h -= 2;
       }
       if (z.cat === 'ind') {
-        if (dist?.spec === 'farming') h += 6;
-        if (dist?.spec === 'forestry') h += 4;
+        const tileRes = World.resource ? World.resource[i] : 0;
+        if (dist?.spec === 'farming' || dist?.spec === 'forestry' || dist?.spec === 'mining' || dist?.spec === 'oil') {
+          b.industryType = dist.spec;
+        } else if (tileRes === C.RES_FERTILE) {
+          b.industryType = 'farming';
+        } else if (tileRes === C.RES_FOREST) {
+          b.industryType = 'forestry';
+        } else if (tileRes === C.RES_ORE) {
+          b.industryType = 'mining';
+        } else if (tileRes === C.RES_OIL) {
+          b.industryType = 'oil';
+        } else {
+          b.industryType = 'generic';
+        }
+
+        let eff = 1.0;
+        if (b.industryType === 'farming') {
+          eff = tileRes === C.RES_FERTILE ? 1.6 : 0.8;
+          h += 6;
+        } else if (b.industryType === 'forestry') {
+          eff = tileRes === C.RES_FOREST ? 1.6 : 0.8;
+          h += 5;
+        } else if (b.industryType === 'mining') {
+          eff = tileRes === C.RES_ORE ? 1.7 : 0.7;
+          h += 6;
+        } else if (b.industryType === 'oil') {
+          eff = tileRes === C.RES_OIL ? 1.8 : 0.7;
+          h += 8;
+        }
+
+        const rate = Math.round((b.level * 5 + 4) * (0.35 + fr * 0.65) * eff);
+        b.outputRate = rate;
+        localProduction += rate;
+
+        if (b.industryType === 'farming') rawFood += rate;
+        else if (b.industryType === 'forestry') rawTimber += rate;
+        else if (b.industryType === 'mining') rawOre += rate;
+        else if (b.industryType === 'oil') rawOil += rate;
+        else {
+          processedGoods += Math.round(rate * 0.4);
+          consumerGoods += Math.round(rate * 0.6);
+        }
+
+        const indMax = b.stockMax || (b.stockMax = 120 + b.level * 30);
+        b.stock = Math.min(indMax, (b.stock || 0) + rate);
+
+        if (b.stock >= indMax * 0.75 && !b.vehOut && !noConn) {
+          dispatchFreightExport(b);
+        }
       }
       if (z.cat === 'off') {
         h += 10 * cv.edu[i] - 12 * Math.min(1, cv.pollution[i]);
@@ -363,6 +600,7 @@ function hourlyBuildings() {
     if (noRoad) b.prob = 'noroad';
     else if (noConn) b.prob = 'noconn';
     else if (b.garbage > 100) b.prob = 'garbage';
+    else if (z.cat === 'com' && (b.stock || 0) <= 0) b.prob = 'stockout';
     else if (!res && b.age > 36 && b.filled + b.outside < b.jobs * 0.3) b.prob = 'workers';
     else if (z.cat === 'com' && b.age > 48 && b.custRatio < 0.25) b.prob = 'customers';
     if (b.prob) icons.push(iconFor(b));
@@ -381,6 +619,17 @@ function hourlyBuildings() {
   st.edu = pop ? eduSum / pop : 0;
   st.commute = commN ? comm / commN : 0;
   st.buildingCount = Sim.buildings.size;
+  Sim.supply.rawFood = rawFood;
+  Sim.supply.rawTimber = rawTimber;
+  Sim.supply.rawOre = rawOre;
+  Sim.supply.rawOil = rawOil;
+  Sim.supply.processedGoods = processedGoods;
+  Sim.supply.consumerGoods = consumerGoods;
+  Sim.supply.localProduction = localProduction;
+  Sim.supply.cityDemand = Math.round(cityDemand);
+  Sim.supply.stockoutStores = stockoutStores;
+  Sim.supply.commercialStockRate = totalComStores > 0 ? stockedComStores / totalComStores : 1.0;
+  st.supply = Sim.supply;
   Sim.icons = icons;
 }
 
@@ -812,11 +1061,36 @@ function generateTrips(dtH: number) {
     const src = indList.length && Sim.rng() < 0.7 ? randomOf(indList) : null;
     if (src) {
       const dst = comList.length && Sim.rng() < 0.65 ? randomOf(comList) : null;
-      if (dst) carTrip(src.road, dst.road, 'Delivering goods', 1, null, 'truck', src, dst);
-      else carTrip(src.road, outT, 'Exporting goods', 1, null, 'truck', src, null);
+      if (dst) {
+        carTrip(src.road, dst.road, 'Delivering goods', 1, () => {
+          if (Sim.buildings.has(dst.id)) {
+            dst.stock = Math.min(dst.stockMax || 50, (dst.stock || 0) + 12);
+            if (dst.prob === 'stockout') {
+              dst.prob = null;
+              dst.stockoutHours = 0;
+            }
+          }
+        }, 'truck', src, dst);
+      } else {
+        carTrip(src.road, outT, 'Exporting goods', 1, () => {
+          Sim.supply.exportedGoods += 10;
+          Sim.supply.exportRevenue += 80;
+          Sim.money += 80;
+        }, 'truck', src, null);
+      }
     } else if (comList.length) {
       const dst = randomOf(comList);
-      carTrip(inT, dst.road, 'Importing goods', 1, null, 'truck', null, dst);
+      carTrip(inT, dst.road, 'Importing goods', 1, () => {
+        if (Sim.buildings.has(dst.id)) {
+          dst.stock = Math.min(dst.stockMax || 50, (dst.stock || 0) + 12);
+          if (dst.prob === 'stockout') {
+            dst.prob = null;
+            dst.stockoutHours = 0;
+          }
+          Sim.supply.importedGoods += 12;
+          Sim.supply.importCost += 36;
+        }
+      }, 'truck', null, dst);
     }
   }
   while (A.visit >= 1 && guard++ < 130) {
@@ -968,7 +1242,8 @@ export const Sim = {
     transitShare: 0,
     commute: 0,
     buildingCount: 0,
-  },
+  } as SimStats,
+  supply: blankSupply(),
   budget: blankBudget(),
   last: blankBudget(),
   history: [] as { pop: number; money: number }[],
@@ -1014,7 +1289,8 @@ export const Sim = {
       transitShare: 0,
       commute: 0,
       buildingCount: 0,
-    };
+    } as SimStats;
+    Sim.supply = blankSupply();
     Sim.budget = blankBudget();
     Sim.last = blankBudget();
     Sim.history = [];
@@ -1097,6 +1373,11 @@ export const Sim = {
         fire: 0,
         prob: null,
         age: 0,
+        stock: spec.zone && C.ZONES[spec.zone]?.cat === 'com' ? 30 : spec.zone && C.ZONES[spec.zone]?.cat === 'ind' ? 20 : 0,
+        stockMax: spec.zone && C.ZONES[spec.zone]?.cat === 'com' ? 50 : spec.zone && C.ZONES[spec.zone]?.cat === 'ind' ? 120 : 0,
+        stockoutHours: 0,
+        industryType: (spec.zone && C.ZONES[spec.zone]?.cat === 'ind' ? 'generic' : undefined) as 'generic' | undefined,
+        outputRate: 0,
       },
       spec
     );
@@ -1565,6 +1846,16 @@ export const Sim = {
           return [rgb[0], rgb[1], rgb[2], isBorder ? 0.78 : 0.35];
         };
       }
+      case 'resources':
+        return i => {
+          if (!play(i)) return null;
+          const r = World.resource ? World.resource[i] : 0;
+          if (r === C.RES_FERTILE) return [0.92, 0.75, 0.12, 0.7];
+          if (r === C.RES_FOREST) return [0.12, 0.68, 0.22, 0.7];
+          if (r === C.RES_ORE) return [0.45, 0.55, 0.72, 0.75];
+          if (r === C.RES_OIL) return [0.22, 0.12, 0.32, 0.8];
+          return null;
+        };
       default:
         return i => (play(i) && cv[key] ? ramp(Math.min(1, cv[key][i])) : null);
     }

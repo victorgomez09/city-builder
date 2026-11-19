@@ -91,6 +91,17 @@ Barra fija de 48px, translúcida, en una sola línea no rompible (*zero-wrapping
 - Altura acotada (`max-height: calc(100vh - 145px)`) que garantiza que nunca choquen ni con la barra superior ni con el estante inferior.
 - Exclusión mutua automática: al abrir una herramienta de construcción en la paleta inferior, se cierra el panel lateral para mantener despejado el campo de visión de obra.
 
+### 3.7 Sistema de Guías de Ayuda Contextual en Acordeón en Infovistas
+En el panel de Vistas e Infomapas de Calor [src/ui/panels/views.ts](file:///home/dev/projects/city-builder/src/ui/panels/views.ts):
+- **Selección y Expansión en un Solo Clic:** Al hacer clic en cualquier botón de infovista, se activa inmediatamente la capa de calor en el mundo 3D y se **despliega un cajón en acordeón interactivo** (`.view-accordion`) directamente debajo de la cuadrícula de botones, manteniendo la estética limpia y despejada de los botones originales.
+- **Sin Pérdida de Contexto:** La cuadrícula de vistas permanece siempre accesible en la parte superior del panel; cambiar de vista conmuta el mapa de calor y actualiza instantáneamente el acordeón con la nueva información sin recargas ni pantallas intermedias.
+- **Contenido del Acordeón Desplegable:**
+  - Cabecera con título, pastilla de color y botón de pliegue/despliegue rápido (`▼ / ▶`).
+  - Descripción funcional de la métrica en la simulación urbana.
+  - Leyenda cromática con muestras (*swatches*), nombres y desglose de efectos para cada umbral de color.
+  - Consejos de planificación y gestión urbanística (*City Planning Tips*).
+- Disponible para las 14 infovistas del motor (Recursos Naturales, Tráfico, Valor del Suelo, Felicidad, Polución, Ruido, Policía, Bomberos, Sanidad, Educación, Vertederos, Parques, Transporte y Distritos).
+
 ---
 
 ## 4. Control de Teclado y Ergonomía de Acceso Rápido
