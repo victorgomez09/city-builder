@@ -1,42 +1,76 @@
-DO
+# 🤖 Guía de Desarrollo para Agentes de IA — Open Skylines (`AGENTS.md`)
 
-- keep our documentation up to date
-- follow spec and architecture guidelines
-- write meaningful documentation
-- build and lint check at the end of every development task
-- use Ephemeral and Idempotent strategies
-- clean up scripts created to perform tasks that are not part of the codebase
+Este documento define el protocolo operativo obligatorio, los estándares de ingeniería y las normas de documentación que **todo agente de IA (y desarrollador humano)** debe cumplir estrictamente al trabajar en el repositorio de **Open Skylines**.
 
-DON'T
+---
 
-- write comments referencing documentation
-- extend documentation with v2 or versioning per section, only overall documentation maintains version.
-- write code unless we have solid documentation
+## 📜 1. Protocolo Obligatorio de Documentación
 
-READING THE DOCS (docs/engineering/documentation-strategy.md decides this)
+> [!IMPORTANT]
+> **Regla de Oro de Documentación Continua:**
+> Cada vez que se desarrolle, modifique o amplíe una funcionalidad, sistema, herramienta, shader o mecánica del juego, **ES OBLIGATORIO** actualizar la documentación correspondiente en el directorio `docs/` y marcar el avance en `ROADME.md` antes de dar la tarea por finalizada.
 
-- Read this file and docs/README.md on every task. Then read docs/truths/<area>.md for each area the task touches (roads, world, services, saves, architecture, render, design, process; index: docs/GROUND-TRUTHS.md) and nothing else of the truths.
-- A scout reads a spec's card (before its first section heading) and opens a section only when the ticket needs it; it returns pointers (file#anchor, rule id, src/file:line), never file dumps.
-- A ticket cites rules and anchors, never "read the doc". A cook reads what the ticket cites. A reviewer reads the full spec of the area under review, once.
-- Every file has a byte budget by tier (4 KB for this file, docs/README.md and the truths index; 16 KB for a spec); `npm run lint:docs` fails on an overshoot. A file over budget is split by section, never trimmed by dropping a rule or a number.
-- Write for the reader who skims: rules as imperatives of at most two lines, numbers in tables with their source and constant, a code pointer instead of a paragraph about what code does, no dates in a spec, no sentence repeated from another file.
+### Requisitos del Protocolo:
+1. **Actualización en el Mismo Turno:** El código y su documentación se entregan juntos en el mismo cambio. No se pospone la documentación para tareas posteriores.
+2. **Destino de la Documentación:**
+   - Si se expande un sistema existente, actualizar el archivo temático en `docs/`:
+     - Terreno, relieve, carreteras o cruces $\rightarrow$ [docs/world-and-terrain.md](file:///home/dev/projects/city-builder/docs/world-and-terrain.md)
+     - RCI, felicidad, coberturas, economía o presupuestos $\rightarrow$ [docs/simulation-and-economy.md](file:///home/dev/projects/city-builder/docs/simulation-and-economy.md)
+     - Tráfico, enrutamiento, peatones o transporte público $\rightarrow$ [docs/traffic-and-transit.md](file:///home/dev/projects/city-builder/docs/traffic-and-transit.md)
+     - Renderizado, Three.js, shaders GLSL o instanciación $\rightarrow$ [docs/rendering-and-shaders.md](file:///home/dev/projects/city-builder/docs/rendering-and-shaders.md)
+     - Herramientas de cursor o interfaz de usuario $\rightarrow$ [docs/ui-and-tools.md](file:///home/dev/projects/city-builder/docs/ui-and-tools.md)
+     - Distritos, ordenanzas o especializaciones $\rightarrow$ [docs/districts-and-policies.md](file:///home/dev/projects/city-builder/docs/districts-and-policies.md)
+   - Si se añade un subsistema completamente nuevo (ej: *Recursos Naturales*, *Red de Aguas y Alcantarillado*, *Meteorología*), crear un nuevo documento en `docs/<nuevo-sistema>.md` y enlazarlo en el índice general [docs/README.md](file:///home/dev/projects/city-builder/docs/README.md).
+3. **Actualización de la Hoja de Ruta:** Actualizar la lista de hitos y tareas en [ROADME.md](file:///home/dev/projects/city-builder/ROADME.md).
 
-GROUND TRUTHS
+---
 
-- Follow the truths in docs/truths/. Every rule has an id like [R-roads-012]; cite it in tickets, flags and commits.
-- When code and a truth disagree, stop and flag it by id. Never silently pick one.
-- When you learn a new invariant (a bug a rule would have prevented, or a rule the user states), add it to its area's truths file with the next id and to the spec that decides it, in the same change. Never reuse or renumber an id.
-- The ones broken most often:
-  - A tile carries one road, or two only where one passes over the other at right angles (an overpass, on the over layers, clearing 5 m over road / 7 m over rail). The two never join; a road is identified by tile AND layer (`RoadKey`). Roads join only at one level.
-  - Rail and street never share a tile at grade; a rail tile between two street tiles breaks the street, it does not cross it.
-  - A one-way road flows the way it was drawn (its stored roadFlow); never infer direction from geometry, and always mask the flow byte before comparing it.
-  - Roads replace by class rank, never by tier number. A highway touches only a highway or a ramp. Highway and rail arms never take a junction control.
-  - Yellow paint only separates opposing directions; everything else is white. Dirt, alley and rail carry no paint.
-  - Power, water and every service reach the city along the street road network by BFS from adjacent road tiles, never by a straight-line radius.
-  - Nothing in src/sim, src/world, src/core or src/render calls Math.random or Date.now. src/sim never imports src/render or src/ui.
-  - Enum-like values are `as const` objects whose numbers are save bytes: never reorder or reuse one, only append. A new grid layer goes last and bumps SAVE_VERSION by exactly one.
-  - Player Commands are the only way the world mutates, and every Command returns its exact inverse.
-  - The tile is 20 m. Lane, vehicle and person sizes are absolute metres that never scale with it.
-  - Every repeated placeable is an InstancedMesh. No custom shaders, no textures, no imported meshes.
-  - Rule Zero: never ship a control that is not wired to real behaviour.
-  - Never name or imitate a commercial city-builder.
+## 🏛️ 2. Invariantes de Ingeniería y Arquitectura (*Ground Truths*)
+
+### 2.1 Memoria Tipificada y Rendimiento Zero-GC
+- **Cuadrícula en Arrays Planos:** El mapa mide $W \times W = 208 \times 208 = 43.264$ casillas. Cualquier capa de datos masiva debe implementarse en arrays planos contiguos (`Uint8Array`, `Float32Array`, `Int32Array`).
+- **Prohibido Crear Objetos por Casilla:** Nunca instanciar clases u objetos dinámicos individuales por casilla en memoria masiva ($43.264$ objetos colapsan el recolector de basura de JavaScript y provocan caídas de FPS).
+- **Indexación Canónica:** Utilizar siempre `i = y * W + x` y las utilidades `U.idx(x, y)`, `U.tx(i)` y `U.ty(i)`.
+
+### 2.2 Determinismo de Simulación
+- **Sin Aleatoriedad No Controlada:** En los módulos `src/sim/`, `src/world/`, `src/traffic/` y `src/transit/` está prohibido usar `Math.random()` sin semilla o `Date.now()`. Utilizar siempre `Sim.rng()` o funciones hash deterministas `U.hash(x, y, seed)`.
+- **Desacoplamiento Gráfico:** La simulación económica y de agentes corre a pasos fijos discretos; nunca debe depender del refresco de la pantalla o del deltaTime de la GPU.
+
+### 2.3 Gráficos y Renderizado Three.js
+- **InstancedMesh Siempre:** Cualquier elemento repetitivo (vehículos, árboles, edificios residenciales, postes, farolas) debe emplear mallas instanciadas (`InstancedMesh`) o shaders compuestos.
+- **Sin Geometrías Pesadas:** Prohibido importar modelos glTF/FBX de varios megabytes sin optimizar. El estilo visual se basa en geometría paramétrica compacta, texturas proceduradas y shaders GLSL.
+- **DataTextures para Capas de Datos:** Modificaciones masivas de calor visual (tráfico, valor del suelo, distritos) deben actualizarse en `ovTex` o `zoneTex`, no recreando geometrías.
+
+### 2.4 Tipado TypeScript Estricto
+- Todas las estructuras de datos y estados deben definirse en [src/types/index.ts](file:///home/dev/projects/city-builder/src/types/index.ts) o exportarse con tipos rigurosos.
+- Evitar `any` no tipificado en nuevas APIs y no añadir directivas `@ts-ignore`.
+- **Verificación Obligatoria:** Todo cambio debe superar sin errores `npm run typecheck` (`tsc --noEmit`) y `pnpm run build`.
+
+### 2.5 Persistencia y Compatibilidad de Partidas
+- Al añadir nuevas capas de datos al mapa, deben integrarse en `Sim.serialize()` y `Sim.load(d)` mediante compresión por longitud de series (**RLE**) usando `U.encodeRLE()` y `U.decodeRLE()`.
+- Debe mantenerse siempre la compatibilidad con partidas existentes inicializando valores por defecto cuando el campo no exista en el archivo cargado.
+
+---
+
+## 🔄 3. Flujo de Trabajo del Agente (Paso a Paso)
+
+```mermaid
+flowchart TD
+    A["1. Lectura de Especificación en docs/ y ROADME.md"] --> B["2. Definición de Tipos en src/types/index.ts"]
+    B --> C["3. Implementación de Lógica en src/"]
+    C --> D["4. Verificación de Tipos (npm run typecheck)"]
+    D --> E["5. Compilación de Producción (pnpm run build)"]
+    E --> F["6. Actualización de Documentación en docs/ y ROADME.md"]
+    F --> G["7. Reporte al Usuario con Enlaces Markdown file://"]
+```
+
+1. **Lectura e Investigación:** Antes de modificar el código, consultar el documento relevante en `docs/` y verificar las constantes en `src/core/constants.ts`.
+2. **Implementación Tipada:** Diseñar la solución respetando los arrays tipificados y el ciclo de vida del juego.
+3. **Verificación Automática:** Ejecutar en terminal:
+   ```bash
+   npm run typecheck
+   pnpm run build
+   ```
+   Ambos comandos deben finalizar con código de salida `0` (cero errores).
+4. **Documentación:** Explicar las nuevas funciones, fórmulas o variables en `docs/` y marcar las casillas correspondientes en `ROADME.md`.
+5. **Comunicación al Usuario:** Responder de forma concisa en Markdown con enlaces clicables bajo el esquema `file://`.

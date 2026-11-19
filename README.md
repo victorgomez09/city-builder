@@ -1,227 +1,125 @@
-# CityVI
+<p align="center">
+  <img src="assets/banner.svg" width="100%" alt="Open Skylines: a city builder that runs in your browser">
+</p>
 
-<div align="center">
+<p align="center">
+  <a href="https://kostslava.github.io/open-skylines/"><img src="assets/play.svg" height="52" alt="Play in your browser"></a>
+<## what is this
 
-[![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![Three.js](https://img.shields.io/badge/Three.js-000000?style=for-the-badge&logo=three.js&logoColor=white)](https://threejs.org/)
-[![React](https://img.shields.io/badge/React-61DAFB?style=for-the-badge&logo=react&logoColor=black)](https://react.dev/)
-[![Vite](https://img.shields.io/badge/Vite-646CFF?style=for-the-badge&logo=vite&logoColor=white)](https://vite.dev/)
-[![Vitest](https://img.shields.io/badge/Vitest-6E9F18?style=for-the-badge&logo=vitest&logoColor=white)](https://vitest.dev/)
-[![License: AGPL v3+](https://img.shields.io/badge/License-AGPL%20v3%2B-blue.svg?style=for-the-badge)](./LICENSE)
-[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-FFDD00?style=for-the-badge&logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/russellbenzing)
+a city builder you play in the browser. kinda like cities skylines but way smaller, made in three.js. nothing to install, just open the link.
 
-[![Play — Live Demo](https://img.shields.io/badge/Play-Live%20Demo-2ea44f?style=for-the-badge&logo=github&logoColor=white)](https://cityvi.netlify.app/)
-[![Release](https://img.shields.io/github/v/release/rbenzing/CityVIGame?style=for-the-badge&label=Release)](https://github.com/rbenzing/CityVIGame/releases)
-[![CI](https://img.shields.io/github/actions/workflow/status/rbenzing/CityVIGame/ci.yml?branch=main&style=for-the-badge&label=CI)](https://github.com/rbenzing/CityVIGame/actions/workflows/ci.yml)
+you start with an empty island and a highway. lay a street, zone some houses, and the town grows. every car, bike and pedestrian is its own agent with its own route, so if you build a dumb intersection you'll watch it jam up, and if you build bike lanes people actually ride them.
 
-**A small-form-factor city builder in the browser — an engine showcase built on Three.js**
+water and power are automatic because managing pipes is boring.
 
-🌐 **Browser-Native** • ⚡ **WebGPU + WebGL2 Fallback** • 🧠 **Deterministic Worker Sim** • 🧩 **Fully Instanced**
+## how the city grows
 
-[Play](https://cityvi.netlify.app/) • [Features](#-features) • [Quick Start](#-quick-start) • [Controls](#-controls) • [Releases](#-releases--deployment) • [Documentation](#-documentation) • [License](#-license)
+you start with just roads and zoning. services unlock as people move in:
 
-</div>
+| milestone | pop | unlocks |
+|---|---:|---|
+| settlement | 0 | small roads, low density homes and shops, industry |
+| hamlet | 50 | garbage, medical clinic, bike lanes and paths, small parks |
+| village | 150 | police, fire, elementary school, avenues, more small roads, roundabouts |
+| small town | 300 | buses, medium density housing, medium parks, protected bike lanes |
+| town | 600 | highways, streetcars, high school, recycling, dense commercial |
+| large town | 1,200 | boulevards, offices, hospital, police and fire HQ |
+| small city | 2,500 | trains and metro, university, high density housing, large parks |
+| city | 5,000 | landmarks: claude arch, vs code tower, octocat statue, rubber duck |
+| big city | 9,000 | terminal monolith, stack tower, neural net sphere, penguin plaza |
+| metropolis | 15,000 | twin serpent towers, container whale, hackathon arena, cloud spire |
 
----
+## what's in it
 
-CityVI is a familiar city-builder play grammar and UI layout at reduced scale:
-milestone-gated zoning (low → medium-row → medium → mixed-use → high density,
-plus business & industry), demand-driven growth, a road hierarchy with
-statistical traffic in lanes, road-carried power & water, diffusing data fields,
-a full economy, full terraforming with animated water, a day/night cycle with emissive
-windows + bloom — all running smoothly in a browser tab. The simulation runs
-deterministically in a Web Worker at a fixed timestep; rendering is fully
-instanced Three.js.
+- **roads.** small roads are one tile, avenues, boulevards and highways are two tiles wide (one carriageway each way). 29 road types: one-ways, 1+2 asymmetric, gravel, medians, tree-lined, painted and protected bike lanes, tram tracks and ramps. bike and foot paths are half a tile wide (four fit in a tile) and join any sidewalk they touch. the menu is split into tabs like the real thing
+- **intersections.** traffic lights go up automatically where avenues or bigger meet; small street crossings stay uncontrolled. every approach gets painted lane arrows. the intersection editor (roads → intersections) lets you switch between lights, stop signs, all-way stops and roundabouts, pick who stops, tune green times, and choose which turns each lane allows. cars plan routes around the arrows
+- **traffic.** cars pathfind with direction-aware A*, respect one-ways, pick lanes from the arrows, follow each other and wait at signals. people only drive when it makes sense: short trips are walked, medium trips are cycled if the route is safe (more bike lanes = more cyclists), and transit wins when it's quicker. shifts are staggered so not everyone leaves at 8:00
+- **zoning.** residential, commercial, industrial and office. lots fill the zone as deep as it goes, low density homes come in five sizes, and they start out worn and plain and get nicer and more modern as they level up
+- **transit.** buses, streetcars, elevated trains and metro
+- **services and parks.** garbage, health, police, fire, education, 22 parks from pocket parks to woodland reserves
+- **the rest.** day/night cycle, info views, budget and loans, residents who complain about stuff
 
----
+uff
 
-## ✨ Features
+## controls
 
-- **🏙️ Paint-to-grow zoning** — you set zones and demand fills them in; buildings
-  construct, upgrade, and abandon on their own. Denser zone types unlock as you
-  hit milestones.
-- **🛣️ Road hierarchy** — gravel, two-lane, avenue, one-way, four-lane, and
-  highway, with junction crosswalks, rounded corners, contained dead-end caps,
-  and smooth grade-preserving ramps up slopes.
-- **⚡💧 Networks through roads** — power and water propagate along the road graph;
-  place a source next to a road and the connected network is served.
-- **🚗 Statistical traffic** — lane-accurate cosmetic vehicles driven by a
-  statistical assignment model, not per-car physics.
-- **🚌 Services & transit** — fire, police, health, education, parks; cosmetic
-  service dispatch; bus lines with ridership; districts & policies.
-- **🗑️ Sanitation** — every zone generates trash; paint **landfill** areas where
-  it piles up to a max height, or plop a milestone-gated **incinerator** that
-  burns it down (emitting pollution) with its own garbage-truck fleet; cosmetic
-  trucks service the city and a **trash lens** shows collection gaps.
-- **⛰️ Terraforming & water** — raise / lower / level / smooth brushes with real
-  depth-rendered, animated water that floods below sea level.
-- **🌗 Living day/night** — continuous sun cycle with emissive windows, pooled
-  street-lamp lighting, shadows, and a bloom pass.
-- **📊 Legible through data** — RCI demand bars, milestone XP, infoview lenses
-  (land value, pollution, traffic, coverage), and stats charts.
+| key | does |
+|---|---|
+| <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> | move camera, hold <kbd>Shift</kbd> to go faster |
+| <kbd>Q</kbd> <kbd>E</kbd> | rotate |
+| <kbd>R</kbd> <kbd>F</kbd> | zoom in / out |
+| <kbd>T</kbd> <kbd>G</kbd> | tilt |
+| right drag | rotate + tilt |
+| middle drag | pan |
+| scroll | zoom |
+| <kbd>Space</kbd> | pause |
+| <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> | game speed |
+| <kbd>B</kbd> | bulldoze |
+| <kbd>R</kbd> | rotate a building before you place it |
+| <kbd>Esc</kbd> | cancel tool |
 
----
+## if it's your first city
 
-## 🛠️ Tech Stack
+1. drag a small road from the little connector at the end of the highway. roads that aren't connected don't count
+2. drag zones along the road and watch the R / C / I demand bars at the top
+3. people need jobs and shops, and industry is loud, so don't put it right next to houses
+4. at 50 people build a clinic and garbage, at 150 a fire station. fires will wreck you otherwise
+5. one-way roads follow the direction you drag. the yellow arrows in the preview show the flow
+6. if traffic jams, open the traffic view. add bike lanes, a second route, or fix the intersection in the editor
 
-| Layer         | Tech                                                                           |
-| ------------- | ------------------------------------------------------------------------------ |
-| Language      | TypeScript (strict)                                                            |
-| Rendering     | Three.js — `WebGPURenderer` with automatic WebGL2 fallback                     |
-| UI shell      | React + Zustand + Tailwind CSS (HTML overlay only; no R3F in the render path)  |
-| Build         | Vite                                                                           |
-| Simulation    | Deterministic fixed-timestep loop in a Web Worker over typed-array tile layers |
-| Terrain noise | `simplex-noise`                                                                |
-| Testing       | Vitest (unit + determinism) · Playwright (headless visual smoke)               |
-| Quality       | ESLint + Prettier (kept at zero errors)                                        |
+## graphics
 
----
+there's a quality dropdown on the start screen (low, medium, high, ultra) and you can change it in settings whenever. low is for older laptops and integrated graphics, ultra is for a real gpu.
 
-## 🚀 Quick Start
+## Development & Building
 
-**Prerequisites:** Node.js 20.19+ (or 22+) and npm.
+The project has been refactored to modular **TypeScript** powered by **Vite** and **Three.js**.
+
+### Commands
 
 ```bash
-npm install
-npm run dev        # Vite dev server (http://localhost:5173)
-npm test           # Vitest suite
-npm run typecheck  # strict tsc
-npm run build      # production build
-npm run lint       # ESLint (zero errors)
-npm run format     # Prettier
+# Start development server with hot-reload
+npm run dev
+
+# Check TypeScript types
+npm run typecheck
+
+# Build optimized production bundle
+npm run build
+
+# Preview production build locally
+npm run preview
 ```
 
----
+## Architecture
 
-## ✅ Quality Gates
+Modular TypeScript code is organized inside `src/`:
 
-Built test-first throughout. The suite runs in CI on every push; the current
-count is recorded, with its date, in [docs/ROADMAP.md](docs/ROADMAP.md). Every
-change exits through the same gates:
+| Module | Location | Description |
+|---|---|---|
+| **Types** | `src/types/index.ts` | Data structures, interfaces for road networks, zones, vehicles, agents, transit |
+| **Core** | `src/core/` | Constants, layout calculations, simplex noise, heaps, RLE, math helpers |
+| **World** | `src/world/` | Grid system, heightmaps, bridge decks, connectivity, intersection clustering |
+| **Gfx** | `src/render/gfx.ts` | WebGL renderer, custom GLSL shaders, lighting, sky dome, camera controls |
+| **Meshes** | `src/render/meshes.ts` | Procedural buildings, roads, bridges, rail viaducts, instanced vehicles, trees |
+| **Traffic** | `src/traffic/` | Direction-aware A*, IDM car-following, lane turn arrows, cyclists, pedestrians |
+| **Transit** | `src/transit/` | Public transit networks (bus, streetcar, metro), spline physics, routing graph |
+| **Sim** | `src/sim/` | Urban simulation, R/C/I demand, jobs, happiness, services, budget, milestones |
+| **Tools** | `src/tools/` | Pointer interaction, road snapping, zone drag brush, bulldoze, service placement |
+| **UI** | `src/ui/` | Top bar stats, speed controls, tool dock, inspector, modals, Web Audio SFX |
+| **Game** | `src/game.ts` | Boot pipeline, game loop, save/load serialization, demo city generator |
+| **Main** | `src/main.ts` | Main application entry point and `window.CB` singleton bridge |
 
-- ✅ `typecheck` — strict TypeScript, no errors
-- ✅ `test` — unit + determinism (same seed + command log ⇒ same state hash)
-- ✅ `build` — production bundle succeeds
-- ✅ `lint` — ESLint at zero errors, Prettier-clean
-- ✅ **no-stub audit** — every rendered control is wired to real behavior
+<details>
+<summary><b>debug url params</b></summary>
 
----
+<br>
 
-## 🚢 Releases & Deployment
+| param | does |
+|---|---|
+| `?demo=1&ms=7&ff=72` | builds a demo town, unlocks up to milestone 4, fast forwards 72 game hours |
+| `&preset=low\|medium\|high\|ultra` | forces a graphics preset |
+| `&hour=21` | sets the time of day |
+| `&ov=traffic` | opens an info view on load |
 
-Versioning is automated with [release-please](https://github.com/googleapis/release-please)
-driven by [Conventional Commits](https://www.conventionalcommits.org/) — the
-commit history is the single source of truth for the [SemVer](https://semver.org/)
-version. Nobody edits the version by hand.
-
-- **`fix:`** → patch · **`feat:`** → minor · **`feat!:` / `BREAKING CHANGE:`** → major
-- Every push to `main` runs the **CI** workflow (typecheck · lint · test · build).
-- release-please keeps a rolling **release PR** with the next version + a
-  generated `CHANGELOG.md`. Merging it tags `vX.Y.Z`, cuts a **GitHub Release**,
-  and the workflow deploys the built SPA to **GitHub Pages**. The game is
-  played at [cityvi.netlify.app](https://cityvi.netlify.app/).
-- The build's URL prefix comes from the `BASE_PATH` environment variable and
-  defaults to `/`. The Pages workflow sets `BASE_PATH=/CityVIGame/`; a
-  root-hosted deploy such as **Netlify** leaves it unset. `netlify.toml` carries
-  the Netlify build command, publish directory (`dist`), and Node version, so
-  connecting the repo needs no dashboard settings.
-
-See **[CONTRIBUTING.md](./CONTRIBUTING.md)** for the commit conventions and the
-full release flow.
-
----
-
-## 🎮 Controls
-
-| Input                      | Action                                                        |
-| -------------------------- | ------------------------------------------------------------- |
-| Left drag                  | Active tool (draw road / paint zone / bulldoze)               |
-| Left click                 | Select a building (info panel)                                |
-| Middle / right drag, wheel | Camera rotate / zoom-to-cursor; `WASD` + edge-scroll pan      |
-| `Space`                    | Pause / resume                                                |
-| `1`–`7`                    | Tool categories (roads / zoning / power / … / landscaping)    |
-| `R`                        | Rotate ploppable                                              |
-| `Esc`                      | Cancel tool / deselect                                        |
-| `Ctrl+Z` / `Ctrl+Y`        | Undo / redo (refund-accurate, worker-computed inverses)       |
-| `Ctrl+S` / `Ctrl+Shift+L`  | Save / load latest (IndexedDB; autosaves every 2 game-months) |
-
-New here? See the [Player Guide](docs/userguide/README.md).
-
----
-
-## 🏗️ Project Layout
-
-```
-src/
-  shared/        contract layer every module codes against (types, constants)
-  core/          deterministic sim kernel (fixed-timestep loop, commands, RNG)
-  world/         map generation, grid, roads, pathfinding, terraform, districts
-  sim/           simulation systems (growth, economy, traffic, transit, fields)
-  render/        instanced Three.js renderers (terrain, buildings, roads, …)
-  tools/         tool state machines + undo stack
-  ui/            React / Zustand / Tailwind overlay
-  main.ts        render-thread boot: wires the worker, renderers, UI, persistence
-docs/            SPEC · ROADMAP · DESIGN · USERGUIDE · adr/ · ui/ · art/
-tools/           reusable Playwright visual harnesses (not part of the build)
-```
-
-**Hard rule:** `sim/` never imports `render/` or `ui/`; the UI talks to the sim
-only through the worker command/snapshot protocol. The simulation is
-deterministic — no `Math.random`, no `Date.now`; seeded RNG streams, hash-tested.
-
----
-
-## 📚 Documentation
-
-Start at **[docs/README.md](docs/README.md)** — it maps each kind of question to
-the one place that answers it. The set is organised by discipline, and each
-fact lives in exactly one place:
-
-- **[docs/engineering/](docs/engineering/README.md)** — architecture, decision
-  records, interface contracts, the data model, budgets, and coding standards.
-- **[docs/game-design/](docs/game-design/README.md)** — the game design
-  document, the core loop, economy, progression, and every tuning constant.
-- **[docs/world-sim/](docs/world-sim/README.md)** — how the simulated world
-  behaves: the grid, roads, traffic, transit, utilities, services, the fields.
-- **[docs/visual-render/](docs/visual-render/README.md)** — the rendering
-  pipeline, lighting, terrain, water, vegetation.
-- **[docs/art/](docs/art/README.md)** — the art bible and the standards an
-  asset is built to.
-- **[docs/ux/](docs/ux/README.md)** — how the interface behaves: every surface,
-  the interaction rules, the bindings.
-- **[docs/ROADMAP.md](docs/ROADMAP.md)** — what is built and what is next. The
-  only document that carries dates and delivery status.
-- **[docs/DESIGN.md](docs/DESIGN.md)** — what we are deliberately not building,
-  with reasoning.
-- **[docs/USERGUIDE.md](docs/userguide/README.md)** — how to play: the gameplay loop,
-  tools, reading the city, and controls.
-- **[CONTRIBUTING.md](./CONTRIBUTING.md)** — quality gates, commit conventions,
-  and how automated versioning + deployment work.
-- **[CHANGELOG.md](./CHANGELOG.md)** — generated per release by release-please.
-
----
-
-## 📄 License
-
-Released under the [GNU Affero General Public License v3.0 or later (AGPLv3+)](./LICENSE).
-
----
-
-## 👤 About the Author
-
-Built by **Russell Benzing**. CityVI is a personal project exploring how far a
-browser engine can be pushed toward a living, data-rich city simulation.
-
----
-
-## 💬 Support
-
-If CityVI is useful or fun to you, you can support the work:
-
-<div align="center">
-
-[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-FFDD00?style=for-the-badge&logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/russellbenzing)
-
-**Built with Three.js, TypeScript, and a lot of screenshots.**
-
-</div>
+</details>

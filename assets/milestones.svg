@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="220" viewBox="0 0 1280 220">
+  <rect width="1280" height="220" rx="18" fill="#0d131a"/>
+  <g font-family="'Barlow Condensed','Roboto Condensed','Arial Narrow','Helvetica Neue',Arial,sans-serif" text-anchor="middle">
+    <g stroke-width="10" stroke-linecap="round">
+      <path d="M100 112H460" stroke="#4fd17a"/>
+      <path d="M460 112H820" stroke="#3d8bff"/>
+      <path d="M820 112H1180" stroke="#b276f2"/>
+    </g>
+    <g fill="#e9eff4" stroke="#0d131a" stroke-width="5">
+      <circle cx="100" cy="112" r="12"/>
+      <circle cx="280" cy="112" r="12"/>
+      <circle cx="460" cy="112" r="15"/>
+      <circle cx="640" cy="112" r="12"/>
+      <circle cx="820" cy="112" r="15"/>
+      <circle cx="1000" cy="112" r="12"/>
+      <circle cx="1180" cy="112" r="12"/>
+    </g>
+    <g fill="#e9eff4" font-size="22" font-weight="700" letter-spacing="2">
+      <text x="100" y="76">SETTLEMENT</text>
+      <text x="280" y="76">VILLAGE</text>
+      <text x="460" y="76">TOWN</text>
+      <text x="640" y="76">SMALL CITY</text>
+      <text x="820" y="76">CITY</text>
+      <text x="1000" y="76">BIG CITY</text>
+      <text x="1180" y="76">METROPOLIS</text>
+    </g>
+    <g fill="#ffb547" font-size="18" font-weight="600" letter-spacing="1">
+      <text x="100" y="156">0</text>
+      <text x="280" y="156">250</text>
+      <text x="460" y="156">800</text>
+      <text x="640" y="156">2,000</text>
+      <text x="820" y="156">4,000</text>
+      <text x="1000" y="156">8,000</text>
+      <text x="1180" y="156">15,000</text>
+    </g>
+    <g fill="#93a4b4" font-size="16" font-family="'Barlow','Segoe UI','Helvetica Neue',Arial,sans-serif">
+      <text x="100" y="184">cottages + shops</text>
+      <text x="280" y="184">buses, mid density</text>
+      <text x="460" y="184">highways</text>
+      <text x="640" y="184">trains + offices</text>
+      <text x="820" y="184">towers, university</text>
+      <text x="1000" y="184">stadium</text>
+      <text x="1180" y="184">grand arch</text>
+    </g>
+  </g>
+</svg>

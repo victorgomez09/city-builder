@@ -1,65 +1,59 @@
-# CityVI documentation
+# 📚 Open Skylines — Documentación Técnica del Sistema
 
-Seven disciplines, each with its own folder. Find your question below and the
-folder will have the rest.
+Bienvenido a la documentación técnica oficial de **Open Skylines**, un simulador de gestión urbana y construcción de ciudades en tiempo real (*city builder*) desarrollado en **TypeScript**, **Three.js** y **Vite**.
 
-| I want to know…                        | Go to                                     |
-| -------------------------------------- | ----------------------------------------- |
-| How do I play?                         | [USERGUIDE.md](userguide/README.md)              |
-| What is built, and what is next?       | [ROADMAP.md](ROADMAP.md)                  |
-| What are we deliberately not building? | [DESIGN.md](DESIGN.md)                    |
-| What must never be broken?             | [GROUND-TRUTHS.md](GROUND-TRUTHS.md), index names one file an area |
-| How is it built, and why that way?     | [engineering/](engineering/README.md)     |
-| What does the game ask of the player?  | [game-design/](game-design/README.md)     |
-| How does the simulated world behave?   | [world-sim/](world-sim/README.md)         |
-| How is the world rendered?             | [visual-render/](visual-render/README.md) |
-| What should an asset look like?        | [art/](art/README.md)                     |
-| How does the interface behave?         | [ux/](ux/README.md)                       |
-| What does a built feature decide?      | [specs/](specs/README.md)                 |
-| How do I work on it?                   | [../CONTRIBUTING.md](../CONTRIBUTING.md)  |
-| How are the docs kept short enough to read? | [engineering/documentation-strategy.md](engineering/documentation-strategy.md) |
+Este compendio detalla la arquitectura de bajo nivel, el modelo matemático de simulación, la gestión de memoria *zero-garbage-collection*, los sistemas de tráfico y transporte público, el pipeline de renderizado gráfico y la interfaz de usuario.
 
-## The seven folders
+---
 
-**[engineering/](engineering/README.md)** — architecture, systems, interface
-contracts, the data model, decision records and coding standards.
+## 🗺️ Mapa de Documentación
 
-**[game-design/](game-design/README.md)** — the core loop, economy, progression
-and every tuning constant.
+| Documento | Descripción y Alcance |
+| :--- | :--- |
+| **[architecture.md](file:///home/dev/projects/city-builder/docs/architecture.md)** | Visión general del motor, convención de coordenadas, modelo de memoria en arrays planos (`TypedArray`) y bucle principal. |
+| **[world-and-terrain.md](file:///home/dev/projects/city-builder/docs/world-and-terrain.md)** | Generación procedural de terreno, lagos orgánicos, relieve (`hc`), cuadrícula viaria, topología de cruces y parcelas. |
+| **[simulation-and-economy.md](file:///home/dev/projects/city-builder/docs/simulation-and-economy.md)** | Ciclo RCI, cálculo de demanda, felicidad, ciclo de vida de edificios, coberturas de servicios, presupuestos y serialización RLE. |
+| **[traffic-and-transit.md](file:///home/dev/projects/city-builder/docs/traffic-and-transit.md)** | Algoritmo de enrutamiento vehicular, costes de congestión, agentes peatonales y ciclistas, y redes de transporte masivo (autobús, tranvía, tren, metro). |
+| **[rendering-and-shaders.md](file:///home/dev/projects/city-builder/docs/rendering-and-shaders.md)** | Motor Three.js, mallas instanciadas (`InstancedMesh`), shaders GLSL personalizados, texturas de datos GPU y etiquetas 3D flotantes. |
+| **[ui-and-tools.md](file:///home/dev/projects/city-builder/docs/ui-and-tools.md)** | Sistema de herramientas de construcción (`Tools`), trazado de carreteras (recta, curva, S-bend, rejilla), dock inferior y paneles flotantes. |
+| **[districts-and-policies.md](file:///home/dev/projects/city-builder/docs/districts-and-policies.md)** | Sistema de distritos municipales, 7 especializaciones económicas, 8 políticas urbanas y modificadores en vivo (Fase 1). |
+| **[refactoring-strategy.md](file:///home/dev/projects/city-builder/docs/refactoring-strategy.md)** | Plan de refactorización limpia (Fase 1.5): eliminación de `@ts-nocheck`, desacoplamiento de `window.CB` y modularización. |
 
-**[world-sim/](world-sim/README.md)** — the rules of the simulated world, the
-largest area: grid, roads, traffic, transit, utilities, services, fields, ticks.
+---
 
-**[visual-render/](visual-render/README.md)** — the rendering pipeline,
-lighting, terrain, water and vegetation.
+## 🏛️ Filosofía Arquitectónica del Proyecto
 
-**[art/](art/README.md)** — the art bible and asset standards, scale bible first.
+```mermaid
+flowchart TD
+    subgraph Memoria ["1. Memoria Tipificada y Estado Global (WorldState)"]
+        W["World (Uint8Array / Float32Array / Int32Array)"]
+    end
 
-**[ux/](ux/README.md)** — every surface, the interaction rules, bindings,
-accessibility.
+    subgraph Logica ["2. Motores de Lógica Determinista"]
+        Sim["Simulación RCI & Economía (Sim)"]
+        Traffic["Tráfico & Enrutamiento (Traffic)"]
+        Transit["Líneas de Transporte (Transit)"]
+    end
 
-**[ROADMAP.md](ROADMAP.md) and [DESIGN.md](DESIGN.md)** stay at the top level
-because they cut across all six: one holds delivery status and dates, the other
-every deliberate non-goal.
+    subgraph Presentacion ["3. Capa de Presentación (Three.js & DOM)"]
+        Gfx["Render Gráfico & Shaders (Gfx)"]
+        Meshes["InstancedMesh & Geometría (Meshes)"]
+        UI["Interfaz DOM & Paneles (UI)"]
+        Labels["Etiquetas 3D Flotantes (#districtLabels)"]
+    end
 
-## The rules that keep this working
+    W --> Sim
+    W --> Traffic
+    W --> Transit
+    Sim --> Gfx
+    Traffic --> Meshes
+    Transit --> Meshes
+    W --> Gfx
+    Gfx --> Labels
+    Sim --> UI
+```
 
-**One fact, one place.** A documentation set rots not because something is
-written down wrongly but because it is written down twice, one copy is updated,
-and the two now contradict each other with no way to tell which is current.
-When you are about to restate something, link to it instead.
-
-**Never date a specification.** A spec describes the product as it is now. The
-moment it carries "(shipped <date>)" or "v2" it has become a changelog in
-the wrong file, and the next reader cannot tell which of two nearby paragraphs
-is true. Delivery belongs to [ROADMAP.md](ROADMAP.md), and nowhere else.
-
-**A shipped thing leaves [DESIGN.md](DESIGN.md).** Its behaviour goes to the
-relevant spec and its delivery to the roadmap. A built feature lingering in a
-deferred list is how a scope guard turns into misinformation.
-
-**An accepted decision record is never rewritten** — it is superseded. See
-[engineering/adr/README.md](engineering/adr/README.md).
-
-`npm run lint:docs` fails on any relative link in these files that does not
-resolve, so the set cannot quietly rot the way it once did.
+1. **Rendimiento Zero-GC:** Todas las estructuras masivas del mapa ($208 \times 208$ casillas = 43.264 celdas) se almacenan en arrays tipificados planos contiguos (`Uint8Array`, `Float32Array`, `Int32Array`) para evitar recolección de basura (*Garbage Collection pauses*) y asegurar 60 FPS estables.
+2. **Determinismo Desacoplado:** La simulación se ejecuta a pasos de tiempo fijos discretos desacoplados del renderizado gráfico de la GPU.
+3. **Mallas Instanciadas (`InstancedMesh`):** Los miles de edificios, coches, peatones, postes y árboles comparten geometrías comunes mediante instanciación de matrices y colores en Three.js, minimizando drásticamente las llamadas de dibujado (*draw calls*).
+4. **Protocolo Estricto de Agentes:** Todo nuevo desarrollo debe mantener la coherencia tipográfica de TypeScript (`npm run typecheck`) y actualizar la documentación según las normas descritas en **[AGENTS.md](file:///home/dev/projects/city-builder/AGENTS.md)**.

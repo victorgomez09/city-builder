@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="300" height="56" viewBox="0 0 300 56">
+  <rect width="300" height="56" rx="10" fill="#3d8bff"/>
+  <circle cx="34" cy="28" r="14" fill="#ffffff"/>
+  <path d="M30 21l11 7-11 7z" fill="#3d8bff"/>
+  <text x="62" y="35" fill="#ffffff" font-family="'Barlow Condensed','Roboto Condensed','Arial Narrow','Helvetica Neue',Arial,sans-serif" font-size="20" font-weight="700" letter-spacing="2" textLength="214" lengthAdjust="spacingAndGlyphs">PLAY IN YOUR BROWSER</text>
+</svg>

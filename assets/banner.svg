@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="400" viewBox="0 0 1280 400">
+  <defs>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M40 0H0V40" fill="none" stroke="#ffffff" stroke-opacity="0.045" stroke-width="1"/>
+    </pattern>
+    <linearGradient id="fade" x1="0" x2="1" y1="0" y2="0">
+      <stop offset="0" stop-color="#0d131a" stop-opacity="1"/>
+      <stop offset="0.5" stop-color="#0d131a" stop-opacity="0.6"/>
+      <stop offset="1" stop-color="#0d131a" stop-opacity="0"/>
+    </linearGradient>
+    <clipPath id="card"><rect width="1280" height="400" rx="18"/></clipPath>
+  </defs>
+  <g clip-path="url(#card)">
+    <rect width="1280" height="400" fill="#0d131a"/>
+    <rect width="1280" height="400" fill="url(#grid)"/>
+
+    <g fill="none" stroke-width="10" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M700 420V300L820 180H1300" stroke="#3d8bff"/>
+      <path d="M880 -20V100L1040 260H1300" stroke="#ffb547"/>
+      <path d="M1200 -20V100L1120 180V420" stroke="#4fd17a"/>
+      <path d="M1300 340H1000L920 420" stroke="#b276f2"/>
+    </g>
+    <g fill="#e9eff4" stroke="#0d131a" stroke-width="5">
+      <circle cx="820" cy="180" r="9"/>
+      <circle cx="880" cy="60" r="9"/>
+      <circle cx="1040" cy="260" r="9"/>
+      <circle cx="1200" cy="60" r="9"/>
+      <circle cx="1200" cy="260" r="9"/>
+      <circle cx="1000" cy="340" r="9"/>
+      <circle cx="700" cy="330" r="9"/>
+      <circle cx="960" cy="180" r="14"/>
+      <circle cx="1120" cy="180" r="14"/>
+      <circle cx="1120" cy="340" r="14"/>
+    </g>
+    <rect width="760" height="400" fill="url(#fade)"/>
+
+    <g font-family="'Barlow Condensed','Roboto Condensed','Arial Narrow','Helvetica Neue',Arial,sans-serif">
+      <text x="64" y="118" fill="#ffb547" font-size="18" font-weight="700" letter-spacing="3">OPEN-SKYLINES</text>
+      <text x="60" y="225" fill="#e9eff4" font-size="132" font-weight="700" letter-spacing="1" textLength="640" lengthAdjust="spacingAndGlyphs">OPEN <tspan fill="#3d8bff">SKYLINES</tspan></text>
+      <text x="64" y="276" fill="#93a4b4" font-size="28" font-family="'Barlow','Segoe UI','Helvetica Neue',Arial,sans-serif">a city builder that runs in your browser</text>
+      <g font-size="15" font-weight="700" letter-spacing="2.5">
+        <circle cx="70" cy="326" r="6" fill="#4fd17a"/><text x="84" y="331" fill="#93a4b4">ROADS</text>
+        <circle cx="168" cy="326" r="6" fill="#3d8bff"/><text x="182" y="331" fill="#93a4b4">ZONING</text>
+        <circle cx="276" cy="326" r="6" fill="#ffb547"/><text x="290" y="331" fill="#93a4b4">TRAFFIC</text>
+        <circle cx="392" cy="326" r="6" fill="#b276f2"/><text x="406" y="331" fill="#93a4b4">TRANSIT</text>
+      </g>
+    </g>
+  </g>
+</svg>

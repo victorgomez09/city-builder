@@ -1,118 +1,102 @@
-/**
- * RCI demand model: economic base theory.
- *
- * Industry is the basic sector — what the town sells beyond itself and lives
- * by — and commerce the local sector its own people keep in business. Basic
- * jobs call workers in; the wages they bring keep local jobs going; people
- * follow work. Three coupled scalar values in -1..1, one per Sector: positive
- * means the city wants more of that zone, negative that it is oversupplied.
- * Pure function of the current city figures — no state, no randomness.
- */
-import catalogData from '../data/catalog.json';
-import { DEFAULT_TAX_RATE, workforceOf } from '../shared/constants';
-import { ZoneType } from '../shared/types';
-import type { BuildingCatalogEntry, DemandLevels, Sector } from '../shared/types';
-import type { JobsBySector } from './economy';
+// ============================================================================
+// Open Skylines — Macroeconomic RCI Demand Simulation
+// ============================================================================
 
-export interface DemandInput {
-  population: number;
-  /**
-   * Jobs in open buildings: commercial (mixed-use ground floors included) is
-   * the local economy, industrial the basic one the town lives by.
-   */
-  jobs: JobsBySector;
-  /** Jobs in buildings still going up, which a developer counts as supply already. */
-  pipeline: JobsBySector;
-  taxRates: Record<Sector, number>;
-  happiness: number;
-}
+import { C } from '../core/constants';
+import { U } from '../core/utils';
+import { Building, DemandData } from '../types';
+import { Sim } from './sim';
 
 /**
- * Total jobs per basic job: the mean economic base multiplier across nearly
- * 200 small US communities (Mulligan 2008). Each basic job supports 0.81 local
- * ones.
+ * Calculates current macroeconomic zoning demand (RCI) across all categories.
+ *
+ * Demand ranges from 0 to 100 and governs building spawning rates:
+ * - Residential (rlow, rmed, rhigh): Driven by unfilled jobs, happiness, tax rates,
+ *   unemployment penalties, and pending unbuilt lots. Scaled by city population size.
+ * - Commercial: Driven by population consumption needs, landmark tourist attraction, and tax rates.
+ * - Industrial: Driven by goods consumption, commercial business supply, and available labour.
+ * - Office: High-tech knowledge sector driven by citizen education levels and tax policy.
  */
-export const BASE_MULTIPLIER = 1.81;
+export function calculateDemand(): DemandData {
+  const st = Sim.stats;
+  let comJobs = 0,
+    indJobs = 0,
+    offJobs = 0,
+    landmarks = 0;
 
-const CATALOG = (catalogData as { buildings: BuildingCatalogEntry[] }).buildings;
+  Sim.buildings.forEach((b: Building) => {
+    if (b.kind === 'svc') {
+      if (b.svc && C.SERVICES[b.svc]?.cat === 'landmarks') landmarks++;
+      return;
+    }
+    const cat = b.zone ? C.ZONES[b.zone]?.cat : undefined;
+    const cap = b.state === 'build' ? Sim.capOf(b) : b.jobs || 0;
+    if (cat === 'com') comJobs += cap;
+    else if (cat === 'ind') indJobs += cap;
+    else if (cat === 'off') offJobs += cap;
+  });
 
-/** The jobs of a zone's first building: the shortfall at which that sector's demand reads full. */
-function firstBuildingJobs(zone: ZoneType): number {
-  const entry = CATALOG.find((e) => e.zone === zone && e.level === 1);
-  if (!entry?.jobs) throw new Error(`demand: no level-1 building with jobs for zone ${zone}`);
-  return entry.jobs;
-}
+  let pending = 0;
+  Sim.buildings.forEach((b: Building) => {
+    if (Sim.isRes(b))
+      pending += b.state === 'build' ? Sim.capOf(b) : Math.max(0, (b.cap || 0) - (b.res || 0));
+  });
 
-/** One small factory's jobs. */
-export const INDUSTRIAL_SPAN_JOBS = firstBuildingJobs(ZoneType.Industrial);
-/** One corner shop's jobs. */
-export const COMMERCIAL_SPAN_JOBS = firstBuildingJobs(ZoneType.ComLow);
+  const pop = st.pop;
+  const workers = st.workers;
+  const openJobs = Math.max(0, st.jobs - st.filled - st.outsideIn);
 
-const clamp = (value: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, value));
+  let rd =
+    46 +
+    34 * U.clamp((openJobs - pending * 0.3) / Math.max(15, workers * 0.2), -1, 1) +
+    (st.happy - 55) * 0.8 -
+    (Sim.tax.res - 10) * 4.5 -
+    Math.max(0, st.unemp - 0.08) * 160 -
+    Math.max(0, pending - 30 - pop * 0.05) * 0.4;
 
-/**
- * ind = (workforce / BASE_MULTIPLIER - (ind + ind going up)) / max(INDUSTRIAL_SPAN_JOBS, workforce / BASE_MULTIPLIER)
- *     - (taxInd - DEFAULT_TAX_RATE) * 4
- *   -- the basic jobs that, with the local jobs they support, would employ the workforce
- *
- * com = ((BASE_MULTIPLIER - 1) * ind - (com + com going up)) / max(COMMERCIAL_SPAN_JOBS, (BASE_MULTIPLIER - 1) * ind)
- *     - (taxCom - DEFAULT_TAX_RATE) * 4
- *   -- the local jobs the open basic economy supports: no industry, no shops
- *
- * res = 0.3
- *     + (jobs - workforce) / max(200, population * 0.5)   -- people follow work, either way
- *     + (happiness - 50) / 150                            -- a happier city draws people
- *     - (taxRes - DEFAULT_TAX_RATE) * 4
- *   -- the 0.3 lets a town's founders arrive before there is any work
- *
- * Each clamped to -1..1.
- */
-export function computeDemand(input: DemandInput): DemandLevels {
-  const { population, jobs: open, pipeline, taxRates, happiness } = input;
-  const workforce = workforceOf(population);
-  const jobs = open.com + open.ind;
-  const basicWanted = workforce / BASE_MULTIPLIER;
-  const localSupported = open.ind * (BASE_MULTIPLIER - 1);
-  const taxTerm = (sector: Sector): number => (taxRates[sector] - DEFAULT_TAX_RATE) * 4;
+  if (pop < 80) rd = Math.max(rd, 80 - pending * 0.5);
+  rd = U.clamp(rd, 0, 100);
+  Sim.resDemandBase = rd;
 
-  const res = clamp(
-    0.3 +
-      (jobs - workforce) / Math.max(200, population * 0.5) +
-      (happiness - 50) / 150 -
-      taxTerm('res'),
-    -1,
-    1,
+  const w = U.clamp(pop / 6000, 0, 1);
+  const rlow = U.clamp(rd * (1.05 - 0.55 * w), 0, 100);
+  const rmed = Sim.unlocked(1)
+    ? U.clamp(rd * (0.6 + 0.5 * w) + (pop > 400 ? 8 : 0), 0, 100)
+    : 0;
+  const rhigh = Sim.unlocked(4) ? U.clamp(rd * (0.4 + 0.8 * w) + 10, 0, 100) : 0;
+
+  const avail = U.clamp((st.unemp - 0.03) * 400, 0, 60);
+  const comNeed = pop * 0.16 + landmarks * 25 + 6;
+  const com = U.clamp(
+    22 +
+      60 * U.clamp((comNeed - comJobs) / Math.max(8, comNeed * 0.3), -1, 1) -
+      (Sim.tax.com - 10) * 4.5 +
+      avail,
+    0,
+    100
   );
 
-  const com = clamp(
-    (localSupported - open.com - pipeline.com) / Math.max(COMMERCIAL_SPAN_JOBS, localSupported) -
-      taxTerm('com'),
-    -1,
-    1,
+  const indNeed = pop * 0.19 + comJobs * 0.2 + 10;
+  const ind = U.clamp(
+    22 +
+      60 * U.clamp((indNeed - indJobs) / Math.max(8, indNeed * 0.3), -1, 1) -
+      (Sim.tax.ind - 10) * 4.5 +
+      avail,
+    0,
+    100
   );
 
-  const ind = clamp(
-    (basicWanted - open.ind - pipeline.ind) / Math.max(INDUSTRIAL_SPAN_JOBS, basicWanted) -
-      taxTerm('ind'),
-    -1,
-    1,
-  );
+  const offNeed = pop * 0.11 * (0.3 + st.edu);
+  const off = Sim.unlocked(3)
+    ? U.clamp(
+        15 +
+          65 * U.clamp((offNeed - offJobs) / Math.max(8, offNeed * 0.3), -1, 1) -
+          (Sim.tax.off - 10) * 4.5 +
+          avail * 0.6,
+        0,
+        100
+      )
+    : 0;
 
-  return { res, com, ind };
-}
-
-/**
- * The jobs each business sector still has room for: the local jobs the open
- * industry supports less those open or going up, and the basic jobs the
- * workforce calls for less those open or going up. Negative when a sector is
- * oversupplied. The spawner reads it so a business opens only where its jobs
- * fit, where the demand value above only says which way the city leans.
- */
-export function jobRoom(input: DemandInput): JobsBySector {
-  const { population, jobs: open, pipeline } = input;
-  const workforce = workforceOf(population);
-  return {
-    com: open.ind * (BASE_MULTIPLIER - 1) - open.com - pipeline.com,
-    ind: workforce / BASE_MULTIPLIER - open.ind - pipeline.ind,
-  };
+  return { rlow, rmed, rhigh, com, ind, off };
 }

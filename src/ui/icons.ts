@@ -1,0 +1,82 @@
+/**
+ * Open Skylines — UI Icons and SVG Generators
+ */
+
+export const IC: Record<string, string> = {
+  street: '<path d="M8 3L5 21M16 3l3 18M12 4v3M12 10v3M12 16v3"/>',
+  avenue: '<path d="M6 3L3 21M18 3l3 18M10 4v3M10 10v3M10 16v3M14 4v3M14 10v3M14 16v3"/>',
+  highway: '<path d="M5 3L2 21M19 3l3 18M12 3v18M8 5v2M8 11v2M8 17v2M16 5v2M16 11v2M16 17v2"/>',
+  rlow: '<path d="M3 11l9-7 9 7M5 10v10h14V10M10 20v-5h4v5"/>',
+  rmed: '<path d="M4 20V8h7v12M11 20V4h9v16M6 11h3M6 15h3M14 8h3M14 12h3M14 16h3"/>',
+  rhigh: '<path d="M8 21V3h8v18M5 21h14M10 6h4M10 10h4M10 14h4"/>',
+  clow: '<path d="M3 9l2-5h14l2 5M4 9v11h16V9M3 9h18M9 20v-6h6v6"/>',
+  chigh: '<path d="M2 20V9l10-5 10 5v11M6 20v-7h12v7M2 20h20"/>',
+  ind: '<path d="M3 20V10l5 3V10l5 3V10l5 3V4h3v16zM3 20h18"/>',
+  office: '<path d="M5 21V5l7-2 7 2v16M9 8h1M14 8h1M9 12h1M14 12h1M9 16h1M14 16h1"/>',
+  olow: '<path d="M3 21V11h18v10M3 21h18M6 14h3M11 14h2M15 14h3M6 17h3M15 17h3M11 21v-4h2v4M7 11V8h10v3"/>',
+  dezone: '<path d="M4 4h16v16H4zM4 4l16 16"/>',
+  police: '<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/>',
+  fire: '<path d="M12 3c1 4 6 6 6 11a6 6 0 0 1-12 0c0-3 2-4 2-7 2 1 3 3 3 5 1-2 1-6 1-9z"/>',
+  health: '<path d="M9 3h6v6h6v6h-6v6H9v-6H3V9h6z"/>',
+  edu: '<path d="M2 9l10-5 10 5-10 5zM6 11v5c3 2 9 2 12 0v-5"/>',
+  garbage: '<path d="M4 6h16M9 6V4h6v2M6 6l1 14h10l1-14M10 10v6M14 10v6"/>',
+  park: '<path d="M12 21v-6M12 3l6 9H6zM12 7l5 8H7z"/>',
+  plaza: '<path d="M4 20h16M6 20c0-3 2-4 6-4s6 1 6 4M12 16V8M9 6c1-2 5-2 6 0"/>',
+  stadium: '<ellipse cx="12" cy="12" rx="9" ry="6"/><ellipse cx="12" cy="12" rx="4" ry="2.5"/>',
+  tower: '<path d="M12 2v4M9 6h6l-1 4h-4zM10.5 10L9 21h6l-1.5-11"/>',
+  arch: '<path d="M3 21V6h18v15M7 21v-9a5 5 0 0 1 10 0v9"/>',
+  busstop: '<path d="M6 21V3M6 4h8v6H6M10 21v-6"/>',
+  busline: '<rect x="4" y="4" width="16" height="13" rx="2"/><path d="M4 11h16M7 21v-4M17 21v-4"/>',
+  elev: '<path d="M3 8h18M3 12h18M6 12v9M18 12v9M7 8V5M12 8V5M17 8V5"/>',
+  sub: '<path d="M3 20a9 9 0 0 1 18 0M7 20a5 5 0 0 1 10 0M12 7V3"/>',
+  station: '<rect x="3" y="8" width="18" height="8" rx="2"/><path d="M2 8l10-5 10 5M8 20l1-4M16 20l-1-4"/>',
+  metro: '<rect x="6" y="3" width="12" height="15" rx="4"/><path d="M6 11h12M9 21l1-3M15 21l-1-3"/>',
+  zones: '<path d="M3 3h8v8H3zM13 3h8v8h-8zM3 13h8v8H3zM13 13h8v8h-8z"/>',
+  bulldoze: '<path d="M5 5l14 14M19 5L5 19"/>',
+  district: '<path d="M3 7l6-3 6 3 6-3v13l-6 3-6-3-6 3V7zM9 4v13M15 7v13"/>',
+  junction: '<path d="M9 3v6H3M15 3v6h6M9 21v-6H3M15 21v-6h6"/><circle cx="12" cy="12" r="1.5"/>',
+  lights: '<rect x="8" y="2" width="8" height="18" rx="2"/><circle cx="12" cy="6" r="1.5"/><circle cx="12" cy="11" r="1.5"/><circle cx="12" cy="16" r="1.5"/>',
+  stop: '<path d="M8 3h8l5 5v8l-5 5H8l-5-5V8z"/>',
+  round: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/>',
+  free: '<path d="M12 3v18M3 12h18"/>',
+  tramstop: '<path d="M6 21V3M6 4h8v6H6M10 21v-6"/><path d="M14 18h6"/>',
+  tramline: '<rect x="5" y="5" width="14" height="12" rx="3"/><path d="M9 2h6M12 2v3M8 21l2-4M16 21l-2-4"/>',
+  playground: '<path d="M4 20V8l8-4 8 4v12M8 20v-6h8v6"/>',
+  landmark: '<path d="M12 2l3 7h7l-5.5 4 2 7-6.5-4.5L5.5 20l2-7L2 9h7z"/>',
+  recycle: '<path d="M7 19l-4-7 4-7M17 5l4 7-4 7M8 5h8M8 19h8"/>',
+};
+
+export const svg = (k: string): string =>
+  '<svg viewBox="0 0 24 24" aria-hidden="true">' + (IC[k] || IC.landmark || '') + '</svg>';
+
+export const SVC_ICON: Record<string, string> = {
+  police: 'police',
+  policehq: 'police',
+  fire: 'fire',
+  firehq: 'fire',
+  clinic: 'health',
+  hospital: 'health',
+  elem: 'edu',
+  high: 'edu',
+  univ: 'edu',
+  garbage: 'garbage',
+  recycle: 'recycle',
+  plaza: 'plaza',
+  grandplaza: 'plaza',
+  miniplaza: 'plaza',
+  playground: 'playground',
+  bigplay: 'playground',
+  stadium: 'stadium',
+  tower: 'tower',
+  claude: 'arch',
+};
+
+export const SVC_COL: Record<string, string> = {
+  police: '#2c5aa0',
+  fire: '#b8322a',
+  health: '#c8323e',
+  edu: '#a0632f',
+  garbage: '#4d7a4a',
+  park: '#3f8a3a',
+  landmark: '#8a6a2a',
+};
