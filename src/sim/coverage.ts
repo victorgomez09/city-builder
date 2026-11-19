@@ -1,5 +1,5 @@
 /**
- * Open Skylines — Spatial Coverage & Environmental Heatmaps (`src/sim/coverage.ts`)
+ * Vira City — Spatial Coverage & Environmental Heatmaps (`src/sim/coverage.ts`)
  *
  * Computes city-wide influence fields using continuous inverse-square falloff
  * and radial convolution stamps written directly into flat Float32Arrays (Zero-GC).

@@ -1,5 +1,5 @@
 // ============================================================================
-// Open Skylines — Building Placement, Lot Fitting & Growth Logic
+// Vira City — Building Placement, Lot Fitting & Growth Logic
 // ============================================================================
 
 import { C } from '../core/constants';

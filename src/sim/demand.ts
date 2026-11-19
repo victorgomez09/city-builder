@@ -1,5 +1,5 @@
 // ============================================================================
-// Open Skylines — Macroeconomic RCI Demand Simulation
+// Vira City — Macroeconomic RCI Demand Simulation
 // ============================================================================
 
 import { C } from '../core/constants';

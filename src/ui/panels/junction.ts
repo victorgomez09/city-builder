@@ -1,5 +1,5 @@
 /**
- * Open Skylines — Intersection / Junction Editor Panel (`src/ui/panels/junction.ts`)
+ * Vira City — Intersection / Junction Editor Panel (`src/ui/panels/junction.ts`)
  *
  * Provides the interactive UI for traffic signals, stop signs, all-way stops,
  * roundabout settings, green-time sliders, and per-lane turning arrow toggles.

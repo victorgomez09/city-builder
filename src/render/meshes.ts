@@ -1,5 +1,5 @@
 /**
- * Open Skylines — 3D City Rendering, Mesh Generation & Materials (`src/render/meshes.ts`)
+ * Vira City — 3D City Rendering, Mesh Generation & Materials (`src/render/meshes.ts`)
  */
 import * as THREE from 'three';
 import { C } from '@/core/constants';

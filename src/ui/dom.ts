@@ -1,5 +1,5 @@
 /**
- * Open Skylines — DOM Query and Manipulation Utilities for UI
+ * Vira City — DOM Query and Manipulation Utilities for UI
  *
  * Lightweight, type-safe helpers for querying elements, updating reactive labels,
  * drawing sparkline canvases, and rendering consistent panel headers and meters.

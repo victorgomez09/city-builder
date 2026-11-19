@@ -1,5 +1,5 @@
 /**
- * Open Skylines — Junction Traffic Signals & Stop Rule Arbitration (`src/traffic/signals.ts`)
+ * Vira City — Junction Traffic Signals & Stop Rule Arbitration (`src/traffic/signals.ts`)
  *
  * Implements traffic light phases (green, yellow, all-red), stop-sign priorities,
  * approach queue evaluation, and spawn point congestion blocking.

@@ -1,5 +1,5 @@
 /**
- * Open Skylines — Municipal Budget, Taxation & Debt Management (`src/sim/budget.ts`)
+ * Vira City — Municipal Budget, Taxation & Debt Management (`src/sim/budget.ts`)
  */
 import { C } from '@/core/constants';
 import { U } from '@/core/utils';

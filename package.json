@@ -1,7 +1,7 @@
 {
-  "name": "city-builder",
+  "name": "vira-city",
   "version": "1.0.0",
-  "description": "City Builder (Cities: Skylines / CityRT style) in TypeScript with Three.js",
+  "description": "Vira City — City Builder simulation in TypeScript with Three.js",
   "type": "module",
   "scripts": {
     "dev": "vite",

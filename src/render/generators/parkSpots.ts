@@ -1,5 +1,5 @@
 // ============================================================================
-// Open Skylines — Park & Landmark Activity Spots
+// Vira City — Park & Landmark Activity Spots
 // ============================================================================
 
 import { C } from '../../core/constants';

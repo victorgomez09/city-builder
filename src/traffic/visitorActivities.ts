@@ -1,5 +1,5 @@
 /**
- * Open Skylines — Park Visitor & Landmark Activities (`src/traffic/visitorActivities.ts`)
+ * Vira City — Park Visitor & Landmark Activities (`src/traffic/visitorActivities.ts`)
  *
  * Implements park pedestrian behaviors: strolling along procedural paths, sitting on
  * benches, swinging, sliding, skating in skateparks, playing basketball, and ball physics.

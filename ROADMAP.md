@@ -1,6 +1,6 @@
-# 🏙️ Open Skylines — Roadmap & Master Management Blueprint (ROADME.md)
+# 🏙️ Vira City — Roadmap & Master Management Blueprint (ROADME.md)
 
-Este documento define la visión y hoja de ruta para evolucionar **Open Skylines** hacia un simulador de gestión urbana profundo, modular y de alto rendimiento en el navegador (en la línea de *Cities: Skylines*, *SimCity 4* y *Workers & Resources*), aprovechando al máximo la arquitectura TypeScript, la simulación determinista por cuadrículas (*flat typed arrays*) y el motor de renderizado Three.js.
+Este documento define la visión y hoja de ruta para evolucionar **Vira City** hacia un simulador de gestión urbana profundo, modular y de alto rendimiento en el navegador (en la línea de *Cities: Skylines*, *SimCity 4* y *Workers & Resources*), aprovechando al máximo la arquitectura TypeScript, la simulación determinista por cuadrículas (*flat typed arrays*) y el motor de renderizado Three.js.
 
 ---
 
@@ -125,7 +125,7 @@ Hacer que las decisiones del alcalde tengan consecuencias sociales directas y vi
 ---
 
 ### 🧠 Pilar H: Simulación Compleja — Dinámicas Laborales, Demografía y Gentrificación
-Mecánicas avanzadas para transformar Open Skylines en un simulador de máxima profundidad:
+Mecánicas avanzadas para transformar Vira City en un simulador de máxima profundidad:
 1. **Mercado Laboral Dinámico y Fuga de Cerebros (*Brain Drain*):**
    - **Cualificación vs Oferta:** Si hay demasiados graduados universitarios pero solo industria pesada básica, los jóvenes emigran a ciudades vecinas (*Fuga de talento*). Si hay oficinas de alta tecnología pero baja educación, las empresas quiebran por falta de perfiles especializados.
 2. **Gentrificación y Desplazamiento Residencial:**
@@ -146,12 +146,12 @@ Arquitectura integral para guardar partidas y distribución como aplicación eje
 1. **Gestor de Guardados Multiranura (*Multi-Slot Save Hub*):**
    - Múltiples ranuras de guardado con nombre personalizado, fecha, población, fondos y captura en miniatura del mapa.
    - Auto-guardado periódico configurable (cada 5, 10, 15 minutos) con rotación automática de copias de seguridad (*Rolling Autosaves*).
-   - Exportación e importación directa de archivos locales `.openskylines` (JSON compacto comprimido con RLE) para compartir ciudades entre jugadores.
+   - Exportación e importación directa de archivos locales `.viracity` (JSON compacto comprimido con RLE) para compartir ciudades entre jugadores.
 2. **Empaquetado de Escritorio — Evaluación Arquitectónica:**
    - **Opción Recomendada: TAURI (Rust + Webview Nativo):**
      - **Tamaño Ultraligero:** Binario instalable final de solo $\sim 10 - 15\text{ MB}$ (frente a los $\sim 150 - 200\text{ MB}$ de un ejecutable Electron).
      - **Rendimiento y Memoria:** Utiliza el motor web nativo del sistema operativo (Edge WebView2 en Windows, WebKitGTK en Linux, WKWebView en macOS). No duplica instancias pesadas de NodeJS/Chromium, liberando cientos de megabytes de RAM para la simulación determinista y el renderizado Three.js.
-     - **Acceso a Sistema de Archivos:** Backend nativo en Rust con I/O directa para guardar y leer archivos masivos en directorios estándar del sistema operativo (`~/.local/share/openskylines/saves/` en Linux o `%APPDATA%/OpenSkylines/saves/` en Windows) sin los límites de almacenamiento de `localStorage`/`IndexedDB` del navegador.
+     - **Acceso a Sistema de Archivos:** Backend nativo en Rust con I/O directa para guardar y leer archivos masivos en directorios estándar del sistema operativo (`~/.local/share/viracity/saves/` en Linux o `%APPDATA%/ViraCity/saves/` en Windows) sin los límites de almacenamiento de `localStorage`/`IndexedDB` del navegador.
      - **Compatibilidad Futura:** Preparado para integración nativa con Steam SDK (Steam Cloud Saves, logros, Steam Workshop).
    - **Alternativa Secundaria: ELECTRON:**
      - Mayor consumo de recursos y tamaño abultado, pero garantiza exactamente el mismo motor Chromium en cualquier plataforma sin depender del webview instalado en el sistema operativo del usuario.
@@ -236,12 +236,12 @@ flowchart TD
 - [ ] **Gestor de Guardados Multiranura (*Save/Load Hub*):**
   - Selector de partidas guardadas con nombre, fecha/hora, población, dinero disponible y miniatura previa (*screenshot*) generada con `renderer.domElement.toDataURL()`.
   - Sistema de guardado automático rotativo (*Rolling Autosaves*) cada 5, 10 o 15 minutos en ranuras independientes (`autosave_1`, `autosave_2`, `autosave_3`).
-- [ ] **Exportación e Importación de Archivos `.openskylines`:**
+- [ ] **Exportación e Importación de Archivos `.viracity`:**
   - Descarga directa de archivos de partida para respaldo local o intercambio con otros jugadores en formato JSON comprimido / GZIP binario.
-  - Carga mediante arrastrar y soltar (*drag & drop*) de archivos `.openskylines` directamente sobre el lienzo del juego.
+  - Carga mediante arrastrar y soltar (*drag & drop*) de archivos `.viracity` directamente sobre el lienzo del juego.
 - [ ] **Empaquetado de Aplicación de Escritorio con TAURI:**
   - Configuración del entorno de compilación nativo `src-tauri` con Rust y Tauri v2.
-  - Acceso nativo y seguro al sistema de archivos local (`~/.config/openskylines/saves/` en Linux y `%APPDATA%/OpenSkylines/saves/` en Windows) sin los límites de almacenamiento del navegador ni cuotas de `localStorage`.
+  - Acceso nativo y seguro al sistema de archivos local (`~/.config/viracity/saves/` en Linux y `%APPDATA%/ViraCity/saves/` en Windows) sin los límites de almacenamiento del navegador ni cuotas de `localStorage`.
   - Menús nativos de ventana (Guardar, Cargar, Salir, Pantalla Completa, Atajos de Teclado).
   - Rendimiento óptimo: binario compilado de solo $\sim 10 - 15\text{ MB}$ con el webview nativo del sistema operativo (Edge WebView2 / WebKitGTK).
   - Preparado para distribución en Steam (soporte nativo de Steam Cloud Saves y Steam Overlay).

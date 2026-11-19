@@ -1,6 +1,6 @@
-# 📚 Open Skylines — Documentación Técnica del Sistema
+# 📚 Vira City — Documentación Técnica del Sistema
 
-Bienvenido a la documentación técnica oficial de **Open Skylines**, un simulador de gestión urbana y construcción de ciudades en tiempo real (*city builder*) desarrollado en **TypeScript**, **Three.js** y **Vite**.
+Bienvenido a la documentación técnica oficial de **Vira City**, un simulador de gestión urbana y construcción de ciudades en tiempo real (*city builder*) desarrollado en **TypeScript**, **Three.js** y **Vite**.
 
 Este compendio detalla la arquitectura de bajo nivel, el modelo matemático de simulación, la gestión de memoria *zero-garbage-collection*, los sistemas de tráfico y transporte público, el pipeline de renderizado gráfico y la interfaz de usuario.
 

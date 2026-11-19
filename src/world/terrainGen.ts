@@ -1,5 +1,5 @@
 // ============================================================================
-// Open Skylines — Procedural Terrain & Map Generation
+// Vira City — Procedural Terrain & Map Generation
 // ============================================================================
 
 import { C } from '../core/constants';

@@ -101,7 +101,7 @@ function defaultPreset() {
 function loadSettings(): GameSettings {
   let s: Partial<GameSettings> | null = null;
   try {
-    const raw = store(C.SET_KEY);
+    const raw = store(C.SET_KEY) || store(C.LEGACY_SET_KEY);
     s = JSON.parse(raw || 'null');
   } catch (e) {
     s = null;
@@ -141,7 +141,7 @@ Game.autosave = function () {
 
 function readSave() {
   try {
-    const s = store(C.SAVE_KEY);
+    const s = store(C.SAVE_KEY) || store(C.LEGACY_SAVE_KEY);
     return s ? JSON.parse(s) : null;
   } catch (e) {
     return null;
@@ -151,7 +151,8 @@ function readSave() {
   Game.showStart = function (fresh) {
     if (fresh) {
       storeDel(C.SAVE_KEY);
-      try { sessionStorage.setItem('openskylines.fresh', '1'); } catch (e) { /* ignore */ }
+      storeDel(C.LEGACY_SAVE_KEY);
+      try { sessionStorage.setItem('viracity.fresh', '1'); } catch (e) { /* ignore */ }
       location.reload();
     }
   };
@@ -166,18 +167,18 @@ function readSave() {
     const params = new URLSearchParams(location.search);
     let fresh = false;
     try {
-      fresh = sessionStorage.getItem('openskylines.fresh') === '1';
-      sessionStorage.removeItem('openskylines.fresh');
+      fresh = sessionStorage.getItem('viracity.fresh') === '1';
+      sessionStorage.removeItem('viracity.fresh');
     } catch (e) {
       /* ignore */
     }
     let pick: string | null = null,
       auto = false;
     try {
-      pick = sessionStorage.getItem('openskylines.map');
-      sessionStorage.removeItem('openskylines.map');
-      auto = sessionStorage.getItem('openskylines.autoload') === '1';
-      sessionStorage.removeItem('openskylines.autoload');
+      pick = sessionStorage.getItem('viracity.map');
+      sessionStorage.removeItem('viracity.map');
+      auto = sessionStorage.getItem('viracity.autoload') === '1';
+      sessionStorage.removeItem('viracity.autoload');
     } catch (e) {
       /* ignore */
     }
@@ -228,17 +229,17 @@ function readSave() {
     mdesc();
     ms.onchange = () => {
       try {
-        sessionStorage.setItem('openskylines.map', ms.value);
-        sessionStorage.setItem('openskylines.name', $<HTMLInputElement>('cityInput').value);
+        sessionStorage.setItem('viracity.map', ms.value);
+        sessionStorage.setItem('viracity.name', $<HTMLInputElement>('cityInput').value);
       } catch (e) {
         /* ignore */
       }
       location.reload();
     };
     try {
-      const nm = sessionStorage.getItem('openskylines.name');
+      const nm = sessionStorage.getItem('viracity.name');
       if (nm && pick) $<HTMLInputElement>('cityInput').value = nm;
-      sessionStorage.removeItem('openskylines.name');
+      sessionStorage.removeItem('viracity.name');
     } catch (e) {
       /* ignore */
     }
@@ -250,7 +251,7 @@ function readSave() {
         return;
       }
       try {
-        sessionStorage.setItem('openskylines.autoload', '1');
+        sessionStorage.setItem('viracity.autoload', '1');
       } catch (e) {
         /* ignore */
       }

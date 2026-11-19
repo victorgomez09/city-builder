@@ -1,5 +1,5 @@
 /**
- * Open Skylines — SVG Road and Path Thumbnail Generators
+ * Vira City — SVG Road and Path Thumbnail Generators
  */
 
 import { RoadDef, PathDef } from '../types';

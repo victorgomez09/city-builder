@@ -1,10 +1,12 @@
 <p align="center">
-  <img src="assets/banner.svg" width="100%" alt="Open Skylines: a city builder that runs in your browser">
+  <img src="assets/banner.svg" width="100%" alt="Vira City: a city builder that runs in your browser">
 </p>
 
 <p align="center">
   <a href="https://kostslava.github.io/open-skylines/"><img src="assets/play.svg" height="52" alt="Play in your browser"></a>
-<## what is this
+</p>
+
+## what is this
 
 a city builder you play in the browser. kinda like cities skylines but way smaller, made in three.js. nothing to install, just open the link.
 

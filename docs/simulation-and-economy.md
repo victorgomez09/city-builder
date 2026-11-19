@@ -97,7 +97,7 @@ En `Sim.serialize()` y `Sim.load(d)`, el estado completo se comprime mediante co
 
 ## 6. Recursos Naturales y Cadenas de Suministro (Supply Chains)
 
-Open Skylines incorpora un sistema de economía productiva de 4 niveles inspirado en *Cities: Skylines* y *CityRT*:
+Vira City incorpora un sistema de economía productiva de 4 niveles inspirado en *Cities: Skylines* y *CityRT*:
 
 ```mermaid
 flowchart TD

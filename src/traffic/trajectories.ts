@@ -1,5 +1,5 @@
 /**
- * Open Skylines — Vehicle & Soft-Agent Trajectory Calculus (`src/traffic/trajectories.ts`)
+ * Vira City — Vehicle & Soft-Agent Trajectory Calculus (`src/traffic/trajectories.ts`)
  *
  * Implements Bezier spline generation, lane-boundary path tracking, turn evaluation,
  * and sidewalk/cycleway offset coordinates for vehicles and pedestrians.

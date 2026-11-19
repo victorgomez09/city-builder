@@ -1,5 +1,5 @@
 /**
- * Open Skylines — Directed A* Pathfinding & Impedance Costs (`src/traffic/pathfinding.ts`)
+ * Vira City — Directed A* Pathfinding & Impedance Costs (`src/traffic/pathfinding.ts`)
  *
  * Implements directed graph search with zero-GC generation-tagged memory buffers
  * and min-heap priority queueing.

@@ -1,5 +1,5 @@
 /**
- * Open Skylines — City Serialization, RLE Compression & Save/Load (`src/sim/serialization.ts`)
+ * Vira City — City Serialization, RLE Compression & Save/Load (`src/sim/serialization.ts`)
  */
 import { C } from '@/core/constants';
 import { U } from '@/core/utils';

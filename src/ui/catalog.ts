@@ -1,5 +1,5 @@
 /**
- * Open Skylines — UI Catalog & Toolbar Definitions (`src/ui/catalog.ts`)
+ * Vira City — UI Catalog & Toolbar Definitions (`src/ui/catalog.ts`)
  *
  * Defines categories, menu items, unlocks, and icon badges for the main toolbar
  * and tool palette.

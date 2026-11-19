@@ -1,5 +1,5 @@
 /**
- * Open Skylines — UI Budget Panel
+ * Vira City — UI Budget Panel
  */
 
 import { U } from '@/core/utils';

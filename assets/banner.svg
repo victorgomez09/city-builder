@@ -35,8 +35,8 @@
     <rect width="760" height="400" fill="url(#fade)"/>
 
     <g font-family="'Barlow Condensed','Roboto Condensed','Arial Narrow','Helvetica Neue',Arial,sans-serif">
-      <text x="64" y="118" fill="#ffb547" font-size="18" font-weight="700" letter-spacing="3">OPEN-SKYLINES</text>
-      <text x="60" y="225" fill="#e9eff4" font-size="132" font-weight="700" letter-spacing="1" textLength="640" lengthAdjust="spacingAndGlyphs">OPEN <tspan fill="#3d8bff">SKYLINES</tspan></text>
+      <text x="64" y="118" fill="#ffb547" font-size="18" font-weight="700" letter-spacing="3">VIRA-CITY</text>
+      <text x="60" y="225" fill="#e9eff4" font-size="132" font-weight="700" letter-spacing="1" textLength="480" lengthAdjust="spacingAndGlyphs">VIRA <tspan fill="#3d8bff">CITY</tspan></text>
       <text x="64" y="276" fill="#93a4b4" font-size="28" font-family="'Barlow','Segoe UI','Helvetica Neue',Arial,sans-serif">a city builder that runs in your browser</text>
       <g font-size="15" font-weight="700" letter-spacing="2.5">
         <circle cx="70" cy="326" r="6" fill="#4fd17a"/><text x="84" y="331" fill="#93a4b4">ROADS</text>

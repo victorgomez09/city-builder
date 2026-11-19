@@ -1,5 +1,5 @@
 /**
- * Open Skylines — City Goals & Milestone Dialogs (`src/ui/goals.ts`)
+ * Vira City — City Goals & Milestone Dialogs (`src/ui/goals.ts`)
  *
  * Tracks player tutorial & city development goals and displays the milestone
  * celebration modal dialog when population benchmarks are reached.

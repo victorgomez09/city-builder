@@ -23,8 +23,10 @@ export const C = {
   VEH_SPEED: 1.8,    // visual speed multiplier for agents
   START_MONEY: 70000,
   WALK_R: 16,        // tiles people will walk to a stop
-  SAVE_KEY: 'openskylines.save.v2',
-  SET_KEY: 'openskylines.settings.v1',
+  SAVE_KEY: 'viracity.save.v2',
+  SET_KEY: 'viracity.settings.v1',
+  LEGACY_SAVE_KEY: 'openskylines.save.v2',
+  LEGACY_SET_KEY: 'openskylines.settings.v1',
 
   P0: 32,
   P1: 32 + 144,

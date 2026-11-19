@@ -1,5 +1,5 @@
 // ============================================================================
-// Open Skylines — Districts, Specializations & Policies
+// Vira City — Districts, Specializations & Policies
 // ============================================================================
 
 import { C } from '../core/constants';

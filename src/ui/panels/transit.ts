@@ -1,5 +1,5 @@
 /**
- * Open Skylines — UI Transit Panel
+ * Vira City — UI Transit Panel
  */
 
 import { C } from '@/core/constants';

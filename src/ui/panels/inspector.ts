@@ -1,5 +1,5 @@
 /**
- * Open Skylines — Entity Inspector Panel (`src/ui/panels/inspector.ts`)
+ * Vira City — Entity Inspector Panel (`src/ui/panels/inspector.ts`)
  *
  * Provides inspection views and realtime status monitors for selected buildings,
  * simulation vehicles (with path ribbon & camera follow), and transit stations/stops.

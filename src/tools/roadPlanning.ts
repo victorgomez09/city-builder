@@ -1,5 +1,5 @@
 /**
- * Open Skylines — Road Curve Geometry & Lattice Planning (`src/tools/roadPlanning.ts`)
+ * Vira City — Road Curve Geometry & Lattice Planning (`src/tools/roadPlanning.ts`)
  *
  * Implements octilinear lattice walks, Bresenham line paths, and quadratic Bézier
  * curve sampling for single and dual carriageway roads.

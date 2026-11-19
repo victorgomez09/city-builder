@@ -1,5 +1,5 @@
 /**
- * Open Skylines — UI Districts and Policies Panel
+ * Vira City — UI Districts and Policies Panel
  */
 
 import { C } from '@/core/constants';

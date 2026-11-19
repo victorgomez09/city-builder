@@ -1,5 +1,5 @@
 /**
- * Open Skylines — Procedural 3D Geometry Builder (`src/render/geometryBuilder.ts`)
+ * Vira City — Procedural 3D Geometry Builder (`src/render/geometryBuilder.ts`)
  *
  * Fast CPU vertex buffer assembler with transformation framing, material tagging,
  * and direct translation into non-indexed Three.js BufferGeometry.

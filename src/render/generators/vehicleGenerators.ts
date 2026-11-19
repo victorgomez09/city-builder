@@ -1,5 +1,5 @@
 // ============================================================================
-// Open Skylines — Procedural Vehicle Mesh Generators
+// Vira City — Procedural Vehicle Mesh Generators
 // ============================================================================
 
 import * as THREE from 'three';

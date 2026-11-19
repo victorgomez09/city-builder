@@ -1,5 +1,5 @@
 /**
- * Open Skylines — UI City Statistics Panel
+ * Vira City — UI City Statistics Panel
  */
 
 import { C } from '@/core/constants';

@@ -1,5 +1,5 @@
 /**
- * Open Skylines — UI Info Views Panel (`src/ui/panels/views.ts`)
+ * Vira City — UI Info Views Panel (`src/ui/panels/views.ts`)
  *
  * Provides GPU-powered heatmap infoviews, active overlay toggles,
  * and comprehensive contextual color guides with explanation modals for every statistic.

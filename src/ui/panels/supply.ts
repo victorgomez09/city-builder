@@ -1,5 +1,5 @@
 /**
- * Open Skylines — Supply Chain & Logistics Panel (`src/ui/panels/supply.ts`)
+ * Vira City — Supply Chain & Logistics Panel (`src/ui/panels/supply.ts`)
  *
  * Provides real-time metrics, industrial extraction breakdowns,
  * freight logistics, and trade balance (imports/exports).

@@ -1,6 +1,6 @@
-# 🤖 Guía de Desarrollo para Agentes de IA — Open Skylines (`AGENTS.md`)
+# 🤖 Guía de Desarrollo para Agentes de IA — Vira City (`AGENTS.md`)
 
-Este documento define el protocolo operativo obligatorio, los estándares de ingeniería y las normas de documentación que **todo agente de IA (y desarrollador humano)** debe cumplir estrictamente al trabajar en el repositorio de **Open Skylines**.
+Este documento define el protocolo operativo obligatorio, los estándares de ingeniería y las normas de documentación que **todo agente de IA (y desarrollador humano)** debe cumplir estrictamente al trabajar en el repositorio de **Vira City**.
 
 ---
 

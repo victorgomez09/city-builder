@@ -1,6 +1,6 @@
 # 🧹 Estrategia de Refactorización y Buenas Prácticas (Fase 1.5)
 
-Este documento detalla el plan de acción, los principios rectores y la metodología para la **refactorización arquitectónica de Open Skylines**, garantizando que el código sea modular, limpio y estrictamente tipado sin alterar la lógica de negocio ni degradar el rendimiento.
+Este documento detalla el plan de acción, los principios rectores y la metodología para la **refactorización arquitectónica de Vira City**, garantizando que el código sea modular, limpio y estrictamente tipado sin alterar la lógica de negocio ni degradar el rendimiento.
 
 ---
 

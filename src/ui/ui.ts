@@ -1,5 +1,5 @@
 /**
- * Open Skylines — User Interface Controller & Management (`src/ui/ui.ts`)
+ * Vira City — User Interface Controller & Management (`src/ui/ui.ts`)
  *
  * Coordinates toolbars, category palettes, intersection editors, side panels,
  * info views, goal progression, and building/vehicle inspector ribbons.

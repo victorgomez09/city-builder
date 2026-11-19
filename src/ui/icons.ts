@@ -1,5 +1,5 @@
 /**
- * Open Skylines — UI Icons and SVG Generators
+ * Vira City — UI Icons and SVG Generators
  */
 
 export const IC: Record<string, string> = {

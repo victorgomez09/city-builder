@@ -1,5 +1,5 @@
 // ============================================================================
-// Open Skylines — Procedural Building & Lot Mesh Generators
+// Vira City — Procedural Building & Lot Mesh Generators
 // ============================================================================
 
 import * as THREE from 'three';

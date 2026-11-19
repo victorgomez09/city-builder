@@ -1,5 +1,5 @@
 /**
- * Open Skylines — Vehicle & Traffic Simulation Engine (`src/traffic/traffic.ts`)
+ * Vira City — Vehicle & Traffic Simulation Engine (`src/traffic/traffic.ts`)
  *
  * Simulates cars, public transit buses, streetcars, freight trucks, bikes, and pedestrians.
  * Manages pathfinding requests, road speed limits, vehicle following, and congestion dynamics.

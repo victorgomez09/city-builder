@@ -1,5 +1,5 @@
 /**
- * Open Skylines — UI Settings and Controls Panel
+ * Vira City — UI Settings and Controls Panel
  */
 
 import { C } from '@/core/constants';
