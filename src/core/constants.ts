@@ -243,6 +243,10 @@ C.SERVICES = {
   elem: SV({ name: 'Elementary School', cat: 'services', tab: 'edu', size: [2, 2], cost: 7000, upkeep: 380, radius: 13, cov: 'edu', unlock: 2, desc: 'Education raises land value and enables offices.' }),
   high: SV({ name: 'High School', cat: 'services', tab: 'edu', size: [3, 3], cost: 14000, upkeep: 700, radius: 20, cov: 'edu', unlock: 4, desc: 'Wider education coverage.' }),
   univ: SV({ name: 'University', cat: 'services', tab: 'edu', size: [4, 4], cost: 35000, upkeep: 1600, radius: 34, cov: 'edu', unlock: 6, desc: 'Big boost to education and office demand.' }),
+  transit_hub: SV({ name: 'Intermodal Transit Hub', cat: 'transit', tab: 'hub', size: [3, 3], cost: 38000, upkeep: 1400, radius: 36, cov: 'transit', unlock: 5, desc: 'Central multimodal terminal uniting metro, streetcar, and bus lines with passenger concourses.' }),
+  bikeshare: SV({ name: 'Bike-Sharing Station', cat: 'transit', tab: 'micro', size: [1, 1], cost: 650, upkeep: 25, radius: 14, cov: 'park', unlock: 1, desc: 'Public bike rental dock that boosts local cycling commute share and active mobility.' }),
+  park_and_ride: SV({ name: 'Park & Ride Terminal', cat: 'transit', tab: 'hub', size: [2, 2], cost: 4200, upkeep: 90, radius: 24, cov: 'transit', unlock: 4, desc: 'Suburban commuter lot allowing car drivers to park and transfer smoothly to mass transit.' }),
+  ped_plaza: SV({ name: 'Civic Pedestrian Plaza', cat: 'transit', tab: 'micro', size: [2, 2], cost: 2200, upkeep: 45, radius: 12, cov: 'park', unlock: 2, desc: 'Paved car-free urban square with greenery, boosting foot traffic, walking share, and shop visits.' }),
 };
 
 const PARKS: [string, string, string, number, number, number, number, number, number][] = [
@@ -287,6 +291,9 @@ const LMK: [string, string, number, number, number, number, number, number, stri
   ['whale', 'Container Whale', 4, 3, 85000, 1100, 34, 9, 'A whale carrying stacked shipping containers.'],
   ['stadium', 'Hackathon Arena', 4, 4, 120000, 1500, 40, 9, 'Attracts visitors citywide.'],
   ['tower', 'Cloud Spire', 2, 2, 110000, 1200, 38, 9, 'An observation tower above the clouds.'],
+  ['opera', 'Metropolitan Opera House', 4, 4, 150000, 1800, 44, 6, 'A magnificent neoclassical opera palace with grand colonnades and a copper dome. Boosts cultural happiness and draws high-wealth tourists.'],
+  ['stadium_arena', 'National Olympic Arena', 5, 5, 220000, 2400, 50, 7, 'A world-class multi-sport stadium bowl with tensile canopies and floodlights. Generates massive weekend ticket surges and commercial vibrancy.'],
+  ['airport_intl', 'International Airport', 6, 4, 350000, 3200, 56, 8, 'A full international aviation hub with lighted runway, taxiways, jet-bridge passenger terminal, and 24m radar control tower. Boosts cargo exports and tourism citywide.'],
 ];
 
 for (const p of LMK) {

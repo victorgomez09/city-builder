@@ -12,6 +12,7 @@ import { SaveSystem } from '@/sim/saveSystem';
 import { SaveMeta, SerializedCity } from '@/types';
 import { q, $$ } from '@/ui/dom';
 import { UI } from '@/ui/ui';
+import { t } from '@/i18n';
 
 let currentFilter: 'all' | 'manual' | 'autosave' | 'quicksave' | 'imported' = 'all';
 
@@ -216,16 +217,16 @@ export async function updateSaveHubContent(
           ">💾</div>
           <div>
             <h2 style="margin: 0; font-size: 21px; font-weight: 700; color: #fff; letter-spacing: -0.02em;">
-              Save & Load Hub
+              ${t('save_hub.title', 'Save & Load Hub')}
             </h2>
             <div style="font-size: 13px; color: #94a3b8; margin-top: 2px;">
-              Manage multi-slot saves, rolling autosaves, and .viracity file backups
+              ${t('save_hub.subtitle', 'Manage multi-slot saves, rolling autosaves, and .viracity file backups')}
             </div>
           </div>
         </div>
         <button id="btnHubClose" class="sh-btn-action" style="
           width: 36px; height: 36px; padding: 0; border-radius: 50%; font-size: 15px;
-        " title="Close (Esc)">✕</button>
+        " title="${t('common.close', 'Close')} (Esc)">✕</button>
       </div>
 
       <!-- Action & Config Bar -->
@@ -237,12 +238,12 @@ export async function updateSaveHubContent(
                   background: linear-gradient(135deg, #2563eb 0%, #0284c7 100%);
                   padding: 0 16px; width: auto; height: 36px; font-size: 12.5px;
                   box-shadow: 0 4px 14px rgba(37,99,235,0.3);
-                "><span>+</span> Save Current City</button>`
+                "><span>+</span> ${t('save_hub.create_slot', 'Save Current City')}</button>`
               : ''
           }
           <button id="btnImportViracity" class="sh-btn-action" style="
             height: 36px; padding: 0 14px; font-size: 12.5px;
-          "><span>📥</span> Import .viracity</button>
+          "><span>📥</span> ${t('save_hub.import_file', 'Import .viracity')}</button>
           <input type="file" id="fileViracityInput" accept=".viracity,.json" style="display:none;" />
         </div>
 
@@ -251,7 +252,7 @@ export async function updateSaveHubContent(
           background: rgba(255, 255, 255, 0.03); padding: 5px 12px; border-radius: 8px;
           border: 1px solid rgba(255, 255, 255, 0.06);
         ">
-          <label for="hubAutosaveInterval" style="font-weight: 500;">Autosave Frequency:</label>
+          <label for="hubAutosaveInterval" style="font-weight: 500;">${t('save_hub.autosave_freq', 'Autosave Frequency:')}</label>
           <select id="hubAutosaveInterval" style="
             padding: 4px 10px; border-radius: 6px; font-size: 12px;
             background: #1e293b; color: #f8fafc; border: 1px solid rgba(255, 255, 255, 0.14);
@@ -260,7 +261,7 @@ export async function updateSaveHubContent(
             <option value="5" ${cfg.autosaveIntervalMinutes === 5 ? 'selected' : ''}>Every 5 minutes</option>
             <option value="10" ${cfg.autosaveIntervalMinutes === 10 ? 'selected' : ''}>Every 10 minutes</option>
             <option value="15" ${cfg.autosaveIntervalMinutes === 15 ? 'selected' : ''}>Every 15 minutes</option>
-            <option value="0" ${cfg.autosaveIntervalMinutes === 0 ? 'selected' : ''}>Disabled</option>
+            <option value="0" ${cfg.autosaveIntervalMinutes === 0 ? 'selected' : ''}>${t('save_hub.autosave_off', 'Disabled')}</option>
           </select>
         </div>
       </div>
@@ -298,10 +299,10 @@ export async function updateSaveHubContent(
       ">
         <div style="font-size: 46px; margin-bottom: 14px; opacity: 0.6;">🏙️</div>
         <b style="font-size: 16px; color: #fff; display: block; margin-bottom: 6px;">
-          No saved cities found in this category
+          ${t('save_hub.no_saves', 'No saved cities found in this category')}
         </b>
         <p style="font-size: 13.5px; margin: 0; color: #64748b;">
-          Save your current city progress or drop a .viracity file anywhere to get started.
+          ${t('save_hub.no_saves_sub', 'Save your current city progress or drop a .viracity file anywhere to get started.')}
         </p>
       </div>
     `;
@@ -335,13 +336,13 @@ export async function updateSaveHubContent(
             <!-- Stats Chips -->
             <div class="sh-chips-wrap">
               <span class="sh-stat-chip">
-                👥 <b style="color: #f1f5f9;">${U.num(s.pop)}</b> Citizens
+                👥 <b style="color: #f1f5f9;">${U.num(s.pop)}</b> ${t('topbar.population', 'Citizens')}
               </span>
               <span class="sh-stat-chip">
                 💵 <b style="color: #38bdf8;">${U.money(s.money)}</b>
               </span>
               <span class="sh-stat-chip">
-                😊 <b style="color: #34d399;">${s.happy}%</b> Happiness
+                😊 <b style="color: #34d399;">${s.happy}%</b> ${t('topbar.happiness', 'Happiness')}
               </span>
               <span class="sh-stat-chip">
                 🏆 <b style="color: #fbbf24;">${s.milestoneName || 'Settlement'}</b>
@@ -359,17 +360,17 @@ export async function updateSaveHubContent(
           <!-- Actions Column -->
           <div class="sh-actions-col">
             <button class="sh-btn-primary-load" data-load-slot="${s.id}">
-              ▶ Load City
+              ${t('save_hub.load', '▶ Load City')}
             </button>
             <div class="sh-btn-grid">
               ${
                 Game.running
-                  ? `<button class="sh-btn-action" data-overwrite-slot="${s.id}" title="Overwrite slot with current game">💾 Save</button>`
+                  ? `<button class="sh-btn-action" data-overwrite-slot="${s.id}" title="Overwrite slot with current game">${t('save_hub.overwrite', '💾 Save')}</button>`
                   : ''
               }
-              <button class="sh-btn-action" data-export-slot="${s.id}" title="Download .viracity backup file">📦 Export</button>
-              <button class="sh-btn-action" data-rename-slot="${s.id}" title="Rename this save slot">✏️ Rename</button>
-              <button class="sh-btn-action danger" data-delete-slot="${s.id}" title="Permanently delete this save">🗑️ Delete</button>
+              <button class="sh-btn-action" data-export-slot="${s.id}" title="Download .viracity backup file">${t('save_hub.export', '📦 Export')}</button>
+              <button class="sh-btn-action" data-rename-slot="${s.id}" title="Rename this save slot">${t('save_hub.rename', '✏️ Rename')}</button>
+              <button class="sh-btn-action danger" data-delete-slot="${s.id}" title="Permanently delete this save">${t('save_hub.delete', '🗑️ Delete')}</button>
             </div>
           </div>
         </div>
@@ -401,7 +402,7 @@ export async function updateSaveHubContent(
   if (selInterval) {
     selInterval.onchange = async () => {
       await SaveSystem.saveConfig({ autosaveIntervalMinutes: Number(selInterval.value) });
-      UI.toast(`Autosave frequency updated: ${selInterval.selectedOptions[0].text}`, 'good');
+      UI.toast(t('save_hub.autosave_updated', { freq: selInterval.selectedOptions[0].text }), 'good');
     };
   }
 
@@ -410,16 +411,16 @@ export async function updateSaveHubContent(
   if (btnNewSave) {
     btnNewSave.onclick = async () => {
       const defaultName = (window as any).CB?.Sim?.name || 'Vira City';
-      const slotName = prompt('Enter a name for this city save:', defaultName);
+      const slotName = prompt(t('save_hub.enter_name', 'Enter a name for this city save:'), defaultName);
       if (!slotName) return;
 
       const slotId = `slot_${Date.now()}`;
       try {
         await SaveSystem.saveCity(slotId, slotName.trim(), 'manual');
-        UI.toast('City saved successfully.', 'good');
+        UI.toast(t('save_hub.save_success', 'City saved successfully.'), 'good');
         await updateSaveHubContent(container, onLoadCity);
       } catch (err: any) {
-        UI.toast('Failed to save city: ' + (err?.message || 'Storage error'), 'bad');
+        UI.toast(t('save_hub.save_failed', { error: err?.message || 'Storage error' }), 'bad');
       }
     };
   }
@@ -434,10 +435,10 @@ export async function updateSaveHubContent(
       const file = fileInput.files[0];
       const res = await SaveSystem.importFromFile(file);
       if (res.success && res.meta) {
-        UI.toast(`City "${res.meta.name}" imported successfully.`, 'good');
+        UI.toast(t('save_hub.import_success', { name: res.meta.name }), 'good');
         await updateSaveHubContent(container, onLoadCity);
       } else {
-        UI.toast(`Import failed: ${res.error || 'Incompatible format'}`, 'bad');
+        UI.toast(t('save_hub.import_failed', { error: res.error || 'Incompatible format' }), 'bad');
       }
       fileInput.value = '';
     };
@@ -450,7 +451,7 @@ export async function updateSaveHubContent(
       if (!slotId) return;
       const cityData = await SaveSystem.loadCityData(slotId);
       if (!cityData) {
-        UI.toast('Failed to read save data from storage.', 'bad');
+        UI.toast(t('save_hub.save_failed', { error: 'Failed to read save data from storage.' }), 'bad');
         return;
       }
       const savesList = await SaveSystem.listSaves();
@@ -486,13 +487,13 @@ export async function updateSaveHubContent(
     btn.onclick = async () => {
       const slotId = btn.dataset.overwriteSlot;
       if (!slotId) return;
-      const confirmed = confirm('Overwrite this slot with your current game progress?');
-      if (!confirmed) return;
-
       const savesList = await SaveSystem.listSaves();
       const existing = savesList.find(s => s.id === slotId);
+      const confirmed = confirm(t('save_hub.confirm_overwrite', { name: existing?.name || slotId }));
+      if (!confirmed) return;
+
       await SaveSystem.saveCity(slotId, existing?.name, existing?.type || 'manual');
-      UI.toast('Save slot overwritten.', 'good');
+      UI.toast(t('save_hub.overwrite_done', 'Save slot overwritten.'), 'good');
       await updateSaveHubContent(container, onLoadCity);
     };
   });
@@ -503,8 +504,8 @@ export async function updateSaveHubContent(
       const slotId = btn.dataset.exportSlot;
       if (!slotId) return;
       const ok = await SaveSystem.exportToFile(slotId);
-      if (ok) UI.toast('.viracity backup file downloaded.', 'good');
-      else UI.toast('Failed to export save file.', 'bad');
+      if (ok) UI.toast(t('save_hub.backup_downloaded', '.viracity backup file downloaded.'), 'good');
+      else UI.toast(t('save_hub.backup_failed', 'Failed to export save file.'), 'bad');
     };
   });
 
@@ -515,11 +516,11 @@ export async function updateSaveHubContent(
       if (!slotId) return;
       const savesList = await SaveSystem.listSaves();
       const existing = savesList.find(s => s.id === slotId);
-      const newName = prompt('New name for this city save:', existing?.name || '');
+      const newName = prompt(t('save_hub.new_name', 'New name for this city save:'), existing?.name || '');
       if (!newName || !newName.trim()) return;
 
       await SaveSystem.renameSlot(slotId, newName.trim());
-      UI.toast('Save slot renamed.', 'good');
+      UI.toast(t('save_hub.renamed_done', 'Save slot renamed.'), 'good');
       await updateSaveHubContent(container, onLoadCity);
     };
   });
@@ -529,11 +530,13 @@ export async function updateSaveHubContent(
     btn.onclick = async () => {
       const slotId = btn.dataset.deleteSlot;
       if (!slotId) return;
-      const confirmed = confirm('Are you sure you want to permanently delete this save? This action cannot be undone.');
+      const savesList = await SaveSystem.listSaves();
+      const existing = savesList.find(s => s.id === slotId);
+      const confirmed = confirm(t('save_hub.confirm_delete', { name: existing?.name || slotId }));
       if (!confirmed) return;
 
       await SaveSystem.deleteSlot(slotId);
-      UI.toast('Save deleted.', 'warn');
+      UI.toast(t('save_hub.deleted_done', 'Save deleted.'), 'warn');
       await updateSaveHubContent(container, onLoadCity);
     };
   });

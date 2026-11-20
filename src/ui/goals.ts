@@ -14,6 +14,7 @@ import { Milestone, RoadDef } from '@/types';
 import { $, q } from '@/ui/dom';
 import { svg } from '@/ui/icons';
 import { CATS, allItems, idOf, refreshBadges } from '@/ui/catalog';
+import { t } from '@/i18n';
 
 let roadCache = { t: 0, set: new Set<number>() };
 
@@ -95,7 +96,7 @@ export function updGoals(goalsOpen: boolean, onToggle: (open: boolean) => void):
   const from = Math.max(0, first - 1),
     to = Math.min(GOALS.length, first + 3);
   const html =
-    `<div class="goals-head"><h4><span>City goals · ${first}/${GOALS.length}</span></h4><button class="x" id="gtog" title="Close goals (Esc)" aria-label="Close goals">×</button></div>` +
+    `<div class="goals-head"><h4><span>${t('goals.city_goals', 'City goals')} · ${first}/${GOALS.length}</span></h4><button class="x" id="gtog" title="${t('goals.close_goals', 'Close goals')} (Esc)" aria-label="Close goals">×</button></div>` +
     `<ol start="${from + 1}">${GOALS.slice(from, to)
       .map((qitem, k) => `<li class="${st[from + k] ? 'done' : from + k === first ? 'cur' : ''}">${qitem[0]}</li>`)
       .join('')}</ol>`;
@@ -118,16 +119,17 @@ export function showMilestoneModal(m: Milestone, onDismiss?: () => void): void {
   const items = allItems().filter(it => it.unlock === idx && !seen.has(idOf(it)) && (seen.add(idOf(it)), true));
   const S = Sim;
   for (const it of items) if (!S.unseen.includes(idOf(it))) S.unseen.push(idOf(it));
-  const catName = (k?: string) => CATS.find(c => c.key === k)?.name || '';
+  const catName = (k?: string) => {
+    const c = CATS.find(ct => ct.key === k);
+    return c ? t('cats.' + c.key, c.name) : '';
+  };
   const show = items.slice(0, 18);
   const M = $('modal');
-  M.innerHTML = `<div class="glass mbox wide"><div class="eyebrow">Milestone reached</div><h2>${m.name}</h2>
-    <p>${S.name} now has ${m.pop.toLocaleString()} residents. The city treasury receives a grant of <b style="color:var(--accent-2)">${U.money(
-    m.reward
-  )}</b>.</p>
+  M.innerHTML = `<div class="glass mbox wide"><div class="eyebrow">${t('goals.milestone_reached', 'Milestone reached')}</div><h2>${m.name}</h2>
+    <p>${t('goals.milestone_grant', { city: S.name, pop: m.pop.toLocaleString(), reward: U.money(m.reward) })}</p>
     ${
       show.length
-        ? `<div class="lbl" style="text-align:left;margin-bottom:6px">Unlocked</div><div class="unl">${show
+        ? `<div class="lbl" style="text-align:left;margin-bottom:6px">${t('goals.unlocked', 'Unlocked')}</div><div class="unl">${show
             .map(
               it =>
                 `<div class="ucard"><div class="sw" style="${
@@ -136,12 +138,12 @@ export function showMilestoneModal(m: Milestone, onDismiss?: () => void): void {
             )
             .join('')}</div>${
             items.length > show.length
-              ? `<div class="sub" style="margin-top:6px">and ${items.length - show.length} more</div>`
+              ? `<div class="sub" style="margin-top:6px">${t('goals.and_more', { count: items.length - show.length })}</div>`
               : ''
           }`
         : ''
     }
-    <button class="btn primary" id="mok" style="margin-top:14px">Keep building</button></div>`;
+    <button class="btn primary" id="mok" style="margin-top:14px">${t('goals.keep_building', 'Keep building')}</button></div>`;
   M.hidden = false;
   const mok = q<HTMLElement>('#mok', M);
   if (mok) {

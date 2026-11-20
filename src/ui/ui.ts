@@ -18,6 +18,7 @@ import { Game } from '@/game';
 import * as THREE from 'three';
 
 import { $, $$, q, sv } from '@/ui/dom';
+import { I18n, t } from '@/i18n';
 import {
   Building,
   Vehicle,
@@ -36,6 +37,7 @@ import { renderDistrictsPanel, updDistricts, openDistrict } from '@/ui/panels/di
 import { renderSettingsPanel, openSettingsModal, closeSettingsModal } from '@/ui/panels/settings';
 import { renderSupplyPanel, updSupply } from '@/ui/panels/supply';
 import { renderUnrestPanel, updUnrest } from '@/ui/panels/unrest';
+import { renderWeatherPanel } from '@/ui/panels/weather';
 
 import { CATS, catItems, MenuItem, refreshBadges, idOf } from '@/ui/catalog';
 import { openJunction, setJunctionCtrl } from '@/ui/panels/junction';
@@ -133,24 +135,62 @@ UI.init = function () {
     CB.Tools = Tools;
     (window as any).CB = CB;
   }
-  const tb = $('toolbar');
-  tb.innerHTML =
-    CATS.map(
-      c => `<button class="tbtn" data-cat="${c.key}" title="${c.name}">${svg(c.icon)}<span>${c.name}</span></button>`
-    ).join('') +
-    '<div class="sep"></div><button class="tbtn danger" id="bdz" title="Bulldoze (B)">' +
-    svg('bulldoze') +
-    '<span>Bulldoze</span></button>';
+  const renderToolbar = () => {
+    const tb = $('toolbar');
+    if (!tb) return;
+    tb.innerHTML =
+      CATS.map(
+        c =>
+          `<button class="tbtn ${UI.cat === c.key ? 'on' : ''}" data-cat="${c.key}" title="${t('cats.' + c.key, c.name)}">${svg(c.icon)}<span>${t('cats.' + c.key, c.name)}</span></button>`
+      ).join('') +
+      '<div class="sep"></div><button class="tbtn danger ' +
+      (Tools.tool.type === 'bulldoze' ? 'on' : '') +
+      '" id="bdz" title="' +
+      t('tools.bulldoze', 'Bulldoze') +
+      ' (B)">' +
+      svg('bulldoze') +
+      '<span>' +
+      t('tools.bulldoze', 'Bulldoze') +
+      '</span></button>';
 
-  $$<HTMLElement>('[data-cat]', tb).forEach(b =>
-    b.addEventListener('click', () => UI.openCat(b.dataset.cat === UI.cat ? null : b.dataset.cat || null))
-  );
+    $$<HTMLElement>('[data-cat]', tb).forEach(b =>
+      b.addEventListener('click', () => UI.openCat(b.dataset.cat === UI.cat ? null : b.dataset.cat || null))
+    );
 
-  $('bdz').addEventListener('click', () => {
-    const on = Tools.tool.type === 'bulldoze';
-    UI.openCat(null);
-    Tools.setTool(on ? null : { type: 'bulldoze' });
+    $('bdz').addEventListener('click', () => {
+      const on = Tools.tool.type === 'bulldoze';
+      UI.openCat(null);
+      Tools.setTool(on ? null : { type: 'bulldoze' });
+    });
+  };
+
+  const applyI18n = () => {
+    $$<HTMLElement>('[data-i18n]').forEach(el => {
+      const key = el.dataset.i18n;
+      if (key) el.textContent = t(key);
+    });
+    $$<HTMLElement>('[data-i18n-title]').forEach(el => {
+      const key = el.dataset.i18nTitle;
+      if (key) el.title = t(key);
+    });
+    renderToolbar();
+    if (UI.cat) renderPalette();
+    const dKeys = ['rlow', 'rmed', 'rhigh', 'com', 'ind', 'off'];
+    for (const k of dKeys) {
+      const el = $('dm_' + k);
+      if (el) el.title = t('demand.' + k, k);
+    }
+    if (UI.panel) {
+      UI.openPanel(UI.panel);
+    }
+  };
+
+  I18n.onLocaleChange(() => {
+    applyI18n();
   });
+
+  renderToolbar();
+  applyI18n();
 
   for (const s of [0, 1, 2, 4]) {
     $('sp' + s).addEventListener('click', () => UI.setSpeed(s));
@@ -228,8 +268,13 @@ UI.init = function () {
   const statWind = $('statWind');
   if (statWind) {
     statWind.addEventListener('click', () => {
-      UI.openPanel('views');
-      UI.setOverlay('pollution');
+      UI.openPanel(UI.panel === 'weather' ? null : 'weather');
+    });
+  }
+  const statWeather = $('statWeather');
+  if (statWeather) {
+    statWeather.addEventListener('click', () => {
+      UI.openPanel(UI.panel === 'weather' ? null : 'weather');
     });
   }
   const statUnrest = $('statUnrest');
@@ -342,16 +387,16 @@ function renderPalette() {
   const MODES = [
     [
       'straight',
-      'Straight (C cycles modes)',
+      t('palette.straight', 'Straight (C cycles modes)'),
       '<path d="M4 20L20 4"/><circle cx="4" cy="20" r="1.6"/><circle cx="20" cy="4" r="1.6"/>',
     ],
     [
       'curve',
-      'Curve: start, bend point, end',
+      t('palette.curve', 'Curve: start, bend point, end'),
       '<path d="M4 20Q4 4 20 4"/><path d="M4 20L4 4L20 4" stroke-dasharray="2 2.5" opacity=".55"/>',
     ],
-    ['sbend', 'S-bend: each piece carries on from the last one', '<path d="M4 20C4 12 20 12 20 4"/>'],
-    ['grid', 'Grid: two corners fill an area with streets', '<path d="M3 3h18v18H3zM3 10h18M3 17h18M10 3v18M17 3v18"/>'],
+    ['sbend', t('palette.sbend', 'S-bend: each piece carries on from the last one'), '<path d="M4 20C4 12 20 12 20 4"/>'],
+    ['grid', t('palette.grid', 'Grid: two corners fill an area with streets'), '<path d="M3 3h18v18H3zM3 10h18M3 17h18M10 3v18M17 3v18"/>'],
   ];
   const modeSw = roadMode
     ? `<div class="pmode">${MODES.filter(m => key === 'roads' || m[0] !== 'grid')
@@ -369,20 +414,20 @@ function renderPalette() {
   const tabs = cat.tabs
     ? `<div class="ptabs" role="tablist">${cat.tabs
         .map(
-          t =>
-            `<button role="tab" class="ptab ${t[0] === tab ? 'on' : ''} ${
-              tabLocked(cat, t[0]) ? 'dim' : ''
-            }" data-tab="${t[0]}">${t[1]}</button>`
+          tb =>
+            `<button role="tab" class="ptab ${tb[0] === tab ? 'on' : ''} ${
+              tabLocked(cat, tb[0]) ? 'dim' : ''
+            }" data-tab="${tb[0]}">${t('tabs.' + tb[0], tb[1])}</button>`
         )
         .join('')}</div>`
     : '';
 
   p.innerHTML =
     `<div class="phead-bar">` +
-      `<div class="pcat-title">${svg(cat.icon)}<span>${cat.name}</span></div>` +
+      `<div class="pcat-title">${svg(cat.icon)}<span>${t('cats.' + cat.key, cat.name)}</span></div>` +
       tabs +
       modeSw +
-      `<button class="x pclose" id="pclose" title="Close shelf (Esc)" aria-label="Close">×</button>` +
+      `<button class="x pclose" id="pclose" title="${t('palette.close', 'Close shelf (Esc)')}" aria-label="Close">×</button>` +
     `</div>` +
     `<div class="cards">` +
     items
@@ -393,9 +438,9 @@ function renderPalette() {
         ).replace(/"/g, '&quot;')}">
         ${
           locked
-            ? `<span class="lock">${C.MILESTONES[it.unlock].pop.toLocaleString()} pop</span>`
+            ? `<span class="lock">${C.MILESTONES[it.unlock].pop.toLocaleString()} ${t('topbar.population', 'pop')}</span>`
             : (Sim.unseen || []).includes(idOf(it))
-            ? '<span class="lock newb">New</span>'
+            ? `<span class="lock newb">${t('common.new', 'New')}</span>`
             : ''
         }
         <div class="sw" style="${
@@ -430,11 +475,10 @@ function renderPalette() {
       if (!it) return;
       if (!S.unlocked(it.unlock)) {
         UI.toast(
-          'Unlocks at ' +
-            C.MILESTONES[it.unlock].name +
-            ' (' +
-            C.MILESTONES[it.unlock].pop.toLocaleString() +
-            ' residents)',
+          t('goals.unlocks_at', {
+            name: C.MILESTONES[it.unlock].name,
+            pop: C.MILESTONES[it.unlock].pop.toLocaleString(),
+          }),
           'bad'
         );
         return;
@@ -546,6 +590,31 @@ UI.sfx = function (kind: string) {
       g.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
       o.start(now);
       o.stop(now + 0.22);
+    } else if (kind === 'thunder') {
+      o.type = 'sawtooth';
+      o.frequency.setValueAtTime(80, now);
+      o.frequency.exponentialRampToValueAtTime(20, now + 1.2);
+      g.gain.setValueAtTime(0.32, now);
+      g.gain.exponentialRampToValueAtTime(0.001, now + 1.3);
+      o.start(now);
+      o.stop(now + 1.3);
+    } else if (kind === 'siren') {
+      o.type = 'sine';
+      o.frequency.setValueAtTime(440, now);
+      o.frequency.linearRampToValueAtTime(820, now + 0.4);
+      o.frequency.linearRampToValueAtTime(440, now + 0.8);
+      g.gain.setValueAtTime(0.2, now);
+      g.gain.exponentialRampToValueAtTime(0.001, now + 0.9);
+      o.start(now);
+      o.stop(now + 0.9);
+    } else if (kind === 'alert') {
+      o.type = 'square';
+      o.frequency.setValueAtTime(880, now);
+      o.frequency.setValueAtTime(440, now + 0.12);
+      g.gain.setValueAtTime(0.18, now);
+      g.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+      o.start(now);
+      o.stop(now + 0.3);
     }
   } catch {
     /* audio unavailable */
@@ -570,6 +639,7 @@ const PANELS: Record<string, (p: HTMLElement) => void> = {
   districts: renderDistrictsPanel,
   settings: renderSettingsPanel,
   unrest: renderUnrestPanel,
+  weather: renderWeatherPanel,
 };
 
 const PANEL_HUBS: Record<string, string> = {
@@ -580,6 +650,7 @@ const PANEL_HUBS: Record<string, string> = {
   supply: 'economy',
   views: 'insights',
   stats: 'insights',
+  weather: 'insights',
 };
 
 UI.openPanel = function (key: string | null) {
@@ -659,20 +730,20 @@ UI.update = function () {
   $('money').className = 'num' + (S.money < 0 ? ' neg' : '');
   const pr = S.projected();
   const net = $('net');
-  net.textContent = (pr.net >= 0 ? '+' : '') + U.money(pr.net) + ' / month';
+  net.textContent = (pr.net >= 0 ? '+' : '') + U.money(pr.net) + ' ' + t('topbar.per_month');
   net.className = 'num ' + (pr.net >= 0 ? 'pos' : 'neg');
   $('pop').textContent = U.num(st.pop);
-  $('popsub').textContent = U.num(st.filled + st.outsideIn) + ' jobs filled';
+  $('popsub').textContent = U.num(st.filled + st.outsideIn) + ' ' + t('topbar.jobs_filled', 'jobs filled');
   $('happy').textContent = st.pop ? Math.round(st.happy) + '%' : '–';
   $('happysub').textContent = !st.pop
     ? ''
     : st.happy > 70
-    ? 'Delighted'
+    ? t('happiness.delighted', 'Delighted')
     : st.happy > 55
-    ? 'Content'
+    ? t('happiness.content', 'Content')
     : st.happy > 40
-    ? 'Uneasy'
-    : 'Unhappy';
+    ? t('happiness.uneasy', 'Uneasy')
+    : t('happiness.unhappy', 'Unhappy');
   const wind = S.wind;
   const windSpdEl = $('wind_spd');
   if (windSpdEl && wind) windSpdEl.textContent = Math.round(wind.speed) + ' km/h';
@@ -697,8 +768,30 @@ UI.update = function () {
       strike: 'Strike',
       riot: 'Riot',
     };
-    unrestLvlEl.textContent = names[lvl] || lvl;
+    unrestLvlEl.textContent = t('unrest.' + lvl, names[lvl] || lvl);
     unrestLvlEl.style.color = colors[lvl] || '#22c55e';
+  }
+  const w = S.weather;
+  const wTempEl = $('weather_temp');
+  if (wTempEl && w) wTempEl.textContent = Math.round(w.temp) + '°C';
+  const wIconEl = $('weather_icon');
+  if (wIconEl && w) {
+    const icons: Record<string, string> = { clear: '☀️', overcast: '⛅', rain: '🌧️', storm: '⛈️', fog: '🌫️', snow: '❄️' };
+    wIconEl.textContent = icons[w.type] || '☀️';
+  }
+  const bState = S.bankruptcy;
+  const moneyEl = $('statMoney');
+  if (moneyEl) {
+    if (bState?.inDefault) {
+      moneyEl.style.border = '1px solid #ef4444';
+      moneyEl.style.background = 'rgba(239,68,68,0.2)';
+    } else if (bState?.inWarning) {
+      moneyEl.style.border = '1px solid #eab308';
+      moneyEl.style.background = 'rgba(234,179,8,0.2)';
+    } else {
+      moneyEl.style.border = '';
+      moneyEl.style.background = '';
+    }
   }
   const hh = Math.floor(S.hour),
     mm = Math.floor((S.hour - hh) * 60);

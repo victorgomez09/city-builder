@@ -1,13 +1,15 @@
 import { C } from '../core/constants';
 import { U } from '../core/utils';
+import { I18n } from '../i18n';
 import { World } from '../world/world';
 import { Traffic } from '../traffic/traffic';
 import { Transit } from '../transit/transit';
-import { Building, Vehicle, Milestone, TaxRates, BuildingSpec, ServiceLotResult, SimIcon, SimNotice, SerializedCity, SupplyChainStats, SimStats, WindState, StrikesState } from '../types';
+import { Building, Vehicle, Milestone, TaxRates, BuildingSpec, ServiceLotResult, SimIcon, SimNotice, SerializedCity, SupplyChainStats, SimStats, WindState, StrikesState, WeatherState, BankruptcyState } from '../types';
 import { LoanItem } from './budget';
 import { COV_KEYS, computeCoverage as runComputeCoverage, computeWaterNear } from './coverage';
 import { Water } from './waterNet';
 import { Unrest } from './unrest';
+import { WeatherSystem } from './weather';
 import {
   blankBudget,
   hourlyEconomy as runHourlyEconomy,
@@ -391,13 +393,56 @@ function hourlyBuildings() {
     const z = C.ZONES[b.zone]!;
     const res = z.cat === 'res';
     if (b.state === 'fire') {
+      // Weather precipitation dampening
+      if (WeatherSystem.state.precipitation > 0.3) {
+        if (Sim.rng() < 0.45) b.fire = Math.max(0, b.fire - 1);
+        if (b.fire <= 0 && WeatherSystem.state.precipitation > 0.5) {
+          b.state = 'live';
+          if (CB?.Meshes) CB.Meshes.refreshBuilding(b);
+          return;
+        }
+      }
+
       b.fire += 1;
       if (b.fire > 7) {
         toRemove.push(b);
+        WeatherSystem.recordIncident('structural_fire', i, b.x, b.y, 4, `${b.name} was destroyed by fire.`);
         Sim.notify(b.name + ' burned down. Build a Fire Station nearby.', 'bad');
         return;
       }
       icons.push(iconFor(b, 'fire'));
+
+      // Downwind spark propagation model
+      const windAngle = Sim.wind.angle;
+      const windSpeed = Sim.wind.speed;
+      const wx = Math.cos(windAngle);
+      const wz = Math.sin(windAngle);
+      const reach = 1 + Math.floor(windSpeed / 16);
+      const isDamp = WeatherSystem.state.precipitation > 0.15;
+      const isHotDry = WeatherSystem.state.temp > 28 && WeatherSystem.state.humidity < 40;
+      let spreadProb = (isDamp ? 0.02 : isHotDry ? 0.22 : 0.08) * (1 + windSpeed / 40);
+      if (WeatherSystem.state.brigadesMobilized) spreadProb *= 0.4;
+
+      if (Sim.rng() < spreadProb) {
+        const sparkDist = 1 + Sim.rng() * reach;
+        const sx = Math.round(b.x + b.fw / 2 + wx * sparkDist + (Sim.rng() - 0.5) * 1.5);
+        const sy = Math.round(b.y + b.fh / 2 + wz * sparkDist + (Sim.rng() - 0.5) * 1.5);
+        if (U.inPlay(sx, sy)) {
+          const sparkTile = U.idx(sx, sy);
+          const targetBId = World.bld ? World.bld[sparkTile] : 0;
+          if (targetBId && targetBId !== b.id) {
+            const targetB = Sim.buildings.get(targetBId);
+            if (targetB && targetB.state === 'live') {
+              startFire(targetB);
+              WeatherSystem.recordIncident('structural_fire', sparkTile, sx, sy, 3, `Sparks spread fire to ${targetB.name}!`);
+            }
+          } else if (World.tree && World.tree[sparkTile] > 0) {
+            World.tree[sparkTile] = Math.max(0, World.tree[sparkTile] - 1);
+            if (CB?.Meshes) CB.Meshes.treesDirty = true;
+            WeatherSystem.recordIncident('wildfire', sparkTile, sx, sy, 2, 'Wildfire ignited in downwind forest!');
+          }
+        }
+      }
       return;
     }
     const did = World.district ? World.district[i] : 0;
@@ -407,9 +452,13 @@ function hourlyBuildings() {
       (0.00002 + 0.00014 * Math.max(0, 1 - cv.fire[i] * 1.5)) * Math.min(1, b.age / 96);
     if (dist?.policies.smokeDetectors) fireProb *= 0.2;
     if (dist?.spec === 'farming' && z.cat === 'ind') fireProb *= 0.4;
+    if (WeatherSystem.state.precipitation > 0.2) fireProb *= 0.15;
+    else if (WeatherSystem.state.temp > 28 && WeatherSystem.state.humidity < 40) fireProb *= 2.2;
+    if (WeatherSystem.state.brigadesMobilized) fireProb *= 0.5;
 
     if (b.state === 'live' && Sim.rng() < fireProb) {
       startFire(b);
+      WeatherSystem.recordIncident('structural_fire', i, b.x, b.y, 3, `Fire broke out at ${b.name}!`);
     }
     const occ = res ? b.res : b.filled + b.outside;
     if (b.state === 'live') {
@@ -1155,7 +1204,7 @@ function personTrip(
   }
   const carT = ((dist * T) / (13 * C.VEH_SPEED)) * (1 + 1.8 * (1 - Traffic.stats.flow)) + 14;
   const r = dist > 6 ? Transit.route(fromTile, toTile) : null;
-  const mode = Sim.chooseMode(dist, hasCar, safety, r ? r.time : null, carT);
+  const mode = Sim.chooseMode(dist, hasCar, safety, r ? r.time : null, carT, fromTile, toTile);
   recordMode(mode);
   if (mode === 'walk') {
     const p = dist <= 40 ? Traffic.findSoftPath(fromTile, toTile, false) : null;
@@ -1352,6 +1401,55 @@ function generateTrips(dtH: number) {
 
 function hourlyEconomy() {
   runHourlyEconomy(Sim);
+
+  // Mega-projects economic impacts
+  let hasOpera = false, hasStadium = false, hasAirport = false;
+  Sim.buildings.forEach((b: Building) => {
+    if (b.kind === 'svc') {
+      if (b.svc === 'opera') hasOpera = true;
+      else if (b.svc === 'stadium_arena') hasStadium = true;
+      else if (b.svc === 'airport_intl') hasAirport = true;
+    }
+  });
+
+  if (hasOpera) {
+    Sim.money += 45;
+    Sim.budget.inc.com = (Sim.budget.inc.com || 0) + 45;
+  }
+  if (hasStadium) {
+    const dow = Math.floor(Sim.day) % 7;
+    if ((dow === 5 || dow === 6) && Sim.hour >= 18 && Sim.hour <= 21) {
+      Sim.money += 350;
+      Sim.budget.inc.com = (Sim.budget.inc.com || 0) + 350;
+    }
+  }
+  if (hasAirport) {
+    const exportBonus = (Sim.budget.inc.export || 0) * 0.4;
+    if (exportBonus > 0) {
+      Sim.money += exportBonus / 24;
+      Sim.budget.inc.export += exportBonus / 24;
+    }
+  }
+
+  // Municipal solvency and bankruptcy checks
+  if (Sim.money < -10000 && !Sim.bankruptcy.inDefault) {
+    if (!Sim.bankruptcy.inWarning) {
+      Sim.bankruptcy.inWarning = true;
+      Sim.bankruptcy.warningDaysLeft = 10;
+      Sim.notify('CRITICAL DEFICIT: Municipal debt exceeds -$10,000! 10 days to balance treasury or default.', 'bad');
+      const UI = (window as any).CB?.UI;
+      if (UI && typeof UI.sfx === 'function') UI.sfx('alert');
+    }
+  } else if (Sim.money >= 0 && Sim.bankruptcy.inWarning) {
+    Sim.bankruptcy.inWarning = false;
+    Sim.notify('Treasury returned to solvency. Bankruptcy warning lifted.', 'good');
+  }
+
+  if (Sim.bankruptcy.inDefault) {
+    // Austerity debt restructuring deduction: $50/hour
+    Sim.money -= 50;
+    Sim.budget.exp.loans = (Sim.budget.exp.loans || 0) + 50;
+  }
 }
 
 function monthly() {
@@ -1476,6 +1574,35 @@ export const Sim = {
   notices: [] as SimNotice[],
   unseen: [] as string[],
   rng: Math.random as () => number,
+  bankruptcy: {
+    inWarning: false,
+    warningDaysLeft: 10,
+    inDefault: false,
+    bailoutCount: 0,
+    austerityMonthsLeft: 0,
+    totalBailoutReceived: 0,
+  } as BankruptcyState,
+
+  get weather(): WeatherState {
+    return WeatherSystem.state;
+  },
+
+  acceptBailout() {
+    Sim.money += 50000;
+    Sim.bankruptcy.inDefault = true;
+    Sim.bankruptcy.inWarning = false;
+    Sim.bankruptcy.bailoutCount++;
+    Sim.bankruptcy.austerityMonthsLeft = 12;
+    Sim.bankruptcy.totalBailoutReceived += 50000;
+    Sim.stats.unrest = Math.min(100, (Sim.stats.unrest || 0) + 25);
+    Sim.notify('Austerity Agreement signed with State Treasury. $50,000 cash injected under austerity terms.', 'warn');
+    const UI = (window as any).CB?.UI;
+    if (UI && typeof UI.sfx === 'function') UI.sfx('alert');
+  },
+
+  get day(): number {
+    return Math.floor((Sim.simHours || 0) / 24);
+  },
 
   init(opts: { name?: string; seed?: number; map?: string }) {
     Sim.buildings = new Map();
@@ -1525,11 +1652,20 @@ export const Sim = {
     Sim.wind = { ...DEFAULT_WIND };
     Water.init();
     Unrest.init();
+    WeatherSystem.init();
+    Sim.bankruptcy = {
+      inWarning: false,
+      warningDaysLeft: 10,
+      inDefault: false,
+      bailoutCount: 0,
+      austerityMonthsLeft: 0,
+      totalBailoutReceived: 0,
+    };
     Sim.rng = U.rng((opts.seed || 1) * 31 + 7);
     computeWaterNear();
   },
 
-  dateStr: (): string => MONTHS[Sim.month % 12] + ' ' + (2026 + Math.floor(Sim.month / 12)),
+  dateStr: (): string => I18n.formatDate(Sim.month % 12, 2026 + Math.floor(Sim.month / 12)),
   notify: (text: string, kind?: string) => Sim.notices.push({ text, kind: kind || 'info' }),
   earn: (k: string, v: number) => {
     Sim.money += v;
@@ -1885,23 +2021,112 @@ export const Sim = {
     hasCar: boolean,
     safety: number,
     transit: number | null,
-    carT: number
+    carT: number,
+    fromTile?: number,
+    toTile?: number
   ): string {
     const r = Sim.rng;
-    const pWalk = dist <= 4 ? 0.7 : dist <= 14 ? (0.7 * (14 - dist)) / 10 : 0;
-    if (r() < pWalk) return 'walk';
-    if (safety >= 0 && dist <= 70) {
-      const fd = dist <= 30 ? 1 : (70 - dist) / 40;
-      const pBike = BIKE_OWN * fd * (0.08 + 0.92 * Math.pow(safety, 1.5));
-      if (r() < pBike) return 'bike';
+
+    const hasSvcNearby = (tile: number, svcName: string, radius: number): boolean => {
+      const cx = U.tx(tile), cy = U.ty(tile);
+      const rad = Math.min(20, radius);
+      for (let dy = -rad; dy <= rad; dy++) {
+        for (let dx = -rad; dx <= rad; dx++) {
+          const nx = cx + dx, ny = cy + dy;
+          if (U.inWorld(nx, ny)) {
+            const bid = World.bld[U.idx(nx, ny)];
+            if (bid) {
+              const b = Sim.buildings.get(bid);
+              if (b && b.kind === 'svc' && b.svc === svcName && b.state === 'live') return true;
+            }
+          }
+        }
+      }
+      return false;
+    };
+
+    // Check micromobility and multimodal facilities
+    const hasBikeshare = (fromTile !== undefined && hasSvcNearby(fromTile, 'bikeshare', 14)) ||
+                         (toTile !== undefined && hasSvcNearby(toTile, 'bikeshare', 14));
+    const hasParkAndRide = fromTile !== undefined && hasSvcNearby(fromTile, 'park_and_ride', 18);
+    const hasPedPlaza = (fromTile !== undefined && hasSvcNearby(fromTile, 'ped_plaza', 12)) ||
+                        (toTile !== undefined && hasSvcNearby(toTile, 'ped_plaza', 12));
+    const isTransitStriking = Unrest && Unrest.isServiceStriking('transit');
+    const isBadWeather = Sim.wind && Sim.wind.speed > 25;
+    const isRainingOrStorm = WeatherSystem.state.precipitation > 0.2 || WeatherSystem.state.type === 'storm' || WeatherSystem.state.type === 'snow';
+    const sirensActive = WeatherSystem.state.emergencySirensActive;
+
+    // 1. Walk utility
+    let uWalk = -999;
+    if (dist <= 35) {
+      const tWalk = (dist * C.TILE) / 4.5;
+      uWalk = 1.6 - 0.05 * tWalk - (dist > 5 ? 0.08 * (dist - 5) * (dist - 5) : 0);
+      if (hasPedPlaza) uWalk += 0.9;
+      if (isBadWeather) uWalk -= 0.8;
+      if (isRainingOrStorm) uWalk -= 1.6;
+      if (sirensActive) uWalk -= 3.0;
     }
-    if (transit) {
-      const p = hasCar ? 1 / (1 + Math.exp((transit - carT * 1.3) / 10)) : 1;
-      if (r() < p * 0.92 + 0.04) return 'transit';
+
+    // 2. Bike utility
+    let uBike = -999;
+    const canBike = (BIKE_OWN > 0.3 || hasBikeshare) && safety >= 0 && dist <= 80;
+    if (canBike) {
+      const tBike = (dist * C.TILE) / 12.0;
+      uBike = 0.8 - 0.035 * tBike + 2.8 * Math.pow(Math.max(0, safety), 1.4);
+      if (hasBikeshare) uBike += 1.1;
+      if (isBadWeather) uBike -= 1.2;
+      if (isRainingOrStorm) uBike -= 2.2;
+      if (sirensActive) uBike -= 3.5;
+      if (fromTile !== undefined && World.district && World.district[fromTile]) {
+        const d = World.districts?.get(World.district[fromTile]);
+        if (d && d.policies.bikeCity) uBike += 1.2;
+      }
     }
-    if (hasCar) return 'car';
-    if (safety >= 0 && dist <= 90) return 'bike';
-    if (dist <= 40) return 'walk';
+
+    // 3. Transit utility
+    let uTransit = -999;
+    if (transit && transit > 0) {
+      uTransit = 2.0 - 0.045 * transit;
+      if (hasParkAndRide && hasCar) uTransit += 1.6;
+      if (fromTile !== undefined && World.district && World.district[fromTile]) {
+        const d = World.districts?.get(World.district[fromTile]);
+        if (d && d.policies.freeTransit) uTransit += 1.4;
+      }
+      if (isTransitStriking) uTransit -= 5.0;
+      if (isBadWeather) uTransit += 0.5;
+      if (isRainingOrStorm) uTransit += 1.2;
+    }
+
+    // 4. Car utility
+    let uCar = -999;
+    if (hasCar) {
+      const flow = Traffic.stats.flow || 1;
+      uCar = 1.8 - 0.04 * carT - 2.5 * (1 - flow);
+      if (sirensActive) uCar -= 2.2;
+      if (toTile !== undefined && World.district && World.district[toTile]) {
+        const d = World.districts?.get(World.district[toTile]);
+        if (d && d.policies.heavyTrafficBan) uCar -= 1.5;
+      }
+    }
+
+    // Multinomial Logit Softmax
+    const maxU = Math.max(uWalk, uBike, uTransit, uCar);
+    const expWalk = uWalk > -900 ? Math.exp(uWalk - maxU) : 0;
+    const expBike = uBike > -900 ? Math.exp(uBike - maxU) : 0;
+    const expTransit = uTransit > -900 ? Math.exp(uTransit - maxU) : 0;
+    const expCar = uCar > -900 ? Math.exp(uCar - maxU) : 0;
+    const sumExp = expWalk + expBike + expTransit + expCar;
+
+    if (sumExp <= 0) return hasCar ? 'car' : dist <= 14 ? 'walk' : 'car';
+
+    const pWalk = expWalk / sumExp;
+    const pBike = expBike / sumExp;
+    const pTransit = expTransit / sumExp;
+
+    const roll = r();
+    if (roll < pWalk) return 'walk';
+    if (roll < pWalk + pBike) return 'bike';
+    if (roll < pWalk + pBike + pTransit) return 'transit';
     return 'car';
   },
 
@@ -1979,6 +2204,7 @@ export const Sim = {
       Sim.hourAcc -= 1;
       Sim.simHours = (Sim.simHours || 0) + 1;
       updateWind();
+      WeatherSystem.step(1);
       Water.step(Sim.buildings, Sim.cov);
       Sim.stats.waterSupply = Water.waterSupply;
       Sim.stats.waterDemand = Water.waterDemand;
@@ -2000,6 +2226,27 @@ export const Sim = {
       Sim.dayAcc -= 24;
       Sim.month++;
       monthly();
+
+      // Daily bankruptcy check
+      if (Sim.bankruptcy.inWarning && !Sim.bankruptcy.inDefault) {
+        Sim.bankruptcy.warningDaysLeft--;
+        if (Sim.bankruptcy.warningDaysLeft <= 0 || Sim.money <= -25000) {
+          Sim.bankruptcy.inWarning = false;
+          Sim.bankruptcy.inDefault = true;
+          Sim.bankruptcy.austerityMonthsLeft = 12;
+          Sim.notify('MUNICIPAL DEFAULT: City has defaulted on debt obligations. Austerity default measures imposed.', 'bad');
+          const UI = (window as any).CB?.UI;
+          if (UI && typeof UI.sfx === 'function') UI.sfx('alert');
+        }
+      }
+
+      if (Sim.bankruptcy.inDefault) {
+        Sim.bankruptcy.austerityMonthsLeft--;
+        if (Sim.bankruptcy.austerityMonthsLeft <= 0 && Sim.money >= 0) {
+          Sim.bankruptcy.inDefault = false;
+          Sim.notify('Austerity default period concluded. Municipal credit restored!', 'good');
+        }
+      }
     }
   },
 
@@ -2131,6 +2378,24 @@ export const Sim = {
           if (u < 0.45) return [0.92, 0.76, 0.15, 0.45];
           if (u < 0.70) return [0.92, 0.45, 0.10, 0.68];
           return [0.88, 0.15, 0.15, 0.88];
+        };
+      case 'subway':
+        return i => {
+          if (!play(i)) return null;
+          if (World.rail[i] === 2) return [0.55, 0.35, 0.95, 0.95];
+          if (World.rail[i] === 1) return [0.85, 0.45, 0.25, 0.85];
+          return null;
+        };
+      case 'micromobility':
+        return i => {
+          if (!play(i)) return null;
+          const r = World.road[i];
+          if (r && C.ROADS[r]?.bike) {
+            const b = C.ROADS[r]!.bike;
+            return b === 2 ? [0.05, 0.85, 0.45, 0.9] : [0.2, 0.65, 0.85, 0.7];
+          }
+          if (World.pmask[i]) return [0.95, 0.65, 0.15, 0.75];
+          return null;
         };
       default:
         return i => (play(i) && cv[key] ? ramp(Math.min(1, cv[key][i])) : null);

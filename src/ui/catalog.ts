@@ -14,6 +14,7 @@ import { Tools } from '@/tools/tools';
 import { roadSvg, pathSvg } from '@/ui/roadSvg';
 import { ToolState } from '@/types';
 import { $, $$ } from '@/ui/dom';
+import { t } from '@/i18n';
 
 export interface MenuItem {
   name: string;
@@ -75,12 +76,12 @@ const zoneThumb = (z: number) => {
 const svcItem = (k: string): MenuItem => {
   const sv = C.SERVICES[k];
   return {
-    name: sv.name,
+    name: t('services.' + k + '.name', sv.name),
     cost: U.money(sv.cost) + ' · ' + U.money(sv.upkeep) + '/mo',
     unlock: sv.unlock,
     tool: { type: 'svc', svc: k },
     thumb: svcThumb(k),
-    desc: sv.desc,
+    desc: t('services.' + k + '.desc', sv.desc || ''),
   };
 };
 
@@ -117,6 +118,8 @@ export const CATS: CategoryDef[] = [
       ['tram', 'Streetcar'],
       ['train', 'Train'],
       ['metro', 'Metro'],
+      ['hub', 'Transfer Hubs'],
+      ['micro', 'Micro-Mobility'],
     ],
   },
   { key: 'landmarks', name: 'Landmarks', icon: 'landmark', tabs: undefined },
@@ -336,7 +339,7 @@ export function catItems(key: string, tab?: string | null): MenuItem[] {
         icon: 'metro',
         col: '#e85d2a',
       });
-    } else {
+    } else if (tab === 'metro') {
       items.push({
         name: C.RAIL[2].name,
         cost: U.money(C.RAIL[2].cost) + '/tile',
@@ -362,6 +365,23 @@ export function catItems(key: string, tab?: string | null): MenuItem[] {
         icon: 'metro',
         col: '#c8452a',
       });
+    } else if (tab === 'hub') {
+      items.push(svcItem('transit_hub'));
+      items.push(svcItem('park_and_ride'));
+    } else if (tab === 'micro') {
+      items.push(svcItem('bikeshare'));
+      items.push(svcItem('ped_plaza'));
+      for (let k = 1; k < C.PATHS.length; k++) {
+        const P = C.PATHS[k];
+        items.push({
+          name: P.name,
+          cost: U.money(P.cost) + '/cell',
+          unlock: P.unlock,
+          tool: { type: 'path', pk: k },
+          thumb: pathSvg(P),
+          desc: P.desc,
+        });
+      }
     }
   } else if (key === 'districts') {
     const Wd = World;

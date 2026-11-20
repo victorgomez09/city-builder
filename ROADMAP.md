@@ -277,22 +277,41 @@ flowchart TD
   - Scripts en [package.json](file:///home/dev/projects/city-builder/package.json) para desarrollo (`pnpm run tauri:dev`) y compilación binaria optimizada (`pnpm run tauri:build`).
   - Preparado para distribución en Steam (soporte nativo de Steam Cloud Saves y Steam Overlay).
 
-### Fase 3.9: Arquitectura de Internacionalización (i18n) y Localización Multilingüe
-- [ ] **Motor Ligero de Internacionalización (`src/i18n/`):**
-  - Función tipificada de traducción `t('key', { params })` con interpolación de variables y pluralización.
-  - Paquetes de idioma JSON desacoplados en `src/i18n/locales/` (`en.json`, `es.json`, `de.json`, `fr.json`, `zh.json`, `ja.json`).
-- [ ] **Extracción y Tokenización Exhaustiva de Cadenas:**
-  - Migración de textos estáticos de la interfaz, botones de construcción, descripciones de edificios, mensajes del inspector e infovistas.
-  - Mensajes de avisador cívico (*Chirps*), problemas de edificios y tutoriales contextuales.
-- [ ] **Selector de Idioma Dinámico:**
+### Fase 3.9: Arquitectura de Internacionalización (i18n) y Localización Multilingüe (¡Completada! ✅)
+- [x] **Motor Ligero de Internacionalización (`src/i18n/`):**
+  - Función tipificada de traducción `t('key', { params }, fallback)` con interpolación de variables y soporte reactivo por suscripción.
+  - Paquetes de idioma desacoplados en `src/i18n/locales/` (`en.ts`, `es.ts`, `de.ts`, `fr.ts`, `zh.ts`, `ja.ts`).
+- [x] **Extracción y Tokenización Exhaustiva de Cadenas en Toda la UI:**
+  - Migración integral de textos en pantalla de inicio `#start`, cabecera `#topbar`, menús `#menu`, paleta de construcción y subcategorías (`tabs`), y todos los paneles laterales: Presupuesto (`budget`), Distritos y Políticas (`districts`), Vistas Informativas (`views`), Estadísticas (`stats`), Transporte (`transit`), Paz Social y Sindicatos (`unrest`), Cadena de Suministro (`supply`), Editor de Intersecciones (`junction`), Inspector de Entidades (`inspector`), Gestor de Partidas (`saveHub`), Ajustes (`settings`) y Metas de Ciudad (`goals`).
+  - Detección automática de idioma del navegador y persistencia en `localStorage ('viracity_locale')`.
+- [x] **Selector de Idioma Dinámico en Caliente:**
   - Menú desplegable en el panel de Configuración (`Settings`) que conmuta el idioma en caliente sin reiniciar la simulación ni perder el contexto de la partida.
-  - Formateo regionalizado de divisas monetarias, separadores de millares y fechas mediante APIs nativas `Intl.NumberFormat` e `Intl.DateTimeFormat`.
+  - Formateo regionalizado de divisas monetarias (`formatMoney`), separadores de millares (`formatNumber`) y fechas (`formatDate`) mediante APIs nativas `Intl.NumberFormat`.
 
-### Fase 4: Infraestructuras de Metro y Tránsito Masivo
-- [ ] Modo de cámara subterránea con renderizado de túneles en [src/render/gfx.ts](file:///home/dev/projects/city-builder/src/render/gfx.ts).
-- [ ] Trazado de vías de metro y estaciones bajo tierra.
-- [ ] Avenidas con carril tranvía dedicado y postes de catenaria instanciados.
-- [ ] Panel de rentabilidad por línea de transporte público (billetes cobrados vs coste de mantenimiento).
+### Fase 4: Movilidad Multimodal: Metro, Tranvía y Micro-Movilidad (¡Completada! ✅)
+- [x] **Modo de Cámara Subterránea y Visualización de Túneles:**
+  - Sistema de vista subterránea con `Gfx.setUnderground()` en [src/render/gfx.ts](file:///home/dev/projects/city-builder/src/render/gfx.ts) y [src/render/meshes.ts](file:///home/dev/projects/city-builder/src/render/meshes.ts).
+  - Material shader permeable X-ray (`Gfx.mats.subway`) con `depthTest: false` y renderOrder 20.
+  - Botón de alternancia instantánea `[🚇 Vista Subterránea]` en la cabecera del panel de transporte público.
+- [x] **Trazado de Vías de Metro, Túneles 3D y Estaciones Bajo Tierra:**
+  - Generador paramétrico de túneles `genSubwayTile` a cota $-10\text{ m}$ con bóveda de hormigón reforzado, balasto oscuro, raíles gemelos y luces cálidas de techo.
+  - Estaciones subterráneas con andenes dobles elevados, franjas táctiles de seguridad amarillas, bancos, cartelería iluminada con el color de la línea y pozo de acceso vertical.
+  - Pabellones de superficie para estaciones de metro con escaleras de granito descendentes, marquesinas de acero y vidrio, y tótem con el emblema luminoso del Metro.
+- [x] **Avenidas con Tranvía y Red de Catenarias Aéreas:**
+  - Postes de catenaria instanciados en calzadas con tranvía (`R.tram`) con mástiles tubulares de $5.8\text{ m}$, ménsulas en voladizo, tirantes y cable de contacto continuo a $5.2\text{ m}$ sobre las vías.
+- [x] **Nodos de Transbordo Multimodal y Micro-Movilidad:**
+  - **Intercambiador Modal de Transporte (`transit_hub`):** Terminal $3 \times 3$ con dársenas cubiertas de autobús, parada de tranvía, estación de metro y consigna de bicicletas, reduciendo los tiempos de transbordo en un $75\%$.
+  - **Estación de Bicis Compartidas (`bikeshare`):** Puesto $1 \times 1$ con terminal solar y bancada de bicicletas compartidas que eleva la adopción ciclista en un radio de 14 casillas.
+  - **Aparcamiento Disuasorio Park & Ride (`park_and_ride`):** Parking $2 \times 2$ con puntos de recarga de VE y pasarela cubierta para aparcar y continuar en transporte masivo.
+  - **Plaza Cívica Peatonal (`ped_plaza`):** Plaza urbana de $2 \times 2$ con pavimento decorativo, fuente monumental, terrazas de cafetería con sombrillas y arbolado.
+- [x] **Modelo Matemático de Elección Modal de Viajeros (Logit Multinomial):**
+  - Formulación estocástica de utilidad aleatoria (Random Utility Model) en `Sim.chooseMode()` en [src/sim/sim.ts](file:///home/dev/projects/city-builder/src/sim/sim.ts) que evalúa tiempo de viaje, impedancia tarifaria, red ciclista protegida, congestión del tráfico, presencia de park & ride, bicis compartidas, huelgas y meteorología adversa.
+- [x] **Panel de Rentabilidad, Analítica Financiera y Nivel de Ocupación por Línea:**
+  - Indicadores clave de rendimiento (KPIs) en [src/ui/panels/transit.ts](file:///home/dev/projects/city-builder/src/ui/panels/transit.ts): recaudación por billetes, coste de flota, margen neto mensual, tasa de recuperación tarifaria (*Farebox Recovery*) y barra de ocupación (*Crowding / Load*).
+  - Filtros por modo (Todos, Autobús, Tranvía, Metro) y ordenación dinámica por viajeros, rentabilidad o nombre.
+- [x] **Infovistas GPU Especializadas y Soporte Completo i18n:**
+  - Capas térmicas `'subway'` y `'micromobility'` en [src/ui/panels/views.ts](file:///home/dev/projects/city-builder/src/ui/panels/views.ts) con guías y desgloses de color.
+  - Localización al 100% en los 6 idiomas del juego (`en`, `es`, `de`, `fr`, `zh`, `ja`) cumpliendo la regla de `AGENTS.md`.
 
 ### Fase 5: Dinámicas Demográficas, Mercado Laboral, Gentrificación y Epidemias
 - [ ] **Pirámide Poblacional y Cohortes:** Infancia, estudiantes universitarios, fuerza laboral activa y pensionistas con demandas de servicio diferenciadas.
@@ -301,11 +320,16 @@ flowchart TD
 - [ ] **Epidemias y Salubridad Pública:** Propagación de enfermedades infecciosas por mala higiene urbana o agua contaminada, saturando hospitales y reduciendo la productividad laboral.
 - [ ] **Economía Turística y Hotelería:** Complejos de ocio, palacios de congresos y hoteles para captar visitantes foráneos.
 
-### Fase 6: Eventos de Emergencia, Clima Dinámico y Mega-Edificios
-- [ ] Viento dinámico afectando a la dispersión de humo de partículas.
-- [ ] Propagación de incendios estructurales y forestales con vector de viento.
-- [ ] Edificios emblemáticos desbloqueables por hitos (Ópera, Estadio, Aeropuerto Internacional).
-- [ ] Bancarrota municipal y rescates externos (*Austerity Default Mode*).
+### Fase 6: Eventos de Emergencia, Clima Dinámico y Mega-Edificios (¡Completada! ✅)
+- [x] **Viento dinámico y sistema de partículas climáticas 3D en GPU:** Emisor `THREE.Points` (3.000 partículas en buffer plano) con caída y deriva angular por vector de viento ($\vec{v} = v_{\text{wind}} \cdot (\cos\theta, \sin\theta)$), lluvia, nieve, olas de calor (+35% demanda hídrica y eléctrica), olas de frío polar, relámpagos con destellos y truenos en Web Audio en [src/render/gfx.ts](file:///home/dev/projects/city-builder/src/render/gfx.ts) y [src/sim/weather.ts](file:///home/dev/projects/city-builder/src/sim/weather.ts).
+- [x] **Propagación celular de incendios a sotavento y masas forestales:** Proyección cónica de chispas y ascuas según la velocidad y rumbo del viento `Sim.wind`, ignición de edificios vecinos y árboles (`World.tree`), mitigación progresiva por lluvia ($> 0.15$) y extinción total por aguaceros en [src/sim/sim.ts](file:///home/dev/projects/city-builder/src/sim/sim.ts).
+- [x] **Mega-proyectos emblemáticos desbloqueables por hitos cívicos:**
+  - **Palacio de la Ópera Metropolitana (`opera` - 4x4):** Gran palacio *Beaux-Arts* con columnata monumental y cúpula de cobre verde cardenillo; $+25\%$ felicidad cultural y recaudación por turismo de lujo en [src/render/generators/buildingGenerators.ts](file:///home/dev/projects/city-builder/src/render/generators/buildingGenerators.ts).
+  - **Estadio Olímpico Nacional (`stadium_arena` - 5x5):** Coliseo elíptico con pista de atletismo, césped de fútbol, cubierta tensada blanca y 4 torres de focos de 34m; picos masivos de taquilla en fines de semana ($+\$350/\text{hora}$).
+  - **Aeropuerto Internacional (`airport_intl` - 6x4):** Centro de aviación global con pista iluminada, umbrales de barras, calle de rodaje, terminal de vidrio con 4 pasarelas de embarque y torre de control de 26m con radar; $+40\%$ ingresos por exportación.
+- [x] **Bancarrota municipal, crisis de deuda y modo rescate de austeridad (*Austerity Default Mode*):** Periodo de gracia de 10 días al superar $-\$10.000$ de déficit; quiebra forzosa a $-\$25.000$ con inyección de liquidez de $+\$50.000$ bajo condiciones de austeridad (+30% coste de obras públicas, recargo mensual de intereses y $+25$ puntos de malestar social).
+- [x] **Centro de Mando de Meteorología y Emergencias:** Panel interactivo en [src/ui/panels/weather.ts](file:///home/dev/projects/city-builder/src/ui/panels/weather.ts) con widget en barra superior `#statWeather`, radar de previsión a 5 días, índices de riesgo de desastre, seguimiento de incidentes con enfoque de cámara y directivas de siembra de nubes, movilización de bomberos y sirenas urbanas.
+- [x] **Localización 100% multilingüe (i18n):** Traducción exhaustiva en los 6 idiomas del juego (`en`, `es`, `de`, `fr`, `zh`, `ja`) cumpliendo estrictamente con `AGENTS.md`.
 
 ---
 

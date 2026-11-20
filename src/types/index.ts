@@ -70,7 +70,7 @@ export interface ZoneDef {
   rows?: boolean;
 }
 
-export type ServiceCategory = 'services' | 'parks' | 'landmarks' | 'water';
+export type ServiceCategory = 'services' | 'parks' | 'landmarks' | 'water' | 'transit';
 
 export interface ServiceDef {
   name: string;
@@ -556,6 +556,12 @@ export interface TransitLine {
   fare: number;
   ridersMonth: number;
   ridersLast: number;
+  revenueMonth?: number;
+  revenueLast?: number;
+  costMonth?: number;
+  costLast?: number;
+  profitLast?: number;
+  occupancyLast?: number;
   broken: boolean;
   path?: number[];
   sidx?: number[];
@@ -594,6 +600,57 @@ export interface WindState {
   gust: number;
   name: string;
   dirName: string;
+}
+
+export type WeatherType = 'clear' | 'overcast' | 'rain' | 'storm' | 'fog' | 'snow';
+
+export interface WeatherForecastDay {
+  dayOffset: number;
+  type: WeatherType;
+  tempMin: number;
+  tempMax: number;
+  precipitationChance: number;
+  windSpeed: number;
+}
+
+export interface WeatherState {
+  type: WeatherType;
+  temp: number; // in Celsius
+  humidity: number; // 0..100%
+  pressure: number; // hPa
+  precipitation: number; // 0.0 .. 1.0
+  clouds: number; // 0.0 .. 1.0
+  targetClouds: number;
+  fogDensity: number; // 0.0 .. 1.0
+  lightningTimer: number;
+  forecast: WeatherForecastDay[];
+  season: 'spring' | 'summer' | 'autumn' | 'winter';
+  heatwave: boolean;
+  coldSnap: boolean;
+  emergencySirensActive: boolean;
+  brigadesMobilized: boolean;
+  brigadesTimer: number;
+}
+
+export interface DisasterIncident {
+  id: string;
+  type: 'wildfire' | 'structural_fire' | 'storm' | 'lightning_strike';
+  tile: number;
+  x: number;
+  y: number;
+  severity: number;
+  startTime: number;
+  description: string;
+  active: boolean;
+}
+
+export interface BankruptcyState {
+  inWarning: boolean;
+  warningDaysLeft: number;
+  inDefault: boolean;
+  bailoutCount: number;
+  austerityMonthsLeft: number;
+  totalBailoutReceived: number;
 }
 
 export interface ToolState {
@@ -799,6 +856,10 @@ export interface ServiceLotResult {
 
 export interface TransitStats {
   riders: number;
+  totalRevenue?: number;
+  totalCost?: number;
+  netProfit?: number;
+  recoveryRatio?: number;
 }
 
 export interface LoanItem {
@@ -836,6 +897,10 @@ export interface SerializedTransitLine {
   vehicles: number;
   fare?: number;
   ridersLast: number;
+  revenueLast?: number;
+  costLast?: number;
+  profitLast?: number;
+  occupancyLast?: number;
 }
 
 export interface SerializedTransit {
@@ -969,6 +1034,9 @@ export interface SerializedCity {
   unseen?: string[];
   nextDistrictId?: number;
   transit?: SerializedTransit;
+  weather?: WeatherState;
+  disasters?: DisasterIncident[];
+  bankruptcy?: BankruptcyState;
   [key: string]: unknown;
 }
 

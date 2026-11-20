@@ -98,3 +98,45 @@ En `src/transit/transit.ts:spawnVehicles()`, si la huelga de transporte está ac
 - El número máximo de convoyes y autobuses por línea se limita al **$25\%$** de la dotación nominal.
 - Se producen saturaciones agudas en andenes y colas masivas de viajeros en espera.
 - La firma del convenio con la *Federación Unitaria del Transporte* restaura de inmediato la frecuencia al $100\%$.
+
+---
+
+## 7. Movilidad Multimodal, Metro Subterráneo y Micro-Movilidad (Fase 4)
+
+La **Fase 4** transforma el transporte en un ecosistema multimodal integrado de alta fidelidad:
+
+### 7.1 Modo de Cámara Subterránea y Modelado 3D de Túneles
+- **Visualización Subterránea (`Gfx.setUnderground()`):** Permite inspeccionar la red ferroviaria profunda y tuberías mediante renderizado de profundidad permeable (`depthTest: false`, material shader especializado `Gfx.mats.subway` y renderOrder `20`).
+- **Túneles de Metro Paramétricos (`genSubwayTile`):** Las vías subterráneas (`World.rail === 2`) se sitúan a $Y = \text{groundH} - 10\text{ m}$. Generan tubos de hormigón reforzado abovedados con balasto oscuro, raíles gemelos de acero (`COL.rail`), pasarela técnica y luminarias de techo cálidas (`#fef08a`).
+- **Estaciones Subterráneas:** Cavernas ampliadas con andenes dobles elevados, franja de seguridad amarilla táctil (`#eab308`), bancos de espera, paneles de línea con el color corporativo e iluminación fluorescente.
+- **Pabellones de Acceso en Superficie:** Escaleras de granito descendentes hacia la cota subterránea, marquesina de vidrio y acero, y tótem con el emblema luminoso del Metro (`#dc2626`).
+
+### 7.2 Infraestructura de Catenaria en Avenidas de Tranvía
+- **Postes de Catenaria Instanciados:** En calzadas con raíles de tranvía (`R.tram`), se generan mástiles metálicos tubulares de acero de $5.8\text{ m}$ de altura en la acera o mediana, con ménsulas horizontales en voladizo, tirantes diagonales y cable de contacto continuo aéreo a $5.2\text{ m}$ sobre los raíles.
+
+### 7.3 Infraestructuras de Conexión Multimodal y Micro-Movilidad
+- **Intercambiador Modal de Transporte (`transit_hub`):** Terminal central de $3 \times 3$ casillas que unifica dársenas de autobús con marquesinas, acceso directo a andenes de metro, parada de tranvía y aparcamiento de bicicletas. Reduce los tiempos de trasbordo entre líneas en un **$75\%$** y amplía el radio de transbordo peatonal a 7 casillas.
+- **Estación de Bicis Compartidas (`bikeshare`):** Puesto inteligente de $1 \times 1$ con terminal solar y bancada de bicicletas. Facilita el acceso ciclista a ciudadanos que no poseen bicicleta propia en un radio de 14 casillas.
+- **Aparcamiento Disuasorio Park & Ride (`park_and_ride`):** Parking periférico de $2 \times 2$ con plazas señalizadas, cargadores de vehículo eléctrico y enlace cubierto a estaciones de metro/tren para desviar a los conductores del centro urbano.
+- **Plaza Cívica Peatonal (`ped_plaza`):** Espacio urbano peatonal de $2 \times 2$ con pavimento decorativo, fuente monumental, terrazas de cafetería con sombrillas y arbolado que potencia la caminabilidad y el comercio.
+
+### 7.4 Modelo Matemático de Elección Modal (Logit Multinomial)
+En `Sim.chooseMode()` se implementa un modelo de utilidad aleatoria de elección discreta para cada desplazamiento pendular:
+
+$$U_{\text{walk}} = \beta_{0, \text{walk}} - 0.05 \cdot T_{\text{walk}} - 0.08 \cdot (D - 5)^2 + U_{\text{plaza}} - U_{\text{clima}}$$
+$$U_{\text{bike}} = \beta_{0, \text{bike}} - 0.035 \cdot T_{\text{bike}} + 2.8 \cdot S_{\text{bike}}^{1.4} + U_{\text{bikeshare}} + U_{\text{policy}} - U_{\text{clima}}$$
+$$U_{\text{transit}} = \beta_{0, \text{transit}} - 0.045 \cdot T_{\text{transit}} + U_{\text{P+R}} + U_{\text{free}} - U_{\text{huelga}}$$
+$$U_{\text{car}} = \beta_{0, \text{car}} - 0.04 \cdot T_{\text{car}} - 2.5 \cdot (1 - \text{Flow}) - U_{\text{ZBE}}$$
+
+Las probabilidades de elección se obtienen aplicando la función softmax normalizada:
+
+$$P(m) = \frac{\exp(U_m - \max_k U_k)}{\sum_j \exp(U_j - \max_k U_k)}$$
+
+### 7.5 Panel de Rentabilidad y Analítica Financiera de Líneas
+El panel de Transporte Público (`src/ui/panels/transit.ts`) monitoriza:
+- **Recaudación por Billetes:** Pasajeros mensuales $\times$ Precio del billete fijado.
+- **Coste Operativo:** Mantenimiento de convoyes y vehículos en servicio.
+- **Margen Neto:** Beneficio o déficit operativo por línea y total de la red.
+- **Tasa de Recuperación Tarifaria (*Farebox Recovery Ratio*):** Proporción del coste cubierta por ingresos de usuarios.
+- **Índice de Abarrotamiento (*Occupancy Bar*):** Nivel de carga (Bajo $<30\%$, Equilibrado $30-75\%$, Concurrido $75-100\%$, Saturado $>100\%$).
+- **Filtros y Ordenación:** Filtrado por modo (Autobús, Tranvía, Metro) y ordenación por viajeros, rentabilidad o nombre.

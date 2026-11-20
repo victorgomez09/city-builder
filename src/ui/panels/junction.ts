@@ -12,6 +12,7 @@ import { Traffic } from '@/traffic/traffic';
 import { UI } from '@/ui/ui';
 import { $, $$, q, head, bindClose } from '@/ui/dom';
 import { JunctionCluster, JunctionApproach, JunctionExit, IntersectionControl } from '@/types';
+import { t } from '@/i18n';
 
 const DIRN = ['North', 'East', 'South', 'West'];
 const CTRL: [IntersectionControl, string][] = [
@@ -61,27 +62,27 @@ export function openJunction(tile: number): void {
   const roads = [...new Set(cl.aps.map(ap => C.ROADS[Wd.road[ap.tile]].name))];
   const ctrlNow = cl.ctrl;
   const label: Record<string, string> = {
-    none: 'No control',
-    lights: 'Traffic lights',
-    stop: 'Stop signs',
-    allstop: 'All-way stop',
-    round: 'Roundabout',
+    none: t('junction.ctrl_label.none', 'No control'),
+    lights: t('junction.ctrl_label.lights', 'Traffic lights'),
+    stop: t('junction.ctrl_label.stop', 'Stop signs'),
+    allstop: t('junction.ctrl_label.allstop', 'All-way stop'),
+    round: t('junction.ctrl_label.round', 'Roundabout'),
   };
   let html =
-    head('Intersection', roads.join(' × ')) +
+    head(t('junction.title', 'Intersection'), roads.join(' × ')) +
     `<div class="seg">${CTRL.map(
       o =>
-        `<button data-ctrl="${o[0]}" class="${cfg.ctrl === o[0] ? 'on' : ''}">${o[1]}${
+        `<button data-ctrl="${o[0]}" class="${cfg.ctrl === o[0] ? 'on' : ''}">${t('junction.ctrl.' + o[0], o[1])}${
           o[0] === 'auto' && cfg.ctrl === 'auto' ? ` <small>(${label[ctrlNow]})</small>` : ''
         }</button>`
     ).join('')}</div>`;
   html += junctionDiagram(cl);
   if (ctrlNow === 'lights') {
     const g = cfg.green || [12, 12];
-    html += `<div class="sec"><div class="lbl">Green time</div>
+    html += `<div class="sec"><div class="lbl">${t('junction.green_time', 'Green time')}</div>
       ${[
-        ['North–south', 0],
-        ['East–west', 1],
+        [t('junction.green_ns', 'North–south'), 0],
+        [t('junction.green_ew', 'East–west'), 1],
       ]
         .map(
           ([n, ax]: [string, number]) =>
@@ -90,25 +91,21 @@ export function openJunction(tile: number): void {
         .join('')}</div>`;
   }
   if (ctrlNow === 'stop') {
-    html += `<div class="sec"><div class="lbl">Who stops</div>${cl.aps
+    html += `<div class="sec"><div class="lbl">${t('junction.who_stops', 'Who stops')}</div>${cl.aps
       .map(
         ap =>
-          `<label class="row"><span>From the ${DIRN[(ap.d + 2) % 4]} · ${
-            C.ROADS[Wd.road[ap.tile]].name
-          }</span><input type="checkbox" data-stopk="${ap.key}" ${
+          `<label class="row"><span>${t('junction.dir_from', { dir: DIRN[(ap.d + 2) % 4], road: C.ROADS[Wd.road[ap.tile]].name })}</span><input type="checkbox" data-stopk="${ap.key}" ${
             Traffic.isStopFor(cl, ap.key) ? 'checked' : ''
           }></label>`
       )
       .join('')}</div>`;
   }
-  html += `<div class="sec"><div class="lbl">Lane arrows <span style="text-transform:none;letter-spacing:0;font-weight:500">· click to allow or forbid a turn</span></div>`;
+  html += `<div class="sec"><div class="lbl">${t('junction.lane_arrows', 'Lane arrows')} <span style="text-transform:none;letter-spacing:0;font-weight:500">· click to allow or forbid a turn</span></div>`;
   for (const ap of cl.aps) {
     const masks = cfg.lanes[ap.key] || [];
     const avail = cl.avail[ap.d];
     html +=
-      `<div class="appr"><div class="an">From the ${DIRN[(ap.d + 2) % 4]} <small>${
-        C.ROADS[Wd.road[ap.tile]].name
-      }</small></div><div class="lanes">` +
+      `<div class="appr"><div class="an">${t('junction.dir_from', { dir: DIRN[(ap.d + 2) % 4], road: C.ROADS[Wd.road[ap.tile]].name })}</div><div class="lanes">` +
       masks
         .map(
           (m: number, k: number) =>

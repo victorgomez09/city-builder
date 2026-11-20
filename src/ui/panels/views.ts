@@ -12,6 +12,7 @@ import { Tools } from '@/tools/tools';
 import { Meshes } from '@/render/meshes';
 import { Sim } from '@/sim/sim';
 import { UI } from '@/ui/ui';
+import { t } from '@/i18n';
 
 export const VIEWS: [string | null, string, string][] = [
   [null, 'None', '#555'],
@@ -33,6 +34,8 @@ export const VIEWS: [string | null, string, string][] = [
   ['district', 'Districts', '#3b82f6'],
   ['resources', 'Natural Resources', 'linear-gradient(90deg,#eab308,#16a34a,#64748b,#1e1b4b)'],
   ['unrest', 'Social Unrest', 'linear-gradient(90deg,#22c55e,#eab308,#ea580c,#dc2626)'],
+  ['subway', 'Subway & Underground', 'linear-gradient(90deg,#6366f1,#8b5cf6,#a855f7)'],
+  ['micromobility', 'Micro-Mobility & Cycling', 'linear-gradient(90deg,#10b981,#06b6d4,#3b82f6)'],
 ];
 
 export interface ViewGuideColor {
@@ -407,6 +410,56 @@ export const VIEW_GUIDES: Record<string, ViewGuide> = {
       'Despliega unidades antidisturbios para despejar barricadas que bloquean arterias críticas de tráfico.',
     ],
   },
+  subway: {
+    title: 'Subway & Underground Network',
+    desc: 'Displays the subterranean rail tunnel network, underground stations, and metro line alignments beneath the city surface.',
+    colors: [
+      {
+        color: '#6366f1',
+        name: 'Deep Purple / Violet',
+        desc: 'Active underground subway tunnel tube bored through rock stratum.',
+      },
+      {
+        color: '#f59e0b',
+        name: 'Amber Orange',
+        desc: 'Elevated rail viaduct or surface connection portal.',
+      },
+      {
+        color: '#ef4444',
+        name: 'Bright Red',
+        desc: 'Underground passenger station platform box and street access kiosk.',
+      },
+    ],
+    tips: [
+      'Subway tracks can be routed directly under buildings and water bodies without demolishing surface roads.',
+      'Underground metro lines carry up to 160 passengers per train, relieving extreme surface traffic congestion.',
+    ],
+  },
+  micromobility: {
+    title: 'Micro-Mobility & Active Travel',
+    desc: 'Displays the citywide cycling network, protected bike tracks, bike-sharing docks, and pedestrian plazas.',
+    colors: [
+      {
+        color: '#10b981',
+        name: 'Emerald Green',
+        desc: 'Protected curb-separated cycle track with 95% safety rating. Maximum cycling adoption.',
+      },
+      {
+        color: '#06b6d4',
+        name: 'Cyan Blue',
+        desc: 'Painted street bike lane. Provides moderate cycling safety (60-75%).',
+      },
+      {
+        color: '#f59e0b',
+        name: 'Golden Yellow',
+        desc: 'Dedicated paved pedestrian and cycle paths connecting neighborhoods.',
+      },
+    ],
+    tips: [
+      'Placing Bike-Sharing Stations near metro and tram stops allows citizens to use bicycles as first/last-mile transit feeders.',
+      'The "Encourage Biking" municipal policy combined with protected bike lanes cuts private car usage by up to 35%.',
+    ],
+  },
 };
 
 let activeGuideKey: string | null = null;
@@ -415,9 +468,11 @@ let isGuideCollapsed: boolean = false;
 export function setOverlay(k: string | null): void {
   UI.overlay = k;
   Gfx.uni.uOvOn.value = k ? 1 : 0;
-  Transit.showRibbons(k === 'transit' || ['line', 'stop', 'rail'].includes(Tools.tool.type));
+  Transit.showRibbons(k === 'transit' || k === 'subway' || ['line', 'stop', 'rail'].includes(Tools.tool.type));
   const isPipeOv = k === 'water' || k === 'sewage' || k === 'water_pollution' || Tools.tool.type === 'pipe';
   if (Meshes && Meshes.setPipeVisibility) Meshes.setPipeVisibility(isPipeOv);
+  const isSubwayOv = k === 'subway' || (Tools.tool.type === 'rail' && (Tools.tool as any).rr === 2);
+  Gfx.setUnderground(isSubwayOv);
   if (k) refreshOverlay();
 }
 
@@ -437,14 +492,15 @@ export function renderViewsPanel(p: HTMLElement, targetGuide?: string): void {
   const activeViewItem = VIEWS.find(v => v[0] === activeGuideKey);
 
   p.innerHTML =
-    head('Info Views', 'Color the city by live statistics') +
+    head(t('views.title', 'Info Views'), t('views.subtitle', 'Color the city by live statistics')) +
     `<div class="views">
       ${VIEWS.map(v => {
         const key = v[0] || '';
         const isSelected = (UI.overlay || '') === key;
+        const localizedName = t('views.names.' + (v[0] || 'none'), v[1]);
         return `
           <button data-ov="${key}" class="${isSelected ? 'on' : ''}">
-            <i style="background:${v[2]}"></i>${v[1]}
+            <i style="background:${v[2]}"></i>${localizedName}
           </button>`;
       }).join('')}
     </div>
@@ -458,14 +514,14 @@ export function renderViewsPanel(p: HTMLElement, targetGuide?: string): void {
               <i style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${
                 activeViewItem ? activeViewItem[2] : 'var(--accent)'
               }"></i>
-              <span>${activeGuide.title} Guide & Legend</span>
+              <span>${t('views.names.' + activeGuideKey, activeGuide.title)} ${t('views.guide_legend', 'Guide & Legend')}</span>
             </div>
             <span class="view-accordion-toggle">${isGuideCollapsed ? '▶' : '▼'}</span>
           </div>
           <div class="view-accordion-body">
             <div class="sub" style="font-size:12px;line-height:1.45">${activeGuide.desc}</div>
             
-            <div class="lbl" style="margin-top:4px">Color Breakdown</div>
+            <div class="lbl" style="margin-top:4px">${t('views.color_breakdown', 'Color Breakdown')}</div>
             <div class="vguide-card" style="margin-top:0">
               ${activeGuide.colors
                 .map(
@@ -481,17 +537,17 @@ export function renderViewsPanel(p: HTMLElement, targetGuide?: string): void {
                 .join('')}
             </div>
 
-            <div class="lbl" style="margin-top:4px">City Planning Tips</div>
+            <div class="lbl" style="margin-top:4px">${t('views.planning_tips', 'City Planning Tips')}</div>
             <div style="display:flex;flex-direction:column;gap:5px">
-              ${activeGuide.tips.map(t => `<div class="vguide-tip">${t}</div>`).join('')}
+              ${activeGuide.tips.map(tg => `<div class="vguide-tip">${tg}</div>`).join('')}
             </div>
           </div>
         </div>`
         : `
         <div class="sec">
-          <div class="legend"><span>Poor</span><span class="grad"></span><span>Good</span></div>
+          <div class="legend"><span>${t('views.poor', 'Poor')}</span><span class="grad"></span><span>${t('views.good', 'Good')}</span></div>
           <div class="sub" style="font-size:12px;line-height:1.4">
-            Click any view above to activate its live heatmap overlay and expand its color breakdown and management tips.
+            ${t('views.guide_prompt', 'Click any view above to activate its live heatmap overlay and expand its color breakdown and management tips.')}
           </div>
         </div>`
     }`;

@@ -1027,6 +1027,136 @@ export const SGEN: Record<string, any> = {};
     gb.cyl(cx + 2.8, 1.4, cz + 2.5, 1.3, 3.5, 10, '#334155');
     gb.flat(cx - 5.5, cz + 2, cx + 5.5, cz + 7.5, 0.15, '#78350f');
   };
+  SGEN.transit_hub = function (gb, b, r, LW, LD) {
+    foundation(gb, LW, LD, b, '#d4d4d8');
+    const cx = LW / 2, cz = LD / 2;
+    // Central modern terminal hall
+    gb.box(cx - 7, 0, cz - 6, cx + 7, 7.5, cz + 6, '#1e293b');
+    gb.box(cx - 6.5, 1.2, cz - 6.2, cx + 6.5, 6.8, cz + 6.2, '#e0f2fe', 9); // glass facade
+    // Aerodynamic curved / angled canopy roof
+    gb.box(cx - 8.5, 7.5, cz - 7.5, cx + 8.5, 8.2, cz + 7.5, '#0284c7');
+    // Clock & transit info tower
+    gb.box(cx - 1.2, 8.2, cz - 1.2, cx + 1.2, 13.5, cz + 1.2, '#0f172a');
+    gb.box(cx - 0.8, 11.5, cz - 1.3, cx + 0.8, 13.1, cz + 1.3, '#38bdf8', 15); // digital display
+    // 3 Bus / Tram boarding bays with glass canopies
+    for (let k = -1; k <= 1; k++) {
+      const zBay = cz + k * 8.5;
+      if (zBay >= 3 && zBay <= LD - 3) {
+        gb.box(3, 0, zBay - 1.8, 10, 0.25, zBay + 1.8, '#e4e4e7');
+        gb.box(9.8, 0.25, zBay - 1.8, 10, 0.26, zBay + 1.8, '#eab308'); // yellow safety edge
+        gb.box(4.5, 0.25, zBay - 1.4, 4.7, 3.2, zBay + 1.4, '#334155');
+        gb.box(3.5, 3.2, zBay - 1.6, 9.5, 3.4, zBay + 1.6, '#38bdf8', 9); // glass shelter
+      }
+    }
+    // Subterranean Metro Entrance Portal (stairs descending down)
+    const mx = cx + 8.5, mz = cz - 2;
+    gb.box(mx - 2.5, -0.4, mz - 4, mx + 2.5, 0.2, mz + 4, '#334155');
+    gb.box(mx - 1.8, -1.8, mz - 3.2, mx + 1.8, 0.0, mz + 3.2, '#09090b'); // dark stairwell void
+    // Metro canopy & Red "M" sign totem
+    gb.box(mx - 2.2, 0.2, mz - 3.6, mx + 2.2, 2.6, mz - 3.4, '#475569');
+    gb.box(mx - 2.2, 2.6, mz - 3.6, mx + 2.2, 2.8, mz + 3.6, '#0284c7');
+    gb.cyl(mx + 2.6, 0, mz, 0.15, 3.8, 8, '#475569');
+    gb.box(mx + 2.1, 3.8, mz - 0.5, mx + 3.1, 4.8, mz + 0.5, '#dc2626', 15); // Metro M emblem
+    // Bike lockers & green planters
+    gb.box(3, 0, cz - 11, 8, 1.8, cz - 8, '#475569');
+    for (const [px, pz] of [[3, 3], [LW - 3, 3], [3, LD - 3], [LW - 3, LD - 3]]) {
+      gb.box(px - 1.2, 0, pz - 1.2, px + 1.2, 0.6, pz + 1.2, '#71717a');
+      yardTree(gb, px, pz, r);
+    }
+  };
+
+  SGEN.bikeshare = function (gb, b, r, LW, LD) {
+    foundation(gb, LW, LD, b, '#f1f5f9');
+    const cx = LW / 2, cz = LD / 2;
+    // Paved green bike path strip
+    gb.flat(1, 1, LW - 1, 3.5, 0.08, '#059669');
+    // Smart solar payment totem
+    gb.box(cx - 3.2, 0, cz - 0.5, cx - 2.4, 2.4, cz + 0.5, '#0f172a');
+    gb.box(cx - 3.4, 2.4, cz - 0.6, cx - 2.2, 2.5, cz + 0.6, '#38bdf8'); // solar panel
+    gb.box(cx - 2.38, 1.2, cz - 0.3, cx - 2.35, 1.8, cz + 0.3, '#22c55e', 15); // display screen
+    // Double-sided docking rack with docked bikes
+    gb.box(cx - 1.8, 0, cz - 0.15, cx + 3.8, 0.6, cz + 0.15, '#475569');
+    const bikeColors = ['#06b6d4', '#10b981', '#f59e0b', '#3b82f6', '#ec4899'];
+    for (let i = 0; i < 6; i++) {
+      const bx = cx - 1.4 + i * 0.9;
+      const bCol = bikeColors[i % bikeColors.length];
+      // Wheels
+      gb.cyl(bx, 0.18, cz - 0.6, 0.28, 0.06, 8, '#1e293b');
+      gb.cyl(bx, 0.18, cz + 0.6, 0.28, 0.06, 8, '#1e293b');
+      // Frame and handlebar
+      gb.box(bx - 0.04, 0.2, cz - 0.5, bx + 0.04, 0.65, cz + 0.5, bCol);
+      gb.box(bx - 0.04, 0.65, cz + 0.35, bx + 0.04, 0.95, cz + 0.55, '#94a3b8');
+      gb.box(bx - 0.25, 0.92, cz + 0.48, bx + 0.25, 0.96, cz + 0.52, '#0f172a'); // handlebar
+      gb.box(bx - 0.12, 0.65, cz + 0.45, bx + 0.12, 0.85, cz + 0.72, '#64748b'); // basket
+    }
+  };
+
+  SGEN.park_and_ride = function (gb, b, r, LW, LD) {
+    foundation(gb, LW, LD, b, '#334155');
+    const cx = LW / 2, cz = LD / 2;
+    // Parking bays white paint markings
+    for (let z = 3; z <= LD - 4; z += 3.2) {
+      gb.flat(2, z, 7.5, z + 0.15, 0.06, '#f8fafc');
+      gb.flat(12.5, z, 18, z + 0.15, 0.06, '#f8fafc');
+    }
+    // Parked commuter cars
+    const carCols = ['#dc2626', '#2563eb', '#f8fafc', '#1e293b', '#eab308', '#059669', '#9333ea'];
+    let cIdx = 0;
+    for (const z of [4.5, 7.7, 10.9, 14.1]) {
+      // Left side parked car
+      const colL = carCols[(cIdx++) % carCols.length];
+      gb.box(3.2, 0.1, z - 1.1, 6.8, 1.2, z + 1.1, colL);
+      gb.box(4.0, 1.2, z - 0.95, 6.0, 1.85, z + 0.95, '#e0f2fe', 9);
+      // Right side parked car
+      const colR = carCols[(cIdx++) % carCols.length];
+      gb.box(13.2, 0.1, z - 1.1, 16.8, 1.2, z + 1.1, colR);
+      gb.box(14.0, 1.2, z - 0.95, 16.0, 1.85, z + 0.95, '#e0f2fe', 9);
+    }
+    // Covered central pedestrian walkway with canopy to station
+    gb.box(cx - 1.5, 0, 1, cx + 1.5, 0.15, LD - 1, '#94a3b8');
+    gb.box(cx - 1.2, 0.15, 2, cx - 1.0, 2.8, 2.2, '#1e293b');
+    gb.box(cx - 1.2, 0.15, LD - 2.2, cx - 1.0, 2.8, LD - 2.0, '#1e293b');
+    gb.box(cx - 1.6, 2.8, 1.5, cx + 1.6, 3.0, LD - 1.5, '#38bdf8', 9);
+    // EV fast chargers
+    gb.box(8.5, 0.1, 3, 9.2, 1.6, 3.6, '#0284c7');
+    gb.box(8.4, 1.2, 3.2, 8.45, 1.4, 3.4, '#22c55e', 15);
+    gb.box(8.5, 0.1, 14, 9.2, 1.6, 14.6, '#0284c7');
+    gb.box(8.4, 1.2, 14.2, 8.45, 1.4, 14.4, '#22c55e', 15);
+    // Signpost "P+R"
+    gb.cyl(1.8, 0, 1.8, 0.08, 3.2, 6, '#64748b');
+    gb.box(1.2, 2.5, 1.7, 2.4, 3.5, 1.9, '#2563eb', 15);
+  };
+
+  SGEN.ped_plaza = function (gb, b, r, LW, LD) {
+    foundation(gb, LW, LD, b, '#fde68a');
+    const cx = LW / 2, cz = LD / 2;
+    // Central hexagonal stone fountain
+    gb.cyl(cx, 0, cz, 3.8, 0.8, 6, '#cbd5e1');
+    gb.cyl(cx, 0.75, cz, 3.4, 0.05, 6, '#0284c7', 13); // fountain pool
+    gb.cyl(cx, 0.8, cz, 0.7, 2.2, 6, '#94a3b8');
+    gb.cyl(cx, 2.8, cz, 1.2, 0.3, 6, '#cbd5e1'); // top water basin
+    // 4 Bistro cafe umbrellas & outdoor tables
+    const umbCols = ['#ea580c', '#1d4ed8', '#15803d', '#b91c1c'];
+    const umbPos = [[5, 5], [LW - 5, 5], [5, LD - 5], [LW - 5, LD - 5]];
+    for (let i = 0; i < 4; i++) {
+      const [ux, uz] = umbPos[i];
+      // Umbrella post and canvas cone
+      gb.cyl(ux, 0, uz, 0.06, 2.6, 6, '#78350f');
+      gb.pyr(ux - 1.8, uz - 1.8, ux + 1.8, uz + 1.8, 2.4, 0.9, umbCols[i]);
+      // Table & wooden seats
+      gb.cyl(ux, 0.65, uz, 0.55, 0.06, 8, '#a16207');
+      gb.cyl(ux, 0, uz, 0.05, 0.65, 6, '#334155');
+      for (const [dx, dz] of [[-0.8, 0], [0.8, 0], [0, -0.8], [0, 0.8]]) {
+        gb.box(ux + dx - 0.2, 0, uz + dz - 0.2, ux + dx + 0.2, 0.45, uz + dz + 0.2, '#78350f');
+      }
+    }
+    // Planters and shade trees
+    for (const [px, pz] of [[cx - 6, cz], [cx + 6, cz]]) {
+      gb.box(px - 1.4, 0, pz - 1.4, px + 1.4, 0.6, pz + 1.4, '#64748b');
+      yardTree(gb, px, pz, r);
+    }
+  };
+
   SGEN.plaza = function (gb, b, r, LW, LD) {
     foundation(gb, LW, LD, b, '#c9c0ae');
     gb.cyl(10, 0, 10, 4, 0.7, 14, '#b7b0a2', 0, '#1d6f8a');
@@ -1889,6 +2019,149 @@ export const SGEN: Record<string, any> = {};
     const cc = ['#d9473c', '#2f86c9', '#3aa36a', '#e3a02b', '#8c4fc0', '#f2f2f2'];
     for (let lx = 0; lx < 4; lx++) for (let lz = 0; lz < 2; lz++) for (let ly = 0; ly < 1 + ((lx + lz) % 3); ly++) gb.box(cx - 7.6 + lx * 3.9, 7 + ly * 2.6, cz - 4.6 + lz * 4.6, cx - 4.0 + lx * 3.9, 9.5 + ly * 2.6, cz - 0.4 + lz * 4.6, U.pick(cc, r));
     gb.box(cx - 14.6, 5, cz - 3.2, cx - 14, 6, cz - 2.4, '#111'); gb.box(cx - 14.6, 5, cz + 2.4, cx - 14, 6, cz + 3.2, '#111');
+  };
+
+  // ======================================================================
+  // Phase 6 Iconic Unlockable Mega-Projects
+  // ======================================================================
+  SGEN.opera = function (gb, b, r, LW, LD) {
+    foundation(gb, LW, LD, b, '#d6d1c7');
+    gb.flat(2, 2, LW - 2, LD - 2, 0.25, '#eae5dc');
+
+    // Stepped grand limestone podium
+    gb.box(8, 0.2, 10, LW - 8, 2.6, LD - 10, '#ded8cb');
+    // Front entrance steps
+    for (let s = 0; s < 5; s++) {
+      gb.box(16, s * 0.5, 4 + s * 1.2, LW - 16, s * 0.5 + 0.5, 10, '#e8e3d8');
+    }
+
+    // Main beaux-arts palace structure
+    gb.box(10, 2.6, 12, LW - 10, 18, LD - 12, '#f5f0e6');
+
+    // Neo-classical colonnade portico
+    const colCount = 6;
+    for (let c = 0; c < colCount; c++) {
+      const colX = 16 + (c / (colCount - 1)) * (LW - 32);
+      gb.cyl(colX, 2.6, 11, 0.85, 13.5, 12, '#ece7dc');
+    }
+    // Portico architrave and triangular pediment
+    gb.box(14, 16.1, 9.5, LW - 14, 17.5, 12.5, '#ded7ca');
+    gb.box(16, 17.5, 9.8, LW - 16, 20.5, 12.2, '#ded7ca');
+
+    // Flanking pavilion wings with mansard copper roofs
+    gb.box(8, 2.6, 12, 16, 19, LD - 12, '#f1ede3');
+    gb.box(LW - 16, 2.6, 12, LW - 8, 19, LD - 12, '#f1ede3');
+    gb.box(8, 19, 12, 16, 23, LD - 12, '#4ea48c');
+    gb.box(LW - 16, 19, 12, LW - 8, 23, LD - 12, '#4ea48c');
+
+    // Central Grand Copper Dome
+    const cx = LW / 2, cz = LD / 2;
+    gb.cyl(cx, 18, cz, 12, 4, 16, '#ded7ca');
+    gb.addThree(new THREE.SphereGeometry(11.5, 16, 12, 0, Math.PI * 2, 0, Math.PI / 2), new THREE.Matrix4().setPosition(cx, 21.8, cz), '#4ea48c');
+    // Dome lantern cupola and gilded finial
+    gb.cyl(cx, 33.2, cz, 2.4, 4.5, 8, '#ded7ca');
+    gb.addThree(new THREE.SphereGeometry(1.2, 8, 6), new THREE.Matrix4().setPosition(cx, 38.5, cz), '#facc15');
+
+    // Exterior facade arched windows with warm evening glow
+    for (let f = 0; f < 4; f++) {
+      const wx = 18 + f * 7.5;
+      gb.box(wx, 5, 11.9, wx + 4, 12, 12.05, '#fef08a', 9);
+    }
+    // Surrounding plaza trees
+    yardTree(gb, 6, 6, r);
+    yardTree(gb, LW - 6, 6, r);
+    yardTree(gb, 6, LD - 6, r);
+    yardTree(gb, LW - 6, LD - 6, r);
+  };
+
+  SGEN.stadium_arena = function (gb, b, r, LW, LD) {
+    foundation(gb, LW, LD, b, '#e2e8f0');
+    gb.flat(2, 2, LW - 2, LD - 2, 0.2, '#cbd5e1');
+
+    const cx = LW / 2, cz = LD / 2;
+    // Outer concrete bowl tiers
+    const seg = 28;
+    gb.cyl(cx, 0.2, cz, 34, 14, seg, '#f8fafc', 4, false);
+    gb.cyl(cx, 14, cz, 35.5, 3.5, seg, '#94a3b8');
+
+    // Tiered seating grandstands facing inwards
+    for (let k = 0; k < seg; k++) {
+      const a1 = (k / seg) * Math.PI * 2, a2 = ((k + 1) / seg) * Math.PI * 2;
+      const p = (a: number, rr: number, y: number) => [cx + Math.cos(a) * rr, y, cz + Math.sin(a) * rr];
+      gb.quad(p(a1, 18, 1.2), p(a2, 18, 1.2), p(a2, 33.5, 13.5), p(a1, 33.5, 13.5), k % 2 ? '#1d4ed8' : '#2563eb');
+    }
+
+    // Athletics running track (oval brick-red)
+    gb.cyl(cx, 0.25, cz, 17.5, 0.2, 24, '#c2410c');
+
+    // Central soccer / athletics pitch (emerald grass)
+    gb.flat(cx - 13, cz - 8, cx + 13, cz + 8, 0.5, '#16a34a');
+    // Pitch white markings
+    gb.flat(cx - 0.15, cz - 8, cx + 0.15, cz + 8, 0.52, '#ffffff');
+    gb.box(cx - 13, 0.52, cz - 3.5, cx - 12.8, 0.53, cz + 3.5, '#ffffff');
+    gb.box(cx + 12.8, 0.52, cz - 3.5, cx + 13, 0.53, cz + 3.5, '#ffffff');
+
+    // Sweeping tensile membrane canopy roof over north and south stands
+    gb.cyl(cx, 17.5, cz, 36, 1.5, seg, '#f1f5f9');
+
+    // 4 Tall floodlight pylons at the corners
+    for (const [fx, fz] of [[9, 9], [LW - 9, 9], [9, LD - 9], [LW - 9, LD - 9]]) {
+      gb.box(fx - 0.4, 0, fz - 0.4, fx + 0.4, 32, fz + 0.4, '#64748b');
+      // Angled spotlight bank shining onto pitch
+      gb.box(fx - 2.2, 32, fz - 2.2, fx + 2.2, 34.5, fz + 2.2, '#ffffff', 8);
+    }
+  };
+
+  SGEN.airport_intl = function (gb, b, r, LW, LD) {
+    foundation(gb, LW, LD, b, '#334155');
+
+    // 1. Runway (asphalt tarmac across the rear, z = 6..22)
+    gb.flat(2, 6, LW - 2, 22, 0.18, '#0f172a');
+    // Runway threshold piano keys
+    for (let k = 0; k < 6; k++) {
+      gb.box(4 + k * 1.8, 0.2, 7.5, 5.2 + k * 1.8, 0.22, 11, '#ffffff');
+      gb.box(LW - 14 + k * 1.8, 0.2, 17, LW - 12.8 + k * 1.8, 0.22, 20.5, '#ffffff');
+    }
+    // Dashed centerline markings
+    for (let cx = 18; cx < LW - 18; cx += 8) {
+      gb.box(cx, 0.2, 13.8, cx + 4.5, 0.22, 14.2, '#ffffff');
+    }
+    // Threshold edge lights (green threshold, red end)
+    gb.box(3, 0.2, 6.2, 3.8, 0.6, 7, '#22c55e', 8);
+    gb.box(LW - 3.8, 0.2, 21, LW - 3, 0.6, 21.8, '#ef4444', 8);
+
+    // 2. Taxiway with yellow guidance line (z = 24..32)
+    gb.flat(6, 22, LW - 6, 32, 0.15, '#1e293b');
+    gb.box(8, 0.17, 26.8, LW - 8, 0.19, 27.2, '#facc15');
+
+    // 3. Passenger Concourse Apron (z = 32..58)
+    gb.flat(4, 32, LW - 4, LD - 4, 0.12, '#475569');
+
+    // 4. Passenger Terminal Concourse Building (modernist glass & steel)
+    const tx0 = 24, tx1 = LW - 20, ty0 = 42, ty1 = LD - 6;
+    gb.box(tx0, 0.2, ty0, tx1, 8.5, ty1, '#f8fafc');
+    // Blue glass curtain walls with illumination
+    gb.box(tx0 - 0.2, 1.2, ty0 - 0.2, tx1 + 0.2, 7.8, ty0 + 0.5, '#0284c7', 9);
+    // Aerodynamic curving roof canopy
+    gb.box(tx0 - 2, 8.5, ty0 - 2, tx1 + 2, 10, ty1 + 2, '#e2e8f0');
+
+    // 4 Telescopic Jet Bridges extending north to parked aircraft stands
+    for (let j = 0; j < 4; j++) {
+      const jx = tx0 + 6 + j * 11;
+      gb.box(jx - 1.2, 3.5, 34, jx + 1.2, 6.5, ty0, '#94a3b8');
+      gb.box(jx - 2.4, 3.2, 32, jx + 2.4, 6.8, 34, '#64748b');
+      // Aircraft parking stand alignment box
+      gb.box(jx - 3.5, 0.14, 29, jx + 3.5, 0.16, 32, '#facc15');
+    }
+
+    // 5. Air Traffic Control (ATC) Tower (26m tall)
+    const atcX = 12, atcZ = 46;
+    gb.cyl(atcX, 0, atcZ, 2.4, 22, 12, '#cbd5e1');
+    // Cantilevered glass observation cab
+    gb.cyl(atcX, 22, atcZ, 4.6, 4.2, 8, '#38bdf8', 9);
+    // Rooftop radar dome and beacon
+    gb.cyl(atcX, 26.2, atcZ, 1.4, 2.2, 8, '#ffffff');
+    gb.box(atcX - 0.4, 28.5, atcZ - 0.4, atcX + 0.4, 29.5, atcZ + 0.4, '#ef4444', 8);
   };
 export function genBuilding(gb: GB, b: Building) {
     const r = U.rng(b.seed + b.level * 977);

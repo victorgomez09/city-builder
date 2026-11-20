@@ -11,6 +11,7 @@ import { Meshes } from '@/render/meshes';
 import { Sim } from '@/sim/sim';
 import { head, bindClose, sv, q, $$ } from '@/ui/dom';
 import { UI } from '@/ui/ui';
+import { t } from '@/i18n';
 
 export const DIST_COLORS = [
   '#3b82f6',
@@ -81,11 +82,11 @@ export function renderDistrictsPanel(p: HTMLElement): void {
   const Wd = World;
   if (!Wd.districts || Wd.districts.size === 0) {
     p.innerHTML =
-      head('Districts & Policies', 'Designate areas, enact municipal policies and apply specializations.') +
+      head(t('districts.title', 'Districts & Policies'), t('districts.subtitle', 'Designate areas, enact municipal policies and apply specializations.')) +
       `<div class="sec"><div class="sub" style="font-size:13px;line-height:1.4;margin:12px 0">
-         No districts designated yet. Create a district to customize tax relief, traffic bans, eco-housing, or industrial specializations.
+         ${t('districts.empty_desc', 'No districts designated yet. Create a district to customize tax relief, traffic bans, eco-housing, or industrial specializations.')}
        </div>
-       <button class="btn primary" id="btnCreateFirstDist" style="width:100%;height:38px">+ Create First District</button>
+       <button class="btn primary" id="btnCreateFirstDist" style="width:100%;height:38px">${t('districts.btn_first', '+ Create First District')}</button>
        </div>`;
     bindClose(p, () => UI.openPanel(null));
     const bFirst = q<HTMLElement>('#btnCreateFirstDist', p);
@@ -114,7 +115,7 @@ export function renderDistrictsPanel(p: HTMLElement): void {
            <span class="dist-badge-pip" style="background:${d.color}"></span>
            <b>${d.name}</b>
          </div>
-         <span class="sub">${d.stats.tiles} tiles · ${U.num(d.stats.pop)} pop</span>
+         <span class="sub">${d.stats.tiles} ${t('districts.tiles', 'tiles')} · ${U.num(d.stats.pop)} ${t('topbar.population', 'pop')}</span>
        </div>`
     )
     .join('');
@@ -122,8 +123,8 @@ export function renderDistrictsPanel(p: HTMLElement): void {
   const specHtml = SPEC_CARDS.map(
     s =>
       `<div class="dist-spec-card ${dist.spec === s[0] ? 'on' : ''}" data-spec="${s[0]}">
-         <div class="dist-spec-title">${s[1]}</div>
-         <div class="dist-spec-desc">${s[2]}</div>
+         <div class="dist-spec-title">${t('districts.specs.' + s[0] + '.name', s[1])}</div>
+         <div class="dist-spec-desc">${t('districts.specs.' + s[0] + '.desc', s[2])}</div>
        </div>`
   ).join('');
 
@@ -131,8 +132,8 @@ export function renderDistrictsPanel(p: HTMLElement): void {
     const active = !!(dist.policies && (dist.policies as any)[pol[0]]);
     return `<div class="policy-item">
        <div class="policy-info">
-         <div class="policy-name">${pol[1]}</div>
-         <div class="policy-desc">${pol[2]}</div>
+         <div class="policy-name">${t('districts.policies.' + pol[0] + '.name', pol[1])}</div>
+         <div class="policy-desc">${t('districts.policies.' + pol[0] + '.desc', pol[2])}</div>
        </div>
        <label class="policy-switch">
          <input type="checkbox" data-policy="${pol[0]}" ${active ? 'checked' : ''}>
@@ -146,53 +147,53 @@ export function renderDistrictsPanel(p: HTMLElement): void {
   ).join('');
 
   p.innerHTML =
-    head('Districts & Policies', 'Designate areas and manage district policies') +
+    head(t('districts.title', 'Districts & Policies'), t('districts.subtitle', 'Designate areas, enact municipal policies and apply specializations.')) +
     `<div class="sec">
        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-         <span class="lbl">City Districts (${Wd.districts.size})</span>
-         <button class="btn" id="btnNewDist" style="padding:3px 8px;font-size:11px">+ New District</button>
+         <span class="lbl">${t('districts.count_lbl', { count: Wd.districts.size })}</span>
+         <button class="btn" id="btnNewDist" style="padding:3px 8px;font-size:11px">${t('districts.btn_new', '+ New District')}</button>
        </div>
        <div class="dist-list">${distListHtml}</div>
      </div>
      <div class="sec">
        <div class="field" style="margin-bottom:8px">
-         <label class="lbl">District Name</label>
+         <label class="lbl">${t('districts.name_lbl', 'District Name')}</label>
          <input type="text" id="distNameInput" maxlength="32" value="${dist.name}">
        </div>
-       <div class="lbl">Theme Color</div>
+       <div class="lbl">${t('districts.color_lbl', 'Theme Color')}</div>
        <div class="dist-palette">${paletteHtml}</div>
        <div class="btns" style="margin-top:10px">
-         <button class="btn" id="btnDistFocus">Center Camera</button>
-         <button class="btn" id="btnDistPaint">Paint Brush</button>
-         <button class="btn danger" id="btnDistDelete">Delete</button>
+         <button class="btn" id="btnDistFocus">${t('districts.btn_focus', 'Center Camera')}</button>
+         <button class="btn" id="btnDistPaint">${t('districts.btn_paint', 'Paint Brush')}</button>
+         <button class="btn danger" id="btnDistDelete">${t('districts.btn_delete', 'Delete')}</button>
        </div>
      </div>
      <div class="sec">
-       <div class="lbl">District Statistics</div>
+       <div class="lbl">${t('districts.stats_title', 'District Statistics')}</div>
        <table class="bud" style="margin-top:6px">
-         <tr><td>Tiles</td><td class="num" data-v="d_tiles">${dist.stats.tiles}</td><td>Population</td><td class="num" data-v="d_pop">${U.num(
+         <tr><td>${t('districts.tiles', 'Tiles')}</td><td class="num" data-v="d_tiles">${dist.stats.tiles}</td><td>${t('districts.population', 'Population')}</td><td class="num" data-v="d_pop">${U.num(
       dist.stats.pop
     )}</td></tr>
-         <tr><td>Jobs</td><td class="num" data-v="d_jobs">${U.num(dist.stats.jobs)}</td><td>Workers</td><td class="num" data-v="d_workers">${U.num(
+         <tr><td>${t('districts.jobs', 'Jobs')}</td><td class="num" data-v="d_jobs">${U.num(dist.stats.jobs)}</td><td>${t('districts.workers', 'Workers')}</td><td class="num" data-v="d_workers">${U.num(
       dist.stats.workers
     )}</td></tr>
-         <tr><td>Happiness</td><td class="num" data-v="d_happy">${dist.stats.avgHappy}%</td><td>Unemployment</td><td class="num" data-v="d_unemp">${
+         <tr><td>${t('districts.happiness', 'Happiness')}</td><td class="num" data-v="d_happy">${dist.stats.avgHappy}%</td><td>${t('districts.unemployment', 'Unemployment')}</td><td class="num" data-v="d_unemp">${
       dist.stats.unemployment
     }%</td></tr>
-         <tr><td>Power Usage</td><td class="num" data-v="d_power">${dist.stats.powerUsage} MW</td><td>Water Usage</td><td class="num" data-v="d_water">${
+         <tr><td>${t('districts.power', 'Power Usage')}</td><td class="num" data-v="d_power">${dist.stats.powerUsage} MW</td><td>${t('districts.water', 'Water Usage')}</td><td class="num" data-v="d_water">${
       dist.stats.waterUsage
     } m³</td></tr>
-         <tr><td>Garbage</td><td class="num" data-v="d_garb">${dist.stats.garbage} t</td><td>Tax Revenue</td><td class="num" data-v="d_tax">${U.money(
+         <tr><td>${t('districts.garbage', 'Garbage')}</td><td class="num" data-v="d_garb">${dist.stats.garbage} t</td><td>${t('districts.tax', 'Tax Revenue')}</td><td class="num" data-v="d_tax">${U.money(
       dist.stats.taxIncome
     )}/mo</td></tr>
        </table>
      </div>
      <div class="sec">
-       <div class="lbl">District Specialization</div>
+       <div class="lbl">${t('districts.specs_title', 'District Specialization')}</div>
        <div class="dist-specs">${specHtml}</div>
      </div>
      <div class="sec">
-       <div class="lbl">Municipal Policies</div>
+       <div class="lbl">${t('districts.policies_title', 'Municipal Policies')}</div>
        <div class="policy-list">${policiesHtml}</div>
      </div>`;
 

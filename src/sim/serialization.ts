@@ -8,6 +8,7 @@ import { Transit } from '@/transit/transit';
 import { Building, SerializedCity, BudgetLedger, BudgetState, BudgetReport } from '@/types';
 import { blankBudget, LoanItem } from './budget';
 import { Unrest } from './unrest';
+import { WeatherSystem } from './weather';
 
 const N = C.W * C.W;
 
@@ -118,6 +119,9 @@ export function serializeCity(sim: SimSerializationHost): SerializedCity {
     nextDistrictId: World.nextDistrictId,
     buildings: bl,
     transit: Transit.serialize(),
+    weather: WeatherSystem.serialize(),
+    disasters: WeatherSystem.incidents,
+    bankruptcy: (sim as any).bankruptcy,
   } as any;
 }
 
@@ -218,6 +222,16 @@ export function loadCity(
   } else {
     Unrest.init();
   }
+
+  WeatherSystem.init(d.weather, d.disasters);
+  (sim as any).bankruptcy = d.bankruptcy || {
+    inWarning: false,
+    warningDaysLeft: 10,
+    inDefault: false,
+    bailoutCount: 0,
+    austerityMonthsLeft: 0,
+    totalBailoutReceived: 0,
+  };
 
   if (d.district) {
     World.district.set(U.decodeRLE(d.district, Uint8Array, N));

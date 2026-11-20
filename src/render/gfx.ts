@@ -333,6 +333,22 @@ function makeMaterials() {
         opacity: 0.95,
         depthTest: false,
       });
+  if (m.subway) m.subway.dispose();
+  m.subway = pbr
+    ? new THREE.MeshStandardMaterial({
+        vertexColors: true,
+        roughness: 0.45,
+        metalness: 0.22,
+        transparent: true,
+        opacity: 0.98,
+        depthTest: false,
+      })
+    : new THREE.MeshLambertMaterial({
+        vertexColors: true,
+        transparent: true,
+        opacity: 0.98,
+        depthTest: false,
+      });
   m.city = pbr
     ? new THREE.MeshStandardMaterial({
         vertexColors: true,
@@ -528,6 +544,114 @@ export const Gfx: any = {
   terrainDirty: false,
   night: 0,
   aaState: false,
+  underground: false,
+  weatherPoints: null as THREE.Points | null,
+  weatherGeo: null as THREE.BufferGeometry | null,
+  weatherMat: null as THREE.PointsMaterial | null,
+  weatherPositions: null as Float32Array | null,
+  lightningFlash: 0,
+
+  flashLightning() {
+    Gfx.lightningFlash = 1.0;
+  },
+
+  initWeatherParticles() {
+    const COUNT = 3000;
+    const positions = new Float32Array(COUNT * 3);
+    for (let i = 0; i < COUNT; i++) {
+      positions[i * 3] = (Math.random() - 0.5) * 220;
+      positions[i * 3 + 1] = Math.random() * 80;
+      positions[i * 3 + 2] = (Math.random() - 0.5) * 220;
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const mat = new THREE.PointsMaterial({
+      color: 0x93c5fd,
+      size: 1.6,
+      transparent: true,
+      opacity: 0.6,
+      depthWrite: false,
+    });
+    const points = new THREE.Points(geo, mat);
+    points.frustumCulled = false;
+    points.visible = false;
+    Gfx.scene.add(points);
+
+    Gfx.weatherPoints = points;
+    Gfx.weatherGeo = geo;
+    Gfx.weatherMat = mat;
+    Gfx.weatherPositions = positions;
+  },
+
+  updateWeather(dt: number) {
+    if (Gfx.lightningFlash > 0) {
+      Gfx.lightningFlash = Math.max(0, Gfx.lightningFlash - dt * 3.5);
+    }
+    const points = Gfx.weatherPoints;
+    const pos = Gfx.weatherPositions;
+    const geo = Gfx.weatherGeo;
+    const mat = Gfx.weatherMat;
+    if (!points || !pos || !geo || !mat) return;
+
+    const CB = (window as any).CB;
+    const weather = CB?.Sim?.weather || CB?.WeatherSystem?.state;
+    const wind = CB?.Sim?.wind;
+
+    const precip = weather?.precipitation || 0;
+    if (precip <= 0.02) {
+      points.visible = false;
+      return;
+    }
+
+    points.visible = true;
+    const isSnow = weather?.type === 'snow';
+    if (isSnow) {
+      mat.size = 2.4;
+      mat.color.setHex(0xffffff);
+      mat.opacity = 0.85;
+    } else {
+      mat.size = weather?.type === 'storm' ? 2.0 : 1.4;
+      mat.color.setHex(0x93c5fd);
+      mat.opacity = weather?.type === 'storm' ? 0.75 : 0.55;
+    }
+
+    const fallSpeed = isSnow ? 10.0 : 55.0;
+    const windAngle = wind?.angle || 0;
+    const windSpeed = wind?.speed || 15;
+    const driftX = Math.cos(windAngle) * windSpeed * 0.45;
+    const driftZ = Math.sin(windAngle) * windSpeed * 0.45;
+
+    const cx = Gfx.cam.tx || 0, cz = Gfx.cam.tz || 0, cy = Gfx.cam.ty || 4;
+    const COUNT = pos.length / 3;
+
+    for (let i = 0; i < COUNT; i++) {
+      const idx = i * 3;
+      pos[idx + 1] -= fallSpeed * dt;
+      pos[idx] += driftX * dt;
+      pos[idx + 2] += driftZ * dt;
+
+      if (pos[idx + 1] < cy - 5) {
+        pos[idx + 1] = cy + 70 + Math.random() * 10;
+        pos[idx] = cx + (Math.random() - 0.5) * 220;
+        pos[idx + 2] = cz + (Math.random() - 0.5) * 220;
+      }
+      if (Math.abs(pos[idx] - cx) > 115) {
+        pos[idx] = cx - Math.sign(pos[idx] - cx) * 110;
+      }
+      if (Math.abs(pos[idx + 2] - cz) > 115) {
+        pos[idx + 2] = cz - Math.sign(pos[idx + 2] - cz) * 110;
+      }
+    }
+    geo.attributes.position.needsUpdate = true;
+  },
+
+  setUnderground(active: boolean) {
+    Gfx.underground = active;
+    const CB = (window as any).CB;
+    if (CB?.Meshes?.setSubwayVisibility) {
+      CB.Meshes.setSubwayVisibility(active);
+    }
+  },
 
   init(container: HTMLElement, settings: QualityPreset & { dayNight?: boolean }) {
     Gfx.container = container;
@@ -622,6 +746,7 @@ void main(){ vec3 d = normalize(vDir); float h = d.y;
       keys: {} as Record<string, boolean>,
     };
     Gfx.applySettings(settings, true);
+    Gfx.initWeatherParticles();
     window.addEventListener('resize', Gfx.resize);
     Gfx.resize();
   },
@@ -693,8 +818,16 @@ void main(){ vec3 d = normalize(vDir); float h = d.y;
     lerpCol(sk.hor.value, a.hor, b.hor, t);
     sk.bot.value.copy(sk.hor.value).multiplyScalar(0.6);
     lerpCol(Gfx.sun.color, a.sun, b.sun, t);
-    Gfx.sun.intensity = U.lerp(a.si, b.si, t);
-    Gfx.hemi.intensity = U.lerp(a.hemi, b.hemi, t);
+    const CB = (window as any).CB;
+    const weather = CB?.Sim?.weather;
+    const cloudDark = weather ? (1.0 - (weather.clouds || 0) * 0.55) : 1.0;
+    Gfx.sun.intensity = U.lerp(a.si, b.si, t) * cloudDark;
+    if (Gfx.lightningFlash > 0.01) {
+      Gfx.sun.intensity = Math.max(Gfx.sun.intensity, 6.5 * Gfx.lightningFlash);
+      Gfx.sun.color.setHex(0xe0f2fe);
+      sk.hor.value.setHex(0xdbeafe);
+    }
+    Gfx.hemi.intensity = U.lerp(a.hemi, b.hemi, t) * cloudDark;
     lerpCol(Gfx.hemi.color, a.sky, b.sky, t);
     lerpCol(Gfx.hemi.groundColor, a.gnd, b.gnd, t);
     const night = U.lerp(a.night, b.night, t);
@@ -702,6 +835,13 @@ void main(){ vec3 d = normalize(vDir); float h = d.y;
     Gfx.uni.uLit.value = 0.08 + night * 0.32;
     sk.night.value = night;
     Gfx.scene.fog.color.copy(sk.hor.value);
+    if (weather && weather.fogDensity > 0.05) {
+      Gfx.scene.fog.near = 25;
+      Gfx.scene.fog.far = Math.max(140, Gfx.settings.view * (1.0 - weather.fogDensity * 0.7));
+    } else {
+      Gfx.scene.fog.near = 400;
+      Gfx.scene.fog.far = Gfx.settings.view;
+    }
     const ang = ((hour - 6) / 12) * Math.PI;
     const el = Math.sin(ang);
     if (el > -0.05) {

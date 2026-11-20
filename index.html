@@ -1522,21 +1522,22 @@ canvas.spark { width: 100%; height: 56px; display: block; }
     </div>
 
     <div class="tb-sec stats-strip">
-      <div class="stat click-stat" id="statMoney" title="Treasury & Taxes (Click for Budget)"><span class="lbl">Funds</span><b class="num" id="money">$0</b><small class="num" id="net"></small></div>
-      <div class="stat click-stat" id="statPop" title="Population & Workforce (Click for Statistics)"><span class="lbl">Population</span><b class="num" id="pop">0</b><small class="num" id="popsub" style="color:var(--mute)"></small></div>
-      <div class="stat click-stat" id="statHappy" title="Citizen Satisfaction (Click for Overlays)"><span class="lbl">Happiness</span><b class="num" id="happy">–</b><small id="happysub" style="color:var(--mute)"></small></div>
-      <div class="stat click-stat" id="statUnrest" title="Social Tension & Strikes (Click for Civic Peace)"><span class="lbl">Unrest</span><b class="num" id="unrest_val">0%</b><small id="unrest_lvl" style="color:#22c55e">Peaceful</small></div>
-      <div class="stat click-stat" id="statWind" title="Wind Direction & Speed (Click to view Pollution plume)"><span class="lbl">Wind</span><b class="num" id="wind_spd">--</b><small id="wind_dir" style="color:#60a5fa"></small></div>
+      <div class="stat click-stat" id="statMoney" title="Treasury & Taxes (Click for Budget)"><span class="lbl" data-i18n="topbar.funds">Funds</span><b class="num" id="money">$0</b><small class="num" id="net"></small></div>
+      <div class="stat click-stat" id="statPop" title="Population & Workforce (Click for Statistics)"><span class="lbl" data-i18n="topbar.population">Population</span><b class="num" id="pop">0</b><small class="num" id="popsub" style="color:var(--mute)"></small></div>
+      <div class="stat click-stat" id="statHappy" title="Citizen Satisfaction (Click for Overlays)"><span class="lbl" data-i18n="topbar.happiness">Happiness</span><b class="num" id="happy">–</b><small id="happysub" style="color:var(--mute)"></small></div>
+      <div class="stat click-stat" id="statUnrest" title="Social Tension & Strikes (Click for Civic Peace)"><span class="lbl" data-i18n="topbar.unrest">Unrest</span><b class="num" id="unrest_val">0%</b><small id="unrest_lvl" style="color:#22c55e">Peaceful</small></div>
+      <div class="stat click-stat" id="statWind" title="Wind Direction & Speed (Click to view Pollution plume)"><span class="lbl" data-i18n="topbar.wind">Wind</span><b class="num" id="wind_spd">--</b><small id="wind_dir" style="color:#60a5fa"></small></div>
+      <div class="stat click-stat" id="statWeather" title="Weather & Disasters (Click for Forecast & Emergency)"><span class="lbl" data-i18n="topbar.weather">Weather</span><b class="num" id="weather_temp">--</b><small id="weather_icon" style="color:#facc15">☀️</small></div>
       <div class="demand" id="demand" title="Zoning Demand (Click for Zoning tools)"></div>
     </div>
 
     <div class="tb-sec clock">
       <div class="stat"><b class="t num" id="time">07:00</b><small id="date" style="color:var(--mute)"></small></div>
       <div class="speed" id="speed">
-        <button id="sp0" title="Pause (Space)" aria-label="Pause"><svg viewBox="0 0 16 16"><rect x="3" y="2" width="3.5" height="12" rx="1"/><rect x="9.5" y="2" width="3.5" height="12" rx="1"/></svg></button>
-        <button id="sp1" title="Normal speed (1)" aria-label="Normal speed"><svg viewBox="0 0 16 16"><path d="M4 2l9 6-9 6z"/></svg></button>
-        <button id="sp2" title="Fast (2)" aria-label="Fast"><svg viewBox="0 0 16 16"><path d="M1 2l7 6-7 6zM8 2l7 6-7 6z"/></svg></button>
-        <button id="sp4" title="Fastest (3)" aria-label="Fastest"><svg viewBox="0 0 16 16"><path d="M0 3l5 5-5 5zM5.5 3l5 5-5 5zM11 3l5 5-5 5z"/></svg></button>
+        <button id="sp0" data-i18n-title="topbar.pause" title="Pause (Space)" aria-label="Pause"><svg viewBox="0 0 16 16"><rect x="3" y="2" width="3.5" height="12" rx="1"/><rect x="9.5" y="2" width="3.5" height="12" rx="1"/></svg></button>
+        <button id="sp1" data-i18n-title="topbar.speed1" title="Normal speed (1)" aria-label="Normal speed"><svg viewBox="0 0 16 16"><path d="M4 2l9 6-9 6z"/></svg></button>
+        <button id="sp2" data-i18n-title="topbar.speed2" title="Fast (2)" aria-label="Fast"><svg viewBox="0 0 16 16"><path d="M1 2l7 6-7 6zM8 2l7 6-7 6z"/></svg></button>
+        <button id="sp4" data-i18n-title="topbar.speed3" title="Fastest (3)" aria-label="Fastest"><svg viewBox="0 0 16 16"><path d="M0 3l5 5-5 5zM5.5 3l5 5-5 5zM11 3l5 5-5 5z"/></svg></button>
       </div>
     </div>
 
@@ -1545,29 +1546,29 @@ canvas.spark { width: 100%; height: 56px; display: block; }
       <div class="hub-group">
         <button class="mbtn hub-btn" data-hub="civic" title="Civic & Society (Peace, Districts, Transit)">
           <svg viewBox="0 0 24 24"><path d="M3 21h18M3 10h18M5 10v11M19 10v11M9 10v11M15 10v11M12 2l10 8H2z"/></svg>
-          <span>Civic</span>
+          <span data-i18n="menu.civic">Civic</span>
           <svg class="hub-chevron" viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg>
         </button>
         <div class="hub-dropdown" id="hub_civic" hidden>
           <button class="hub-item" data-panel="unrest">
             <span class="hub-item-icon">✊</span>
             <div class="hub-item-txt">
-              <span class="hub-item-title">Peace & Unrest</span>
-              <span class="hub-item-sub">Strikes, unions & tension</span>
+              <span class="hub-item-title" data-i18n="menu.unrest_title">Peace & Unrest</span>
+              <span class="hub-item-sub" data-i18n="menu.unrest_sub">Strikes, unions & tension</span>
             </div>
           </button>
           <button class="hub-item" data-panel="districts">
             <span class="hub-item-icon">🏛️</span>
             <div class="hub-item-txt">
-              <span class="hub-item-title">Districts & Policies</span>
-              <span class="hub-item-sub">Borough ordinances & specializations</span>
+              <span class="hub-item-title" data-i18n="menu.districts_title">Districts & Policies</span>
+              <span class="hub-item-sub" data-i18n="menu.districts_sub">Borough ordinances & specializations</span>
             </div>
           </button>
           <button class="hub-item" data-panel="transit">
             <span class="hub-item-icon">🚌</span>
             <div class="hub-item-txt">
-              <span class="hub-item-title">Transit Networks</span>
-              <span class="hub-item-sub">Bus, tram, rail lines & stops</span>
+              <span class="hub-item-title" data-i18n="menu.transit_title">Transit Networks</span>
+              <span class="hub-item-sub" data-i18n="menu.transit_sub">Bus, tram, rail lines & stops</span>
             </div>
           </button>
         </div>
@@ -1577,22 +1578,22 @@ canvas.spark { width: 100%; height: 56px; display: block; }
       <div class="hub-group">
         <button class="mbtn hub-btn" data-hub="economy" title="Economy & Logistics (Budget, Supply Chain)">
           <svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18M16 15h2"/></svg>
-          <span>Economy</span>
+          <span data-i18n="menu.economy">Economy</span>
           <svg class="hub-chevron" viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg>
         </button>
         <div class="hub-dropdown" id="hub_economy" hidden>
           <button class="hub-item" data-panel="budget">
             <span class="hub-item-icon">💰</span>
             <div class="hub-item-txt">
-              <span class="hub-item-title">Budget & Treasury</span>
-              <span class="hub-item-sub">Taxation, loans & balances</span>
+              <span class="hub-item-title" data-i18n="menu.budget_title">Budget & Treasury</span>
+              <span class="hub-item-sub" data-i18n="menu.budget_sub">Taxation, loans & balances</span>
             </div>
           </button>
           <button class="hub-item" data-panel="supply">
             <span class="hub-item-icon">📦</span>
             <div class="hub-item-txt">
-              <span class="hub-item-title">Supply & Logistics</span>
-              <span class="hub-item-sub">Freight, raw resources & trade</span>
+              <span class="hub-item-title" data-i18n="menu.supply_title">Supply & Logistics</span>
+              <span class="hub-item-sub" data-i18n="menu.supply_sub">Freight, raw resources & trade</span>
             </div>
           </button>
         </div>
@@ -1602,22 +1603,29 @@ canvas.spark { width: 100%; height: 56px; display: block; }
       <div class="hub-group">
         <button class="mbtn hub-btn" data-hub="insights" title="Insights & Views (Overlays, Statistics)">
           <svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>
-          <span>Insights</span>
+          <span data-i18n="menu.insights">Insights</span>
           <svg class="hub-chevron" viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg>
         </button>
         <div class="hub-dropdown" id="hub_insights" hidden>
           <button class="hub-item" data-panel="views">
             <span class="hub-item-icon">👁️</span>
             <div class="hub-item-txt">
-              <span class="hub-item-title">Info Views</span>
-              <span class="hub-item-sub">Pollution, water, power, land value</span>
+              <span class="hub-item-title" data-i18n="menu.views_title">Info Views</span>
+              <span class="hub-item-sub" data-i18n="menu.views_sub">Pollution, water, power, land value</span>
             </div>
           </button>
           <button class="hub-item" data-panel="stats">
             <span class="hub-item-icon">📈</span>
             <div class="hub-item-txt">
-              <span class="hub-item-title">City Statistics</span>
-              <span class="hub-item-sub">Demographics, jobs & graphs</span>
+              <span class="hub-item-title" data-i18n="menu.stats_title">City Statistics</span>
+              <span class="hub-item-sub" data-i18n="menu.stats_sub">Demographics, jobs & graphs</span>
+            </div>
+          </button>
+          <button class="hub-item" data-panel="weather">
+            <span class="hub-item-icon">⛈️</span>
+            <div class="hub-item-txt">
+              <span class="hub-item-title" data-i18n="menu.weather_title">Weather & Disasters</span>
+              <span class="hub-item-sub" data-i18n="menu.weather_sub">Forecast, storms, wildfire & emergency</span>
             </div>
           </button>
         </div>
@@ -1626,7 +1634,7 @@ canvas.spark { width: 100%; height: 56px; display: block; }
       <!-- Settings Standalone Option -->
       <button class="mbtn" data-panel="settings" title="Settings, Graphics, Simulation & Saves">
         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
-        <span>Settings</span>
+        <span data-i18n="menu.settings">Settings</span>
       </button>
     </nav>
   </header>
@@ -1644,21 +1652,21 @@ canvas.spark { width: 100%; height: 56px; display: block; }
   <div class="ui start" id="start" hidden>
     <div class="glass sbox">
       <h1 class="brand">Vira <em>City</em></h1>
-      <p class="tag">Start with a dirt crossroads off the highway. Grow it into a city of avenues, bike lanes, streetcars and towers, one milestone at a time.</p>
-      <div class="field"><label class="lbl" for="cityInput">City name</label><input id="cityInput" maxlength="28" value="Port Alder"></div>
-      <div class="field"><label class="lbl" for="mapStart">Map</label><select id="mapStart"></select><div class="mapdesc" id="mapDesc"></div></div>
-      <div class="field"><label class="lbl" for="presetStart">Graphics quality</label>
-        <select id="presetStart"><option value="low">Low: integrated graphics, older laptops</option><option value="medium">Medium: most laptops</option><option value="high">High: gaming laptops and desktops</option><option value="ultra">Ultra: powerful desktop GPUs</option></select>
+      <p class="tag" data-i18n="start.brand_sub">Start with a dirt crossroads off the highway. Grow it into a city of avenues, bike lanes, streetcars and towers, one milestone at a time.</p>
+      <div class="field"><label class="lbl" for="cityInput" data-i18n="start.city_name">City name</label><input id="cityInput" maxlength="28" value="Port Alder"></div>
+      <div class="field"><label class="lbl" for="mapStart" data-i18n="start.map">Map</label><select id="mapStart"></select><div class="mapdesc" id="mapDesc"></div></div>
+      <div class="field"><label class="lbl" for="presetStart" data-i18n="start.preset">Graphics quality</label>
+        <select id="presetStart"><option value="low" data-i18n="start.low_desc">Low: integrated graphics, older laptops</option><option value="medium" data-i18n="start.med_desc">Medium: most laptops</option><option value="high" data-i18n="start.high_desc">High: gaming laptops and desktops</option><option value="ultra" data-i18n="start.ultra_desc">Ultra: powerful desktop GPUs</option></select>
       </div>
       <div class="sbtns">
-        <button class="btn primary" id="btnNew">Found a new city</button>
-        <button class="btn" id="btnContinue" hidden>Continue saved city</button>
-        <button class="btn" id="btnOpenSaveHub">📂 Load City / Save Hub</button>
+        <button class="btn primary" id="btnNew" data-i18n="start.btn_new">Found a new city</button>
+        <button class="btn" id="btnContinue" data-i18n="start.btn_continue" hidden>Continue saved city</button>
+        <button class="btn" id="btnOpenSaveHub" data-i18n="start.btn_hub">📂 Load City / Save Hub</button>
       </div>
-      <div class="legendrow"><span><b>WASD</b> move</span><span><b>Right-drag</b> rotate</span><span><b>Wheel</b> zoom</span><span><b>Space</b> pause</span></div>
+      <div class="legendrow"><span id="legMove"><b>WASD</b> <span data-i18n="start.ctrl_wasd">move</span></span><span id="legRotate"><b>Right-drag</b> <span data-i18n="start.ctrl_drag">rotate</span></span><span id="legZoom"><b>Wheel</b> <span data-i18n="start.ctrl_wheel">zoom</span></span><span id="legPause"><b>Space</b> <span data-i18n="start.ctrl_space">pause</span></span></div>
     </div>
   </div>
-  <div id="loading">Loading Vira City…</div>
+  <div id="loading" data-i18n="common.loading">Loading Vira City…</div>
 </div>
 
 <script type="module" src="/src/main.ts"></script>

@@ -50,6 +50,16 @@ Este documento define el protocolo operativo obligatorio, los estándares de ing
 - Al añadir nuevas capas de datos al mapa, deben integrarse en `Sim.serialize()` y `Sim.load(d)` mediante compresión por longitud de series (**RLE**) usando `U.encodeRLE()` y `U.decodeRLE()`.
 - Debe mantenerse siempre la compatibilidad con partidas existentes inicializando valores por defecto cuando el campo no exista en el archivo cargado.
 
+### 2.6 Soporte Obligatorio de Internacionalización (i18n)
+- **Cero Textos Hardcodeados:** Cualquier nueva funcionalidad, panel de UI, herramienta del catálogo, métrica, tooltip o notificación visible para el usuario debe incorporar obligatoriamente sus claves de traducción en `src/i18n/types.ts` e implementarse en **todos** los idiomas soportados:
+  - Inglés (`src/i18n/locales/en.ts`)
+  - Español (`src/i18n/locales/es.ts`)
+  - Alemán (`src/i18n/locales/de.ts`)
+  - Francés (`src/i18n/locales/fr.ts`)
+  - Chino Simplificado (`src/i18n/locales/zh.ts`)
+  - Japonés (`src/i18n/locales/ja.ts`)
+- Queda terminantemente prohibido omitir alguno de los idiomas soportados o introducir textos estáticos en inglés o español en el DOM/HTML sin pasar por `t(...)`.
+
 ---
 
 ## 🔄 3. Flujo de Trabajo del Agente (Paso a Paso)

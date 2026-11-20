@@ -76,7 +76,9 @@ const Tl = Tools;
       if (Meshes?.setPipeVisibility) Meshes.setPipeVisibility(isWaterOv);
     }
     const transitTool = Tl.tool.type === 'line' || Tl.tool.type === 'stop' || Tl.tool.type === 'rail' || Tl.tool.type === 'lineEdit';
-    Transit.showRibbons(transitTool || UI.overlay === 'transit', Tl.tool.type === 'lineEdit' ? Transit.lineById(Tl.tool.line) : null);
+    Transit.showRibbons(transitTool || UI.overlay === 'transit' || UI.overlay === 'subway', Tl.tool.type === 'lineEdit' ? Transit.lineById(Tl.tool.line) : null);
+    const isSub = (Tl.tool.type === 'rail' && (Tl.tool as any).rr === 2) || UI?.overlay === 'subway';
+    Gfx.setUnderground(isSub);
     if (Tl.tool.type === 'svc') Tl.rot = 0;
     if (Tl.tool.type === 'move') { const mb = Sim.buildings.get(Tl.tool.id); Tl.rot = mb && mb.dir !== undefined ? mb.dir : 0; }
     UI.onToolChange();

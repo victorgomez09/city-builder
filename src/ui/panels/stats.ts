@@ -8,6 +8,7 @@ import { Sim } from '@/sim/sim';
 import { Traffic } from '@/traffic/traffic';
 import { head, bindClose, sv, spark, q } from '@/ui/dom';
 import { UI } from '@/ui/ui';
+import { t } from '@/i18n';
 
 export function updStats(p: HTMLElement): void {
   const S = Sim,
@@ -17,7 +18,7 @@ export function updStats(p: HTMLElement): void {
   sv(p, 'unemp', (st.unemp * 100).toFixed(1) + '%');
   sv(p, 'cin', U.num(st.outsideIn));
   sv(p, 'edu', Math.round(st.edu * 100) + '%');
-  sv(p, 'comm', st.commute ? Math.round((st.commute * 60) / C.HOUR_SEC) + ' min' : '–');
+  sv(p, 'comm', st.commute ? Math.round((st.commute * 60) / C.HOUR_SEC) + ' ' + t('common.min', 'min') : '–');
   sv(p, 'flow', Math.round(Tr.stats.flow * 100) + '%');
   sv(p, 'veh', U.num(Tr.stats.active));
   sv(p, 'stuck', U.num(Tr.stats.stuck));
@@ -39,21 +40,21 @@ export function updStats(p: HTMLElement): void {
 
 export function renderStatsPanel(p: HTMLElement): void {
   p.innerHTML =
-    head('City statistics', '') +
-    `<div class="lbl">Population</div><canvas class="spark" id="spPop" width="600" height="112"></canvas>
-     <div class="lbl" style="margin-top:6px">Funds</div><canvas class="spark" id="spMoney" width="600" height="112"></canvas>
+    head(t('stats.title', 'City statistics'), '') +
+    `<div class="lbl">${t('stats.pop', 'Population')}</div><canvas class="spark" id="spPop" width="600" height="112"></canvas>
+     <div class="lbl" style="margin-top:6px">${t('stats.funds', 'Funds')}</div><canvas class="spark" id="spMoney" width="600" height="112"></canvas>
      <div class="sec">
-     <div class="row"><span>Jobs filled</span><b data-v="jobs"></b></div>
-     <div class="row"><span>Unemployment</span><b data-v="unemp"></b></div>
-     <div class="row"><span>Commuters from out of town</span><b data-v="cin"></b></div>
-     <div class="row"><span>Education coverage</span><b data-v="edu"></b></div>
-     <div class="row"><span>Average commute</span><b data-v="comm"></b></div>
-     <div class="row"><span>Traffic flow</span><b data-v="flow"></b></div>
-     <div class="row"><span>Vehicles on the road</span><b data-v="veh"></b></div>
-     <div class="row"><span>Cyclists / pedestrians</span><b data-v="soft"></b></div>
-     <div class="row"><span>How people get around</span><b data-v="modes"></b></div>
-     <div class="row"><span>Cars that gave up (gridlock)</span><b data-v="stuck"></b></div>
-     <div class="row"><span>Buildings</span><b data-v="bcount"></b></div></div>`;
+     <div class="row"><span>${t('stats.jobs', 'Jobs filled')}</span><b data-v="jobs"></b></div>
+     <div class="row"><span>${t('stats.unemp', 'Unemployment')}</span><b data-v="unemp"></b></div>
+     <div class="row"><span>${t('stats.cin', 'Commuters from out of town')}</span><b data-v="cin"></b></div>
+     <div class="row"><span>${t('stats.edu', 'Education coverage')}</span><b data-v="edu"></b></div>
+     <div class="row"><span>${t('stats.comm', 'Average commute')}</span><b data-v="comm"></b></div>
+     <div class="row"><span>${t('stats.flow', 'Traffic flow')}</span><b data-v="flow"></b></div>
+     <div class="row"><span>${t('stats.veh', 'Vehicles on the road')}</span><b data-v="veh"></b></div>
+     <div class="row"><span>${t('stats.soft', 'Cyclists / pedestrians')}</span><b data-v="soft"></b></div>
+     <div class="row"><span>${t('stats.modes', 'How people get around')}</span><b data-v="modes"></b></div>
+     <div class="row"><span>${t('stats.stuck', 'Cars that gave up (gridlock)')}</span><b data-v="stuck"></b></div>
+     <div class="row"><span>${t('stats.bcount', 'Buildings')}</span><b data-v="bcount"></b></div></div>`;
 
   bindClose(p, () => UI.openPanel(null));
   updStats(p);

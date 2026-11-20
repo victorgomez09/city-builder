@@ -11,6 +11,7 @@ import { Tools } from '@/tools/tools';
 import { UI } from '@/ui/ui';
 import { SaveSystem } from '@/sim/saveSystem';
 import { renderSaveHubModal } from '@/ui/panels/saveHub';
+import { t, I18n } from '@/i18n';
 
 if (typeof window !== 'undefined') {
   (window as any).THREE = THREE;
@@ -227,17 +228,24 @@ function readSave() {
 
     if (save && !fresh) {
       $('btnContinue').hidden = false;
-      $('btnContinue').textContent = 'Continue ' + save.name;
+      $('btnContinue').textContent = t('start.btn_continue', 'Continue saved city') + ` (${save.name})`;
     }
 
     const ms = $<HTMLSelectElement>('mapStart');
-    ms.innerHTML = C.MAPS.map(m => `<option value="${m.key}">${m.name}</option>`).join('');
-    ms.value = World.map;
-    const mdesc = () => {
+    const renderMapOptions = () => {
+      const curVal = ms.value || World.map;
+      ms.innerHTML = C.MAPS.map(m => `<option value="${m.key}">${t('maps.' + m.key + '.name', m.name)}</option>`).join('');
+      ms.value = curVal;
       const m = C.MAPS.find(q => q.key === ms.value);
-      $('mapDesc').textContent = m ? m.desc : '';
+      $('mapDesc').textContent = m ? t('maps.' + m.key + '.desc', m.desc) : '';
     };
-    mdesc();
+    renderMapOptions();
+    I18n.onLocaleChange(() => {
+      renderMapOptions();
+      if (save && !fresh) {
+        $('btnContinue').textContent = t('start.btn_continue', 'Continue saved city') + ` (${save.name})`;
+      }
+    });
     ms.onchange = () => {
       try {
         sessionStorage.setItem('viracity.map', ms.value);
@@ -287,12 +295,12 @@ function readSave() {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
         e.preventDefault();
         if (Game.running) {
-          SaveSystem.quickSave().then(() => UI.toast('Quick save completed.', 'good'));
+          SaveSystem.quickSave().then(() => UI.toast(t('save_hub.save_success', 'City saved successfully.'), 'good'));
         }
       } else if (e.key === 'F5') {
         e.preventDefault();
         if (Game.running) {
-          SaveSystem.quickSave().then(() => UI.toast('Quick save completed.', 'good'));
+          SaveSystem.quickSave().then(() => UI.toast(t('save_hub.save_success', 'City saved successfully.'), 'good'));
         }
       } else if (e.key === 'F9') {
         e.preventDefault();
@@ -407,6 +415,7 @@ function readSave() {
     iconT += dt;
     if (iconT > 0.5) { iconT = 0; Mx.setIcons(Game.running ? S.icons : []); }
     Mx.cullTrees(Gx.camera);
+    Gx.updateWeather(dt);
     Gx.render();
     fpsN++; fpsT += dt;
     if (fpsT > 0.5) {

@@ -8,6 +8,7 @@ import { Game } from '@/game';
 import { renderSaveHubModal } from '@/ui/panels/saveHub';
 import { q, $$ } from '@/ui/dom';
 import { UI } from '@/ui/ui';
+import { I18n, SUPPORTED_LOCALES, t } from '@/i18n';
 
 let activeCategory: 'all' | 'graphics' | 'sim' | 'storage' | 'controls' = 'all';
 
@@ -59,11 +60,11 @@ function renderSettingsModalContent(modal: HTMLElement): void {
   `;
 
   const tabs: { id: typeof activeCategory; label: string; icon: string }[] = [
-    { id: 'all', label: 'Overview', icon: '🌐' },
-    { id: 'graphics', label: 'Graphics', icon: '🎨' },
-    { id: 'sim', label: 'Simulation', icon: '🚦' },
-    { id: 'storage', label: 'Storage', icon: '💾' },
-    { id: 'controls', label: 'Controls', icon: '⌨️' },
+    { id: 'all', label: t('settings.tab_overview'), icon: '🌐' },
+    { id: 'graphics', label: t('settings.tab_graphics'), icon: '🎨' },
+    { id: 'sim', label: t('settings.tab_simulation'), icon: '🚦' },
+    { id: 'storage', label: t('settings.tab_storage'), icon: '💾' },
+    { id: 'controls', label: t('settings.tab_controls'), icon: '⌨️' },
   ];
 
   modal.innerHTML = `
@@ -74,45 +75,60 @@ function renderSettingsModalContent(modal: HTMLElement): void {
             <circle cx="12" cy="12" r="3"/>
             <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>
           </svg>
-          <span>Vira City</span> Settings
+          <span>${t('settings.title')}</span>
         </div>
-        <div class="fset-sub">Graphics, Simulation & Controls</div>
+        <div class="fset-sub">${t('settings.subtitle')}</div>
       </div>
 
       <nav class="fset-tabs">
         ${tabs
           .map(
-            t => `
-          <button class="fset-tab ${activeCategory === t.id ? 'on' : ''}" data-cat="${t.id}" title="${t.label}">
-            <span class="fset-tab-icon">${t.icon}</span>
-            <span class="fset-tab-text">${t.label}</span>
+            tItem => `
+          <button class="fset-tab ${activeCategory === tItem.id ? 'on' : ''}" data-cat="${tItem.id}" title="${tItem.label}">
+            <span class="fset-tab-icon">${tItem.icon}</span>
+            <span class="fset-tab-text">${tItem.label}</span>
           </button>
         `
           )
           .join('')}
       </nav>
 
-      <button class="fset-close-btn" id="fsetCloseBtn" title="Close settings and return to city (Escape)">
-        <span class="fset-close-txt">← Return to City</span>
+      <button class="fset-close-btn" id="fsetCloseBtn" title="${t('settings.return_to_city')} (Escape)">
+        <span class="fset-close-txt">← ${t('settings.return_to_city')}</span>
         <kbd class="fset-esc-badge" style="font-size:10px;padding:2px 5px;background:rgba(255,255,255,0.1);border-radius:4px;">ESC</kbd>
       </button>
     </header>
 
     <main class="fset-body">
       <div class="fset-grid">
+        <!-- Language & Regional Settings Card -->
+        <section class="fset-card">
+          <div class="fset-card-head">
+            <div class="fset-card-title">🌐 ${t('settings.language_card')}</div>
+            <span class="fset-card-badge">i18n</span>
+          </div>
+          ${optRow(
+            'st_lang',
+            t('settings.language'),
+            t('settings.language_sub'),
+            SUPPORTED_LOCALES.map(l => [l.code, `${l.flag} ${l.nativeName} (${l.name})`]),
+            I18n.getLocale()
+          )}
+        </section>
+
         <!-- 1. Display & Rendering Card -->
         ${
           activeCategory === 'all' || activeCategory === 'graphics'
             ? `
           <section class="fset-card">
             <div class="fset-card-head">
-              <div class="fset-card-title">🎨 Display & Rendering</div>
-              <span class="fset-card-badge">Instant Apply</span>
+              <div class="fset-card-title">🎨 ${t('settings.display_rendering')}</div>
+              <span class="fset-card-badge">Instant</span>
             </div>
             ${optRow(
               'st_preset',
-              'Quality Preset',
-              'Global graphics configuration preset',
+              t('settings.quality_preset'),
+              t('settings.quality_preset_sub'),
               [
                 ['low', 'Low (Intel HD / Old Laptops)'],
                 ['medium', 'Medium (Balanced)'],
@@ -124,8 +140,8 @@ function renderSettingsModalContent(modal: HTMLElement): void {
             )}
             ${optRow(
               'st_res',
-              'Render Resolution Scaling',
-              'Scale viewport rendering buffer size',
+              t('settings.render_res'),
+              t('settings.render_res_sub'),
               [
                 [0.5, '50% (Performance Boost)'],
                 [0.7, '70%'],
@@ -138,18 +154,18 @@ function renderSettingsModalContent(modal: HTMLElement): void {
             )}
             ${optRow(
               'st_aa',
-              'Anti-Aliasing (FXAA)',
-              'Smooth edge jaggedness on geometries',
+              t('settings.aa'),
+              t('settings.aa_sub'),
               [
-                [0, 'Off (Sharp pixel edges)'],
-                [1, 'On (Smooth FXAA)'],
+                [0, 'Off'],
+                [1, 'On (FXAA)'],
               ],
               s.aa ? 1 : 0
             )}
             ${optRow(
               'st_fps',
-              'Show FPS Counter',
-              'Real-time frame rate indicator in corner',
+              t('settings.fps_counter'),
+              t('settings.fps_counter_sub'),
               [
                 [0, 'Off'],
                 [1, 'On'],
@@ -160,13 +176,13 @@ function renderSettingsModalContent(modal: HTMLElement): void {
 
           <section class="fset-card">
             <div class="fset-card-head">
-              <div class="fset-card-title">☀️ Lighting & Environment</div>
+              <div class="fset-card-title">☀️ ${t('settings.lighting_env')}</div>
               <span class="fset-card-badge">Shaders</span>
             </div>
             ${optRow(
               'st_shadows',
-              'Shadow Map Resolution',
-              'Directional sunlight shadow fidelity',
+              t('settings.shadows'),
+              t('settings.shadows_sub'),
               [
                 [0, 'Disabled (Fastest)'],
                 [1024, 'Low (1024²)'],
@@ -177,8 +193,8 @@ function renderSettingsModalContent(modal: HTMLElement): void {
             )}
             ${optRow(
               'st_view',
-              'Render View Distance',
-              'Horizon draw distance across the 208×208 map',
+              t('settings.view_dist'),
+              t('settings.view_dist_sub'),
               [
                 [1100, 'Near (1,100 m)'],
                 [1700, 'Medium (1,700 m)'],
@@ -189,18 +205,18 @@ function renderSettingsModalContent(modal: HTMLElement): void {
             )}
             ${optRow(
               'st_lighting',
-              'Lighting Model',
-              'PBR material response vs simple Lambertian',
+              t('settings.lighting_model'),
+              t('settings.lighting_model_sub'),
               [
-                ['simple', 'Simple (High FPS)'],
+                ['simple', 'Simple (Fast)'],
                 ['pbr', 'Realistic PBR'],
               ],
               s.lighting
             )}
             ${optRow(
               'st_water',
-              'Water Shaders',
-              'Water body surface animation',
+              t('settings.water_shader'),
+              t('settings.water_shader_sub'),
               [
                 ['simple', 'Still Water'],
                 ['waves', 'Animated Waves (GLSL)'],
@@ -209,8 +225,8 @@ function renderSettingsModalContent(modal: HTMLElement): void {
             )}
             ${optRow(
               'st_dayNight',
-              'Day & Night Cycle',
-              'Dynamic circadian lighting and vehicle headlights',
+              t('settings.day_night'),
+              t('settings.day_night_sub'),
               [
                 [1, 'Dynamic (24h Clock Cycle)'],
                 [0, 'Always Daytime (Fixed Sun)'],
@@ -228,13 +244,13 @@ function renderSettingsModalContent(modal: HTMLElement): void {
             ? `
           <section class="fset-card">
             <div class="fset-card-head">
-              <div class="fset-card-title">🚦 Simulation & Agent Load</div>
+              <div class="fset-card-title">🚦 ${t('settings.sim_traffic')}</div>
               <span class="fset-card-badge">Zero-GC</span>
             </div>
             ${optRow(
               'st_cars',
-              'Max Active Vehicles',
-              'Caps the number of 3D cars and buses simulated',
+              t('settings.cars_limit'),
+              t('settings.cars_limit_sub'),
               [
                 [150, '150 Vehicles (Light)'],
                 [250, '250 Vehicles (Standard)'],
@@ -247,8 +263,8 @@ function renderSettingsModalContent(modal: HTMLElement): void {
             )}
             ${optRow(
               'st_detail',
-              'Vehicle & Pedestrian Detail',
-              'Procedural car models, lights & marching protestors',
+              t('settings.detail'),
+              t('settings.detail_sub'),
               [
                 [0, 'Low Polygon'],
                 [1, 'Detailed (Headlights & Wheels)'],
@@ -257,8 +273,8 @@ function renderSettingsModalContent(modal: HTMLElement): void {
             )}
             ${optRow(
               'st_trees',
-              'Vegetation & Forest Density',
-              'Procedural tree mesh instancing across terrain',
+              t('settings.trees'),
+              t('settings.trees_sub'),
               [
                 [0.2, 'Sparse (20%)'],
                 [0.35, 'Low (35%)'],
@@ -279,21 +295,21 @@ function renderSettingsModalContent(modal: HTMLElement): void {
             ? `
           <section class="fset-card">
             <div class="fset-card-head">
-              <div class="fset-card-title">💾 Saves & Storage Management</div>
+              <div class="fset-card-title">💾 ${t('settings.saves_storage')}</div>
               <span class="fset-card-badge">Multi-Slot</span>
             </div>
-            <div style="font-size:12.5px;color:var(--mute);line-height:1.4;">
-              Vira City uses compressed RLE serialization for the 43,264 map cells. You can manage multiple slots, export .viracity files, or trigger quick saves anytime.
+            <div style="font-size:12px;color:var(--mute);line-height:1.4;">
+              ${t('settings.saves_storage_sub')}
             </div>
             <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px;">
-              <button class="btn primary" id="st_save" style="height:38px;padding:0 16px;font-size:13px;">
-                💾 Quick Save Now
+              <button class="btn primary" id="st_save" style="height:36px;padding:0 14px;font-size:12.5px;">
+                💾 ${t('settings.btn_save')}
               </button>
-              <button class="btn" id="st_hub" style="height:38px;padding:0 16px;background:#2563eb;color:#fff;border-color:#3b82f6;font-size:13px;">
-                📂 Open Save & Load Hub
+              <button class="btn" id="st_hub" style="height:36px;padding:0 14px;background:#2563eb;color:#fff;border-color:#3b82f6;font-size:12.5px;">
+                📂 ${t('settings.btn_hub')}
               </button>
-              <button class="btn danger" id="st_new" style="height:38px;padding:0 16px;font-size:13px;">
-                ⚠️ Start New City
+              <button class="btn danger" id="st_new" style="height:36px;padding:0 14px;font-size:12.5px;">
+                ⚠️ ${t('settings.btn_new')}
               </button>
             </div>
             <div id="st_confirm"></div>
@@ -308,45 +324,45 @@ function renderSettingsModalContent(modal: HTMLElement): void {
             ? `
           <section class="fset-card" style="grid-column: 1 / -1;">
             <div class="fset-card-head">
-              <div class="fset-card-title">⌨️ Keyboard & Mouse Controls</div>
-              <span class="fset-card-badge">Shortcuts Reference</span>
+              <div class="fset-card-title">⌨️ ${t('settings.controls_title')}</div>
+              <span class="fset-card-badge">Shortcuts</span>
             </div>
-            <div class="keys" style="display:grid;grid-template-columns:repeat(auto-fit, minmax(260px, 1fr));gap:12px 18px;font-size:12.5px;">
+            <div class="keys" style="display:grid;grid-template-columns:repeat(auto-fit, minmax(240px, 1fr));gap:10px 16px;font-size:12px;">
               <div style="display:flex;align-items:center;gap:10px;">
-                <kbd>W A S D</kbd> <span>Pan camera (<kbd>Shift</kbd> for turbo speed)</span>
+                <kbd>W A S D</kbd> <span>${t('settings.key_pan')}</span>
               </div>
               <div style="display:flex;align-items:center;gap:10px;">
-                <kbd>Right-Drag</kbd> <span>Orbit camera & pitch tilt</span>
+                <kbd>Right-Drag</kbd> <span>${t('settings.key_orbit')}</span>
               </div>
               <div style="display:flex;align-items:center;gap:10px;">
-                <kbd>Middle-Drag</kbd> <span>Pan map across view</span>
+                <kbd>Middle-Drag</kbd> <span>${t('settings.key_drag_pan')}</span>
               </div>
               <div style="display:flex;align-items:center;gap:10px;">
-                <kbd>Wheel / R F</kbd> <span>Zoom in and out smoothly</span>
+                <kbd>Wheel / R F</kbd> <span>${t('settings.key_zoom')}</span>
               </div>
               <div style="display:flex;align-items:center;gap:10px;">
-                <kbd>Q / E</kbd> <span>Rotate view 45°</span>
+                <kbd>Q / E</kbd> <span>${t('settings.key_rotate')}</span>
               </div>
               <div style="display:flex;align-items:center;gap:10px;">
-                <kbd>T / G</kbd> <span>Pitch camera angle</span>
+                <kbd>T / G</kbd> <span>${t('settings.key_pitch')}</span>
               </div>
               <div style="display:flex;align-items:center;gap:10px;">
-                <kbd>Space</kbd> <span>Pause / resume simulation</span>
+                <kbd>Space</kbd> <span>${t('settings.key_pause')}</span>
               </div>
               <div style="display:flex;align-items:center;gap:10px;">
-                <kbd>1 2 3</kbd> <span>Sim speed: 1x, 2x, 4x</span>
+                <kbd>1 2 3</kbd> <span>${t('settings.key_speed')}</span>
               </div>
               <div style="display:flex;align-items:center;gap:10px;">
-                <kbd>B</kbd> <span>Toggle Bulldozer demolition</span>
+                <kbd>B</kbd> <span>${t('settings.key_bulldoze')}</span>
               </div>
               <div style="display:flex;align-items:center;gap:10px;">
-                <kbd>C</kbd> <span>Cycle Road Mode (Straight, Curve, S-Bend, Grid)</span>
+                <kbd>C</kbd> <span>${t('settings.key_road_mode')}</span>
               </div>
               <div style="display:flex;align-items:center;gap:10px;">
-                <kbd>R</kbd> <span>Rotate building 90° before placing</span>
+                <kbd>R</kbd> <span>${t('settings.key_rotate_bld')}</span>
               </div>
               <div style="display:flex;align-items:center;gap:10px;">
-                <kbd>Esc</kbd> <span>Deselect, cancel tool or close modal</span>
+                <kbd>Esc</kbd> <span>${t('settings.key_esc')}</span>
               </div>
             </div>
           </section>
@@ -381,6 +397,13 @@ function renderSettingsModalContent(modal: HTMLElement): void {
   $$<HTMLSelectElement>('select.fset-select', modal).forEach(sel => {
     sel.onchange = () => {
       const k = sel.id.slice(3);
+
+      if (k === 'lang') {
+        I18n.setLocale(sel.value as any);
+        renderSettingsModalContent(modal);
+        return;
+      }
+
       const ns = Object.assign({}, Gfx.settings);
       if (k === 'preset') {
         if (sel.value !== 'custom') {
@@ -405,7 +428,7 @@ function renderSettingsModalContent(modal: HTMLElement): void {
   if (btnSave) {
     btnSave.onclick = () => {
       if (Game.save()) {
-        UI.toast('City saved successfully.', 'good');
+        UI.toast(t('settings.city_saved'), 'good');
       }
     };
   }
@@ -426,11 +449,11 @@ function renderSettingsModalContent(modal: HTMLElement): void {
       if (!c) return;
       c.innerHTML = `
         <div class="chip bad" style="margin-top:10px;padding:8px 12px;background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.4);border-radius:6px;color:#fca5a5;">
-          ⚠️ Starting a new city will return to the setup screen. Ensure your current game is saved.
+          ${t('settings.confirm_new_warning')}
         </div>
         <div class="btns" style="margin-top:8px;display:flex;gap:8px;">
-          <button class="btn danger" id="st_yes" style="height:34px;padding:0 14px;">Yes, Start New City</button>
-          <button class="btn" id="st_no" style="height:34px;padding:0 14px;">Keep Playing</button>
+          <button class="btn danger" id="st_yes" style="height:34px;padding:0 14px;">${t('settings.confirm_yes')}</button>
+          <button class="btn" id="st_no" style="height:34px;padding:0 14px;">${t('settings.confirm_no')}</button>
         </div>
       `;
       const yesBtn = q<HTMLElement>('#st_yes', c);

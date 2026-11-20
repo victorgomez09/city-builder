@@ -11,71 +11,81 @@ import { Unrest } from '@/sim/unrest';
 import { head, bindClose, sv, q, $$ } from '@/ui/dom';
 import { UI } from '@/ui/ui';
 import { UnrestLevel, UnionDemand } from '@/types';
+import { t } from '@/i18n';
 
-const LEVEL_LABELS: Record<UnrestLevel, { label: string; color: string; desc: string }> = {
+export const LEVEL_LABELS: Record<UnrestLevel, { label: string; color: string; desc: string }> = {
   peaceful: {
-    label: 'Paz y Convivencia Cívica',
+    label: 'Peace & Civic Harmony',
     color: '#22c55e',
-    desc: 'Los ciudadanos están conformes con los servicios, el empleo y los impuestos.',
+    desc: 'Citizens are satisfied with public services, employment, and taxation.',
   },
   tense: {
-    label: 'Tensión Vecinal Incipiente',
+    label: 'Incipient Neighborhood Tension',
     color: '#eab308',
-    desc: 'Empiezan a surgir quejas en barrios por presión fiscal o servicios saturados.',
+    desc: 'Grievances begin to surface over tax pressure or congested public services.',
   },
   protest: {
-    label: 'Manifestaciones Activas en Calles',
+    label: 'Active Street Demonstrations',
     color: '#f97316',
-    desc: 'Concentraciones cívicas y cortes de tráfico frente a sedes municipales.',
+    desc: 'Civic rallies and traffic blockades outside municipal headquarters.',
   },
   strike: {
-    label: 'Huelga General de Servicios Públicos',
+    label: 'Public Services General Strike',
     color: '#ea580c',
-    desc: 'Paralización de recogida de basuras, transporte, bomberos o triaje médico.',
+    desc: 'Shutdown of sanitation, public transit, fire brigades, or emergency triage.',
   },
   riot: {
-    label: 'Disturbios Callejeros y Barricadas',
+    label: 'Street Riots & Barricades',
     color: '#dc2626',
-    desc: 'Grupos radicales montan barricadas ardiendo en calzadas bloqueando el tráfico.',
+    desc: 'Radical groups set burning barricades across roadways, paralyzing traffic.',
   },
 };
 
-const FACTOR_NAMES: Record<string, { label: string; icon: string; desc: string }> = {
+export const FACTOR_NAMES: Record<string, { label: string; icon: string; desc: string }> = {
   taxPressure: {
-    label: 'Presión Fiscal',
+    label: 'Tax Pressure',
     icon: '💸',
-    desc: 'Impuestos residenciales, comerciales o industriales por encima del 10%.',
+    desc: 'Residential, commercial, or industrial tax rates above 10%.',
   },
   unemployment: {
-    label: 'Tasa de Desempleo',
+    label: 'Unemployment Rate',
     icon: '📉',
-    desc: 'Falta de puestos de trabajo para la población activa cualificada.',
+    desc: 'Lack of job opportunities for the active working population.',
   },
   pollution: {
-    label: 'Polución y Humos',
+    label: 'Pollution & Smog',
     icon: '🏭',
-    desc: 'Viviendas expuestas a nubes de polución industrial o aguas contaminadas.',
+    desc: 'Homes exposed to industrial pollution clouds or contaminated water.',
   },
   serviceDeficit: {
-    label: 'Déficit de Servicios',
+    label: 'Service Deficit',
     icon: '🚒',
-    desc: 'Carencia de cobertura de bomberos, policía, colegios o salud en barrios.',
+    desc: 'Lack of fire, police, school, or healthcare coverage in neighborhoods.',
   },
   stockouts: {
-    label: 'Desabastecimiento Comercial',
+    label: 'Commercial Stockouts',
     icon: '📦',
-    desc: 'Comercios sin mercancías ni suministros para abastecer a la población.',
+    desc: 'Shops lacking inventory and freight supplies to serve customers.',
   },
   corpses: {
-    label: 'Cadáveres Sin Recoger',
+    label: 'Uncollected Deceased',
     icon: '⚰️',
-    desc: 'Falta de cobertura funeraria y vehículos fúnebres para retirar difuntos.',
+    desc: 'Shortage of funeral facilities and hearses to collect deceased citizens.',
   },
 };
+
+function getLevelInfo(lvl: UnrestLevel) {
+  const base = LEVEL_LABELS[lvl] || LEVEL_LABELS.peaceful;
+  return {
+    label: t('unrest.levels.' + lvl + '.name', base.label),
+    color: base.color,
+    desc: t('unrest.levels.' + lvl + '.desc', base.desc),
+  };
+}
 
 export function updUnrest(p: HTMLElement): void {
   const st = Unrest.state;
-  const info = LEVEL_LABELS[st.level] || LEVEL_LABELS.peaceful;
+  const info = getLevelInfo(st.level);
 
   const scoreEl = q<HTMLElement>('#unrestScore', p);
   if (scoreEl) {
@@ -109,17 +119,17 @@ export function updUnrest(p: HTMLElement): void {
   // Active strike pills
   const sk = st.strikes;
   const sList = [
-    { key: 'garbage', name: 'Recogida de Basuras', active: sk.garbage, icon: '🗑️' },
-    { key: 'transit', name: 'Red de Transporte (25%)', active: sk.transit, icon: '🚌' },
-    { key: 'fire', name: 'Servicio de Bomberos', active: sk.fire, icon: '🔥' },
-    { key: 'police', name: 'Policía y Seguridad', active: sk.police, icon: '👮' },
-    { key: 'health', name: 'Sanidad y Ambulancias', active: sk.health, icon: '🏥' },
+    { key: 'garbage', name: t('unrest.services.garbage', 'Garbage Collection'), active: sk.garbage, icon: '🗑️' },
+    { key: 'transit', name: t('unrest.services.transit', 'Transit Network (25%)'), active: sk.transit, icon: '🚌' },
+    { key: 'fire', name: t('unrest.services.fire', 'Fire Services'), active: sk.fire, icon: '🔥' },
+    { key: 'police', name: t('unrest.services.police', 'Police & Security'), active: sk.police, icon: '👮' },
+    { key: 'health', name: t('unrest.services.health', 'Healthcare & Ambulances'), active: sk.health, icon: '🏥' },
   ];
   for (const s of sList) {
     const badge = q<HTMLElement>(`#strike_badge_${s.key}`, p);
     if (badge) {
       badge.className = 'pill ' + (s.active ? 'neg' : 'pos');
-      badge.textContent = s.active ? 'HUELGA ACTIVA' : 'Servicio Normal';
+      badge.textContent = s.active ? t('unrest.strike_active', 'ACTIVE STRIKE') : t('unrest.service_normal', 'Normal Service');
     }
   }
 
@@ -133,15 +143,15 @@ export function updUnrest(p: HTMLElement): void {
 
 export function renderUnrestPanel(p: HTMLElement): void {
   const st = Unrest.state;
-  const info = LEVEL_LABELS[st.level] || LEVEL_LABELS.peaceful;
+  const info = getLevelInfo(st.level);
 
-  let html = head('Paz Social y Sindicatos', 'Mesa de diálogo cívico, huelgas y conflictividad fiscal');
+  let html = head(t('unrest.title', 'Peace & Unrest'), t('unrest.subtitle', 'Civic dialogue, strikes, and tax conflict'));
 
   // 1. Social Tension Thermometer
   html += `
   <div class="card" style="margin-bottom:12px">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-      <b style="font-size:14px">Índice de Tensión Urbana</b>
+      <b style="font-size:14px">${t('unrest.index_title', 'Urban Tension Index')}</b>
       <b id="unrestScore" style="font-size:16px;color:${info.color}">${Math.round(st.score)} / 100</b>
     </div>
     <div style="width:100%;height:10px;background:rgba(255,255,255,0.08);border-radius:5px;overflow:hidden;margin-bottom:8px">
@@ -149,7 +159,7 @@ export function renderUnrestPanel(p: HTMLElement): void {
     </div>
     <div style="display:flex;justify-content:space-between;align-items:center">
       <span id="unrestLevelText" style="font-weight:600;font-size:13px;color:${info.color}">${info.label}</span>
-      <span style="font-size:11px;color:var(--mute)">Umbral Huelga: >65 | Disturbios: >80</span>
+      <span style="font-size:11px;color:var(--mute)">${t('unrest.threshold_hint', 'Strike Threshold: >65 | Riot: >80')}</span>
     </div>
     <div id="unrestLevelDesc" style="font-size:11.5px;color:var(--mute);margin-top:4px">${info.desc}</div>
   </div>`;
@@ -158,41 +168,41 @@ export function renderUnrestPanel(p: HTMLElement): void {
   html += `
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">
     <div class="card" style="text-align:center;padding:8px">
-      <div style="font-size:11px;color:var(--mute);text-transform:uppercase">Manifestaciones Activas</div>
+      <div style="font-size:11px;color:var(--mute);text-transform:uppercase">${t('unrest.protests_active', 'Active Demonstrations')}</div>
       <b id="protestsCount" style="font-size:20px;color:#f97316">${st.crowds.length}</b>
-      <div style="font-size:10.5px;color:var(--mute)">Cortes de tráfico</div>
+      <div style="font-size:10.5px;color:var(--mute)">${t('unrest.traffic_cuts', 'Traffic cuts')}</div>
     </div>
     <div class="card" style="text-align:center;padding:8px">
-      <div style="font-size:11px;color:var(--mute);text-transform:uppercase">Barricadas en Calzadas</div>
+      <div style="font-size:11px;color:var(--mute);text-transform:uppercase">${t('unrest.barricades_active', 'Barricades on Roadways')}</div>
       <b id="barricadesCount" style="font-size:20px;color:#dc2626">${st.barricades.length}</b>
-      <div style="font-size:10.5px;color:var(--mute)">Calles bloqueadas</div>
+      <div style="font-size:10.5px;color:var(--mute)">${t('unrest.streets_blocked', 'Streets blocked')}</div>
     </div>
   </div>`;
 
   // 3. Essential Public Service Strikes
   html += `
   <div class="card" style="margin-bottom:12px">
-    <b style="display:block;margin-bottom:8px;font-size:13px">Estado de Servicios Públicos Esenciales</b>
+    <b style="display:block;margin-bottom:8px;font-size:13px">${t('unrest.services_title', 'Essential Public Services Status')}</b>
     <div style="display:flex;flex-direction:column;gap:6px">
       <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.05)">
-        <span>🗑️ Limpieza y Basuras</span>
-        <span id="strike_badge_garbage" class="pill ${st.strikes.garbage ? 'neg' : 'pos'}">${st.strikes.garbage ? 'HUELGA ACTIVA' : 'Servicio Normal'}</span>
+        <span>🗑️ ${t('unrest.services.garbage', 'Garbage Collection')}</span>
+        <span id="strike_badge_garbage" class="pill ${st.strikes.garbage ? 'neg' : 'pos'}">${st.strikes.garbage ? t('unrest.strike_active', 'ACTIVE STRIKE') : t('unrest.service_normal', 'Normal Service')}</span>
       </div>
       <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.05)">
-        <span>🚌 Transporte Público (25%)</span>
-        <span id="strike_badge_transit" class="pill ${st.strikes.transit ? 'neg' : 'pos'}">${st.strikes.transit ? 'HUELGA ACTIVA' : 'Servicio Normal'}</span>
+        <span>🚌 ${t('unrest.services.transit', 'Transit Network (25%)')}</span>
+        <span id="strike_badge_transit" class="pill ${st.strikes.transit ? 'neg' : 'pos'}">${st.strikes.transit ? t('unrest.strike_active', 'ACTIVE STRIKE') : t('unrest.service_normal', 'Normal Service')}</span>
       </div>
       <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.05)">
-        <span>🔥 Bomberos y Extinción</span>
-        <span id="strike_badge_fire" class="pill ${st.strikes.fire ? 'neg' : 'pos'}">${st.strikes.fire ? 'HUELGA ACTIVA' : 'Servicio Normal'}</span>
+        <span>🔥 ${t('unrest.services.fire', 'Fire Services')}</span>
+        <span id="strike_badge_fire" class="pill ${st.strikes.fire ? 'neg' : 'pos'}">${st.strikes.fire ? t('unrest.strike_active', 'ACTIVE STRIKE') : t('unrest.service_normal', 'Normal Service')}</span>
       </div>
       <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.05)">
-        <span>👮 Policía y Seguridad Local</span>
-        <span id="strike_badge_police" class="pill ${st.strikes.police ? 'neg' : 'pos'}">${st.strikes.police ? 'HUELGA ACTIVA' : 'Servicio Normal'}</span>
+        <span>👮 ${t('unrest.services.police', 'Police & Security')}</span>
+        <span id="strike_badge_police" class="pill ${st.strikes.police ? 'neg' : 'pos'}">${st.strikes.police ? t('unrest.strike_active', 'ACTIVE STRIKE') : t('unrest.service_normal', 'Normal Service')}</span>
       </div>
       <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0">
-        <span>🏥 Sanidad y Ambulancias</span>
-        <span id="strike_badge_health" class="pill ${st.strikes.health ? 'neg' : 'pos'}">${st.strikes.health ? 'HUELGA ACTIVA' : 'Servicio Normal'}</span>
+        <span>🏥 ${t('unrest.services.health', 'Healthcare & Ambulances')}</span>
+        <span id="strike_badge_health" class="pill ${st.strikes.health ? 'neg' : 'pos'}">${st.strikes.health ? t('unrest.strike_active', 'ACTIVE STRIKE') : t('unrest.service_normal', 'Normal Service')}</span>
       </div>
     </div>
   </div>`;
@@ -200,21 +210,23 @@ export function renderUnrestPanel(p: HTMLElement): void {
   // 4. Breakdown of Friction Factors
   html += `
   <div class="card" style="margin-bottom:12px">
-    <b style="display:block;margin-bottom:8px;font-size:13px">Factores de Fricción y Malestar Social</b>
+    <b style="display:block;margin-bottom:8px;font-size:13px">${t('unrest.factors_title', 'Social Friction & Grievance Factors')}</b>
     <div style="display:flex;flex-direction:column;gap:8px">`;
 
   for (const [k, def] of Object.entries(FACTOR_NAMES)) {
     const val = Math.round((st.factors as any)[k] || 0);
+    const label = t('unrest.factors.' + k + '.name', def.label);
+    const desc = t('unrest.factors.' + k + '.desc', def.desc);
     html += `
       <div>
         <div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;margin-bottom:2px">
-          <span>${def.icon} ${def.label}</span>
+          <span>${def.icon} ${label}</span>
           <b id="factor_val_${k}">${val}%</b>
         </div>
         <div style="width:100%;height:6px;background:rgba(255,255,255,0.06);border-radius:3px;overflow:hidden">
           <div id="factor_fill_${k}" style="height:100%;width:${val}%;background:#38bdf8;transition:width 0.25s"></div>
         </div>
-        <div style="font-size:10.5px;color:var(--mute);margin-top:2px">${def.desc}</div>
+        <div style="font-size:10.5px;color:var(--mute);margin-top:2px">${desc}</div>
       </div>`;
   }
   html += `</div></div>`;
@@ -223,8 +235,8 @@ export function renderUnrestPanel(p: HTMLElement): void {
   html += `
   <div class="card" style="margin-bottom:12px">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-      <b style="font-size:13px">Mesa de Negociación Sindical</b>
-      <span style="font-size:11px;color:var(--mute)">Paz laboral garantizada</span>
+      <b style="font-size:13px">${t('unrest.unions_title', 'Labor Union Negotiation Table')}</b>
+      <span style="font-size:11px;color:var(--mute)">${t('unrest.labor_peace', 'Labor peace guaranteed')}</span>
     </div>
     <div style="display:flex;flex-direction:column;gap:10px">`;
 
@@ -235,15 +247,15 @@ export function renderUnrestPanel(p: HTMLElement): void {
       <div style="background:rgba(0,0,0,0.2);padding:8px 10px;border-radius:6px;border-left:3px solid ${hasPact ? '#22c55e' : '#f59e0b'}">
         <div style="display:flex;justify-content:space-between;align-items:center">
           <b style="font-size:12.5px">${u.union}</b>
-          <span class="pill ${hasPact ? 'pos' : 'warn'}" style="font-size:10px">${hasPact ? `Convenio (${u.monthsRemaining}m)` : 'En Conflicto'}</span>
+          <span class="pill ${hasPact ? 'pos' : 'warn'}" style="font-size:10px">${hasPact ? t('unrest.pact_active', { months: u.monthsRemaining }) : t('unrest.in_conflict', 'In Dispute')}</span>
         </div>
         <div style="font-size:11.5px;color:var(--text);margin:3px 0">${u.demands || u.desc}</div>
         <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px">
-          <span style="font-size:11px;color:var(--mute)">Coste de paz: <b>${U.money(costMonthly)} / mes</b></span>
+          <span style="font-size:11px;color:var(--mute)">${t('unrest.peace_cost', { cost: U.money(costMonthly) })}</span>
           ${
             hasPact
-              ? `<span style="font-size:11px;color:#22c55e">✓ Acuerdo en vigor</span>`
-              : `<button class="btn btn-sm" data-sign-union="${u.id}" style="font-size:11px">Firmar Convenio</button>`
+              ? `<span style="font-size:11px;color:#22c55e">${t('unrest.pact_in_effect', '✓ Agreement in effect')}</span>`
+              : `<button class="btn btn-sm" data-sign-union="${u.id}" style="font-size:11px">${t('unrest.sign_pact', 'Sign Agreement')}</button>`
           }
         </div>
       </div>`;
@@ -253,28 +265,28 @@ export function renderUnrestPanel(p: HTMLElement): void {
   // 6. Emergency City Hall Interventions
   html += `
   <div class="card">
-    <b style="display:block;margin-bottom:8px;font-size:13px">Medidas de Emergencia Municipal</b>
+    <b style="display:block;margin-bottom:8px;font-size:13px">${t('unrest.emergency_title', 'Municipal Emergency Measures')}</b>
     <div style="display:flex;flex-direction:column;gap:8px">
       <div style="background:rgba(0,0,0,0.2);padding:8px;border-radius:6px">
         <div style="display:flex;justify-content:space-between;align-items:center">
-          <b>🚔 Desplegar Unidades Antidisturbios</b>
+          <b>${t('unrest.riot_police_title', '🚔 Deploy Riot Police Units')}</b>
           <span style="color:#ef4444;font-size:11.5px;font-weight:600">$2,800</span>
         </div>
         <div style="font-size:11px;color:var(--mute);margin:4px 0">
-          La policía local desmantela de inmediato todas las barricadas y dispersa marchas violentas.
+          ${t('unrest.riot_police_desc', 'Local police immediately dismantle all barricades and disperse violent protests.')}
         </div>
-        <button class="btn btn-sm" id="btnRiotPolice" style="width:100%;margin-top:2px">Despejar Calles y Barricadas</button>
+        <button class="btn btn-sm" id="btnRiotPolice" style="width:100%;margin-top:2px">${t('unrest.riot_police_btn', 'Clear Streets and Barricades')}</button>
       </div>
 
       <div style="background:rgba(0,0,0,0.2);padding:8px;border-radius:6px">
         <div style="display:flex;justify-content:space-between;align-items:center">
-          <b>🏛️ Fondo Municipal de Alivio Social</b>
+          <b>${t('unrest.relief_fund_title', '🏛️ Municipal Social Relief Fund')}</b>
           <span style="color:#ef4444;font-size:11.5px;font-weight:600">$5,000</span>
         </div>
         <div style="font-size:11px;color:var(--mute);margin:4px 0">
-          Subvención directa de emergencia para familias y pequeños autónomos. 6 meses de tregua cívica (-25 tensión).
+          ${t('unrest.relief_fund_desc', 'Direct emergency grant for families and small shops. 6 months of civic truce (-25 tension).')}
         </div>
-        <button class="btn btn-sm" id="btnReliefFund" style="width:100%;margin-top:2px">Aprobar Fondo de Alivio</button>
+        <button class="btn btn-sm" id="btnReliefFund" style="width:100%;margin-top:2px">${t('unrest.relief_fund_btn', 'Approve Relief Fund')}</button>
       </div>
     </div>
   </div>`;

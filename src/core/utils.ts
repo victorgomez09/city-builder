@@ -1,4 +1,5 @@
 import { C } from './constants';
+import { I18n } from '@/i18n';
 
 const W = C.W;
 
@@ -97,11 +98,8 @@ export const U = {
     const n = parseInt(h.slice(1), 16);
     return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
   },
-  money: (n: number): string => {
-    const s = Math.round(Math.abs(n)).toLocaleString('en-US');
-    return (n < 0 ? '-$' : '$') + s;
-  },
-  num: (n: number): string => Math.round(n).toLocaleString('en-US'),
+  money: (n: number): string => I18n.formatMoney(n),
+  num: (n: number): string => I18n.formatNumber(n),
   dist: (a: number, b: number): number => Math.abs(U.tx(a) - U.tx(b)) + Math.abs(U.ty(a) - U.ty(b)),
   pick: <T>(arr: T[], r?: () => number): T => arr[Math.floor((r ? r() : Math.random()) * arr.length)],
 

@@ -322,6 +322,7 @@ function serveStop(veh: TransitPassengerCarrier, l: TransitLine, stop: TransitSt
       veh.load += p.n;
       boarded += p.n;
       l.ridersMonth += p.n;
+      l.revenueMonth = (l.revenueMonth || 0) + fare * p.n;
       if (CB?.Sim) CB.Sim.earn('fares', fare * p.n);
     } else left.push(p);
   }
@@ -392,7 +393,7 @@ export const Transit = {
     '#16b5b0', '#e0569b', '#8a6a3a', '#5b6bd8', '#c8c43a',
   ],
   WALK_V: 6,
-  stats: { riders: 0, waiting: 0 },
+  stats: { riders: 0, waiting: 0, totalRevenue: 0, totalCost: 0, netProfit: 0, recoveryRatio: 0 },
   ribbonsOn: false,
 
   stopById: (id: number): TransitStop | undefined => byId.get(id),
@@ -627,11 +628,33 @@ export const Transit = {
         ]);
       }
     }
+    const isHubStop = (tile: number): boolean => {
+      const CB = (window as any).CB;
+      if (!CB?.Sim?.buildings) return false;
+      const x = U.tx(tile), y = U.ty(tile);
+      for (let dx = -3; dx <= 3; dx++) {
+        for (let dy = -3; dy <= 3; dy++) {
+          const nx = x + dx, ny = y + dy;
+          if (U.inWorld(nx, ny)) {
+            const b = World.bld[U.idx(nx, ny)];
+            if (b && CB.Sim.buildings.get(b)?.kind === 'transit_hub') return true;
+          }
+        }
+      }
+      return false;
+    };
+
     for (let a = 0; a < S; a++) {
+      const hubA = isHubStop(Transit.stops[a].tile);
       for (let b = 0; b < S; b++) {
         if (a === b) continue;
         const d = U.dist(Transit.stops[a].tile, Transit.stops[b].tile);
-        if (d <= 4) adj[a].push([b, (d * T) / Transit.WALK_V + 4, 'w', 0]);
+        const hubB = isHubStop(Transit.stops[b].tile);
+        const maxDist = (hubA || hubB) ? 7 : 4;
+        if (d <= maxDist) {
+          const transferPenalty = (hubA || hubB) ? 1.0 : 4.0;
+          adj[a].push([b, (d * T) / Transit.WALK_V + transferPenalty, 'w', 0]);
+        }
       }
     }
     const V = adj.length;
@@ -860,11 +883,72 @@ export const Transit = {
     Transit.dirty = true;
   },
 
+  revenueOf(l: TransitLine): number {
+    if (l.revenueLast !== undefined) return l.revenueLast;
+    return l.revenueMonth || ((l.ridersMonth || 0) * Transit.fareOf(l));
+  },
+
+  costOf(l: TransitLine): number {
+    if (l.costLast !== undefined) return l.costLast;
+    return l.vehicles * (C.TRANSIT[l.type]?.upkeep || 100);
+  },
+
+  profitOf(l: TransitLine): number {
+    return Transit.revenueOf(l) - Transit.costOf(l);
+  },
+
+  recoveryRatioOf(l: TransitLine): number {
+    const c = Transit.costOf(l);
+    return c > 0 ? (Transit.revenueOf(l) / c) * 100 : 100;
+  },
+
+  occupancyOf(l: TransitLine): number {
+    if (l.occupancyLast !== undefined) return l.occupancyLast;
+    const cap = C.TRANSIT[l.type]?.cap || 50;
+    const loop = l.loopTime || 40;
+    const runsMonth = Math.max(1, Math.round((24 * 30 * C.HOUR_SEC) / loop));
+    const totalSeats = Math.max(1, l.vehicles * cap * runsMonth);
+    return Math.min(2.0, (l.ridersMonth || 0) / totalSeats);
+  },
+
+  networkTotals(): { riders: number; revenue: number; cost: number; profit: number; recoveryRatio: number } {
+    let riders = 0, revenue = 0, cost = 0;
+    for (const l of Transit.lines) {
+      riders += l.ridersLast ?? l.ridersMonth ?? 0;
+      revenue += Transit.revenueOf(l);
+      cost += Transit.costOf(l);
+    }
+    const profit = revenue - cost;
+    const recoveryRatio = cost > 0 ? (revenue / cost) * 100 : 100;
+    return { riders, revenue, cost, profit, recoveryRatio };
+  },
+
   monthly() {
+    let totRev = 0, totCost = 0, totRiders = 0;
     for (const l of Transit.lines) {
       l.ridersLast = l.ridersMonth;
+      const f = Transit.fareOf(l);
+      l.revenueLast = l.revenueMonth !== undefined ? l.revenueMonth : (l.ridersLast * f);
+      l.costLast = l.vehicles * (C.TRANSIT[l.type]?.upkeep || 100);
+      l.profitLast = l.revenueLast - l.costLast;
+
+      const cap = C.TRANSIT[l.type]?.cap || 50;
+      const loop = l.loopTime || 40;
+      const runsMonth = Math.max(1, Math.round((24 * 30 * C.HOUR_SEC) / loop));
+      const totalSeats = Math.max(1, l.vehicles * cap * runsMonth);
+      l.occupancyLast = Math.min(2.0, l.ridersLast / totalSeats);
+
+      totRev += l.revenueLast;
+      totCost += l.costLast;
+      totRiders += l.ridersLast;
+
       l.ridersMonth = 0;
+      l.revenueMonth = 0;
     }
+    Transit.stats.totalRevenue = totRev;
+    Transit.stats.totalCost = totCost;
+    Transit.stats.netProfit = totRev - totCost;
+    Transit.stats.recoveryRatio = totCost > 0 ? (totRev / totCost) * 100 : 100;
   },
 
   serialize(): SerializedTransit {
@@ -886,6 +970,10 @@ export const Transit = {
         vehicles: l.vehicles,
         fare: l.fare,
         ridersLast: l.ridersLast,
+        revenueLast: l.revenueLast,
+        costLast: l.costLast,
+        profitLast: l.profitLast,
+        occupancyLast: l.occupancyLast,
       })),
       nextStop: Transit.nextStop,
       nextLine: Transit.nextLine,
@@ -907,6 +995,10 @@ export const Transit = {
         ...l,
         fare: l.fare ?? C.TRANSIT[l.type]?.fare ?? 2,
         ridersMonth: 0,
+        revenueLast: l.revenueLast,
+        costLast: l.costLast,
+        profitLast: l.profitLast,
+        occupancyLast: l.occupancyLast,
         broken: false,
       };
       Transit.lines.push(ln);

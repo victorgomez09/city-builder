@@ -416,6 +416,18 @@ M.CAR_COLORS = CAR_COLORS;
       const g = Math.min(Wd.groundH(X0 + 5, Z0 + 5), -0.5);
       if ((x + y) % 2 === 0) gb.box(X0 + 4.1, g - 1, Z0 + 4.1, X0 + 5.9, y0 - 1.3, Z0 + 5.9, COL.deck);
     }
+    if (R.tram) {
+      const y0 = base(5, 5);
+      const isNS = con(0) || con(2);
+      const isEW = con(1) || con(3);
+      gb.cyl(X0 + 1.2, y0, Z0 + 1.2, 0.12, 5.8, 6, '#334155');
+      gb.box(X0 + 1.2, y0 + 5.2, Z0 + 1.05, X0 + T * 0.5 + 0.8, y0 + 5.4, Z0 + 1.35, '#475569');
+      if (isNS) {
+        gb.box(X0 + T * 0.5 - 0.04, y0 + 5.2, Z0, X0 + T * 0.5 + 0.04, y0 + 5.26, Z0 + T, '#94a3b8');
+      } else if (isEW) {
+        gb.box(X0, y0 + 5.2, Z0 + T * 0.5 - 0.04, X0 + T, y0 + 5.26, Z0 + T * 0.5 + 0.04, '#94a3b8');
+      }
+    }
   }
   M.genRoadTile = (gb, i) => genRoadTile(gb, i);
   // half-tile paths: a paved ribbon through each cell, joined to neighbouring cells and to road sidewalks
@@ -533,6 +545,74 @@ M.CAR_COLORS = CAR_COLORS;
     }
   }
 
+  function genSubwayTile(gb: any, i: number) {
+    const Wd = World;
+    const x = U.tx(i), y = U.ty(i);
+    const X0 = x * T, Z0 = y * T;
+    const cx = X0 + T * 0.5, cz = Z0 + T * 0.5;
+    const gh = Wd.groundH(cx, cz);
+    const subY = gh - 10;
+
+    const DX = [0, 1, 0, -1], DY = [-1, 0, 1, 0];
+    const con = [false, false, false, false];
+    let deg = 0;
+    for (let d = 0; d < 4; d++) {
+      const nx = x + DX[d], ny = y + DY[d];
+      if (U.inWorld(nx, ny) && Wd.rail[U.idx(nx, ny)] === 2) {
+        con[d] = true;
+        deg++;
+      }
+    }
+    if (deg === 0) { con[0] = true; con[2] = true; }
+
+    const stop = Transit?.stops?.find(s => s.tile === i && s.type === 'rail');
+    const isStation = !!stop;
+
+    gb.box(X0 + 1.5, subY - 0.6, Z0 + 1.5, X0 + T - 1.5, subY, Z0 + T - 1.5, '#27272a');
+
+    if (isStation) {
+      gb.box(X0 + 0.5, subY - 0.8, Z0 + 0.5, X0 + T - 0.5, subY + 5.5, Z0 + T - 0.5, '#3f3f46');
+      gb.box(X0 + 0.6, subY, Z0 + 0.6, X0 + 2.8, subY + 1.1, Z0 + T - 0.6, '#71717a');
+      gb.box(X0 + T - 2.8, subY, Z0 + 0.6, X0 + T - 0.6, subY + 1.1, Z0 + T - 0.6, '#71717a');
+      gb.box(X0 + 2.7, subY + 1.1, Z0 + 0.6, X0 + 2.8, subY + 1.12, Z0 + T - 0.6, '#eab308');
+      gb.box(X0 + T - 2.8, subY + 1.1, Z0 + 0.6, X0 + T - 2.7, subY + 1.12, Z0 + T - 0.6, '#eab308');
+      gb.box(X0 + 1.2, subY + 1.1, cz - 1.5, X0 + 1.6, subY + 1.6, cz + 1.5, '#78350f');
+      gb.box(X0 + T - 1.6, subY + 1.1, cz - 1.5, X0 + T - 1.2, subY + 1.6, cz + 1.5, '#78350f');
+      const sCol = stop?.color || '#3b82f6';
+      gb.box(X0 + 1.0, subY + 2.8, cz - 2.0, X0 + 1.1, subY + 3.6, cz + 2.0, sCol, 15);
+      gb.box(X0 + T - 1.1, subY + 2.8, cz - 2.0, X0 + T - 1.0, subY + 3.6, cz + 2.0, sCol, 15);
+      gb.box(cx - 0.4, subY + 5.2, Z0 + 1, cx + 0.4, subY + 5.35, Z0 + T - 1, '#ffffff', 8);
+      gb.box(cx - 2.2, subY + 1.1, cz - 2.2, cx + 2.2, gh, cz + 2.2, '#18181b');
+    } else {
+      for (let d = 0; d < 4; d++) {
+        if (!con[d]) continue;
+        if (d === 0) {
+          gb.box(cx - 3.2, subY - 0.4, Z0, cx + 3.2, subY + 4.2, cz, '#27272a');
+          gb.box(cx - 0.2, subY + 4.0, Z0 + 1, cx + 0.2, subY + 4.15, cz, '#fef08a', 8);
+        } else if (d === 2) {
+          gb.box(cx - 3.2, subY - 0.4, cz, cx + 3.2, subY + 4.2, Z0 + T, '#27272a');
+          gb.box(cx - 0.2, subY + 4.0, cz, cx + 0.2, subY + 4.15, Z0 + T - 1, '#fef08a', 8);
+        } else if (d === 1) {
+          gb.box(cx, subY - 0.4, cz - 3.2, X0 + T, subY + 4.2, cz + 3.2, '#27272a');
+          gb.box(cx, subY + 4.0, cz - 0.2, X0 + T - 1, subY + 4.15, cz + 0.2, '#fef08a', 8);
+        } else {
+          gb.box(X0, subY - 0.4, cz - 3.2, cx, subY + 4.2, cz + 3.2, '#27272a');
+          gb.box(X0 + 1, subY + 4.0, cz - 0.2, cx, subY + 4.15, cz + 0.2, '#fef08a', 8);
+        }
+      }
+    }
+
+    for (let d = 0; d < 4; d++) {
+      if (!con[d]) continue;
+      for (const ro of [-0.72, 0.72]) {
+        if (d === 0) gb.box(cx + ro - 0.07, subY, Z0, cx + ro + 0.07, subY + 0.25, cz, COL.rail);
+        else if (d === 2) gb.box(cx + ro - 0.07, subY, cz, cx + ro + 0.07, subY + 0.25, Z0 + T, COL.rail);
+        else if (d === 1) gb.box(cx, subY, cz + ro - 0.07, X0 + T, subY + 0.25, cz + ro + 0.07, COL.rail);
+        else gb.box(X0, subY, cz + ro - 0.07, cx, subY + 0.25, cz + ro + 0.07, COL.rail);
+      }
+    }
+  }
+
   function genStop(gb, stop) {
     const Wd = World;
     const i = stop.tile, x = U.tx(i), y = U.ty(i), X0 = x * T, Z0 = y * T;
@@ -586,12 +666,19 @@ M.CAR_COLORS = CAR_COLORS;
         gb.frame(0, 0, 0, 0);
       } else {
         const yb = Wd.road[i] ? Wd.roadH(X0 + 1, Z0 + 1) + 0.2 : Wd.groundH(X0 + 5, Z0 + 5);
-        const ox = Wd.road[i] ? 0.2 : 3.5, oz = Wd.road[i] ? 0.2 : 3.5;
+        const ox = Wd.road[i] ? 0.2 : 2.5, oz = Wd.road[i] ? 0.2 : 2.5;
         gb.frame(X0 + ox, yb, Z0 + oz, 0);
-        const s = Wd.road[i] ? 1.6 : 3;
-        gb.box(0, 0, 0, s, 2.6, s, '#c9d1d6', 3);
-        gb.box(-0.15, 2.6, -0.15, s + 0.15, 2.9, s + 0.15, '#2b3036');
-        gb.box(s * 0.5 - 0.4, 2.9, s * 0.5 - 0.4, s * 0.5 + 0.4, 3.8, s * 0.5 + 0.4, stop.color || '#e85d2a', 5);
+        const s = Wd.road[i] ? 2.4 : 5.0;
+        gb.box(0, 0, 0, s, 0.25, s, '#475569');
+        gb.box(0.3, -0.8, 0.4, s - 0.3, 0.0, s - 0.4, '#09090b');
+        for (let st = 0; st < 4; st++) {
+          gb.box(0.4, -0.2 * (st + 1), 0.5 + st * 0.7, s - 0.4, -0.2 * st, 0.5 + (st + 1) * 0.7, '#64748b');
+        }
+        gb.box(0.1, 0, 0.1, 0.3, 2.8, s - 0.1, '#1e293b');
+        gb.box(s - 0.3, 0, 0.1, s - 0.1, 2.8, s - 0.1, '#1e293b');
+        gb.box(-0.1, 2.8, -0.1, s + 0.1, 3.1, s + 0.1, '#0284c7', 9);
+        gb.cyl(s + 0.4, 0, s * 0.5, 0.1, 4.2, 8, '#334155');
+        gb.box(s - 0.1, 3.2, s * 0.5 - 0.6, s + 0.9, 4.4, s * 0.5 + 0.6, stop.color || '#dc2626', 15);
         gb.frame(0, 0, 0, 0);
       }
     }
@@ -765,7 +852,7 @@ M.CAR_COLORS = CAR_COLORS;
     const G = Gfx;
     M.root = new THREE.Group(); G.scene.add(M.root);
     for (let cy = 0; cy < CW; cy++) for (let cx = 0; cx < CW; cx++) {
-      M.chunks.push({ cx, cy, infra: null, pipe: null, bld: null, infraDirty: true, bldDirty: true, ids: new Set() });
+      M.chunks.push({ cx, cy, infra: null, pipe: null, subway: null, bld: null, infraDirty: true, bldDirty: true, ids: new Set() });
     }
     M.cons = new Map();
     initTrees(); initLamps(); initVehicles(); initGhosts(); initIcons(); initSignals();
@@ -897,16 +984,20 @@ M.CAR_COLORS = CAR_COLORS;
     if (old) {
       M.root.remove(old);
       old.geometry.dispose();
-      if (key !== 'pipe') G.cityMeshes.delete(old);
+      if (key !== 'pipe' && key !== 'subway') G.cityMeshes.delete(old);
       ch[key] = null;
     }
     if (gb.count === 0) return;
-    const mat = key === 'pipe' ? (G.mats.pipe || G.mats.city) : G.mats.city;
+    const mat = key === 'pipe' ? (G.mats.pipe || G.mats.city) :
+                key === 'subway' ? (G.mats.subway || G.mats.pipe || G.mats.city) : G.mats.city;
     const mesh = new THREE.Mesh(gb.geometry(), mat);
     mesh.castShadow = shadow; mesh.receiveShadow = true;
     if (key === 'pipe') {
       mesh.renderOrder = 15;
       mesh.visible = M.pipeVisible !== false;
+    } else if (key === 'subway') {
+      mesh.renderOrder = 20;
+      mesh.visible = M.subwayVisible !== false;
     } else {
       G.cityMeshes.add(mesh);
     }
@@ -914,7 +1005,7 @@ M.CAR_COLORS = CAR_COLORS;
     ch[key] = mesh;
   }
   function buildInfra(ch) {
-    const Wd = World, gb = new GB(), gbPipe = new GB();
+    const Wd = World, gb = new GB(), gbPipe = new GB(), gbSubway = new GB();
     const x0 = ch.cx * CS, y0 = ch.cy * CS;
     let elev = false;
     for (let y = y0; y < Math.min(W, y0 + CS); y++) for (let x = x0; x < Math.min(W, x0 + CS); x++) {
@@ -922,6 +1013,7 @@ M.CAR_COLORS = CAR_COLORS;
       if (Wd.road[i]) genRoadTile(gb, i);
       if (Wd.pmask[i]) genPathTile(gb, i);
       if (Wd.rail[i] === 1) { genRailTile(gb, i); elev = true; }
+      else if (Wd.rail[i] === 2) { genSubwayTile(gbSubway, i); }
       if (Wd.waterPipe && (Wd.waterPipe[i] || Wd.sewagePipe[i])) {
         genPipeTile(gbPipe, i);
       }
@@ -932,6 +1024,7 @@ M.CAR_COLORS = CAR_COLORS;
     }
     setChunkMesh(ch, 'infra', gb, elev);
     setChunkMesh(ch, 'pipe', gbPipe, false);
+    setChunkMesh(ch, 'subway', gbSubway, false);
   }
   M.pipeVisible = false;
   M.setPipeVisibility = function (v: boolean) {
@@ -939,6 +1032,14 @@ M.CAR_COLORS = CAR_COLORS;
     if (!M.chunks) return;
     for (const ch of M.chunks) {
       if (ch.pipe) ch.pipe.visible = v;
+    }
+  };
+  M.subwayVisible = false;
+  M.setSubwayVisibility = function (v: boolean) {
+    M.subwayVisible = v;
+    if (!M.chunks) return;
+    for (const ch of M.chunks) {
+      if (ch.subway) ch.subway.visible = v;
     }
   };
   function buildBld(ch) {
