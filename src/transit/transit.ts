@@ -2,6 +2,7 @@ import { C } from '../core/constants';
 import { U } from '../core/utils';
 import { World } from '../world/world';
 import { Traffic } from '../traffic/traffic';
+import { Unrest } from '../sim/unrest';
 import { TransitStop, TransitStopTarget, TransitLine, TransitLeg, TransitRoute, TransitWaitingPassenger, TransitTrain, Vehicle, SerializedTransit } from '../types';
 
 type TransitGraphEdge = [number, number, 'b' | 'a' | 'r' | 'w', number];
@@ -243,7 +244,8 @@ function removeVehicles(l: TransitLine) {
 function spawnVehicles(l: TransitLine) {
   removeVehicles(l);
   if (!l.path || l.broken) return;
-  const n = l.vehicles;
+  const isTransitStriking = Unrest && Unrest.state && Unrest.state.strikes && Unrest.state.strikes.transit;
+  const n = isTransitStriking ? Math.max(1, Math.floor(l.vehicles * 0.25)) : l.vehicles;
   if (l.type !== 'rail') {
     for (let k = 0; k < n; k++) {
       const startK = Math.floor((k * l.stops.length) / n) % l.stops.length;

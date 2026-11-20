@@ -7,6 +7,7 @@ import { World } from '@/world/world';
 import { Transit } from '@/transit/transit';
 import { Building, SerializedCity, BudgetLedger, BudgetState, BudgetReport } from '@/types';
 import { blankBudget, LoanItem } from './budget';
+import { Unrest } from './unrest';
 
 const N = C.W * C.W;
 
@@ -111,6 +112,7 @@ export function serializeCity(sim: SimSerializationHost): SerializedCity {
     waterPipe: U.encodeRLE(World.waterPipe),
     sewagePipe: U.encodeRLE(World.sewagePipe),
     wind: (sim as any).wind,
+    unrest: Unrest.serialize(),
     district: U.encodeRLE(World.district),
     districts: Array.from(World.districts.values()),
     nextDistrictId: World.nextDistrictId,
@@ -209,6 +211,12 @@ export function loadCity(
 
   if (d.wind) {
     (sim as any).wind = d.wind;
+  }
+
+  if (d.unrest) {
+    Unrest.deserialize(d.unrest);
+  } else {
+    Unrest.init();
   }
 
   if (d.district) {

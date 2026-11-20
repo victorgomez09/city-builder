@@ -1,0 +1,10 @@
+{
+  "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/v2/tooling/cli/schema.json",
+  "identifier": "default",
+  "description": "Default capability for Vira City desktop application",
+  "windows": ["main", "*"],
+  "permissions": [
+    "core:default",
+    "opener:default"
+  ]
+}

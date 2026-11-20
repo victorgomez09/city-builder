@@ -3,10 +3,11 @@ import { U } from '../core/utils';
 import { World } from '../world/world';
 import { Traffic } from '../traffic/traffic';
 import { Transit } from '../transit/transit';
-import { Building, Vehicle, Milestone, TaxRates, BuildingSpec, ServiceLotResult, SimIcon, SimNotice, SerializedCity, SupplyChainStats, SimStats, WindState } from '../types';
+import { Building, Vehicle, Milestone, TaxRates, BuildingSpec, ServiceLotResult, SimIcon, SimNotice, SerializedCity, SupplyChainStats, SimStats, WindState, StrikesState } from '../types';
 import { LoanItem } from './budget';
 import { COV_KEYS, computeCoverage as runComputeCoverage, computeWaterNear } from './coverage';
 import { Water } from './waterNet';
+import { Unrest } from './unrest';
 import {
   blankBudget,
   hourlyEconomy as runHourlyEconomy,
@@ -710,6 +711,29 @@ function hourlyBuildings() {
   Sim.supply.stockoutStores = stockoutStores;
   Sim.supply.commercialStockRate = totalComStores > 0 ? stockedComStores / totalComStores : 1.0;
   st.supply = Sim.supply;
+  // Social unrest icons: barricades, protests and public service strikes
+  for (const b of Unrest.state.barricades) {
+    icons.push({
+      type: 'barricade',
+      x: (b.x + 0.5) * T,
+      y: World.groundH((b.x + 0.5) * T, (b.z + 0.5) * T) + 2.5,
+      z: (b.z + 0.5) * T,
+    });
+  }
+  for (const p of Unrest.state.crowds) {
+    const px = U.tx(p.tile), py = U.ty(p.tile);
+    icons.push({
+      type: 'protest',
+      x: (px + 0.5) * T,
+      y: World.groundH((px + 0.5) * T, (py + 0.5) * T) + 2.8,
+      z: (py + 0.5) * T,
+    });
+  }
+  Sim.buildings.forEach((b: Building) => {
+    if (b.kind === 'svc' && b.state === 'live' && Unrest.isServiceStriking(b.svc)) {
+      icons.push(iconFor(b, 'strike'));
+    }
+  });
   Sim.icons = icons;
 }
 
@@ -806,6 +830,7 @@ function dispatchServices() {
   Sim.buildings.forEach((b: Building) => all.push(b));
   for (const s of all) {
     if (s.kind !== 'svc' || !World.road[s.road] || !World.conn[s.road]) continue;
+    if (Unrest.isServiceStriking(s.svc)) continue; // Workers on strike! No vehicles dispatched
     const sv = C.SERVICES[s.svc];
     if (!sv || !sv.veh || s.vehOut >= (sv.vehCount || 0)) continue;
     const cx = s.x + s.fw / 2,
@@ -1331,6 +1356,7 @@ function hourlyEconomy() {
 
 function monthly() {
   runMonthlyBudget(Sim);
+  Unrest.monthlyTick();
 }
 
 const FIRST = [
@@ -1376,6 +1402,10 @@ function chirp() {
     opts.push('Is there a doctor anywhere in this city?');
   }
   if (Sim.tax.res > 13) opts.push('Taxes went up again? Thinking about moving.');
+  if (Unrest.state.strikes.garbage) opts.push('¡Huelga de basureros! La basura se acumula en las esquinas y huele fatal.');
+  if (Unrest.state.strikes.transit) opts.push('¡Los conductores de autobús están en huelga! Llego tardísimo al trabajo.');
+  if (Unrest.state.level === 'protest') opts.push('Hay manifestaciones en el centro con pancartas. ¡El ayuntamiento debe escucharnos!');
+  if (Unrest.state.level === 'riot') opts.push('¡Disturbios en las avenidas principales! Hay barricadas ardiendo en el asfalto.');
   if (Sim.demand.rlow > 60 && st.pop < 600) opts.push('Everyone wants to move here. Zone more homes!');
   if (!opts.length) return;
   Sim.notify(U.pick(FIRST, Sim.rng) + ': "' + U.pick(opts, Sim.rng) + '"', 'chirp');
@@ -1494,6 +1524,7 @@ export const Sim = {
     Sim.unseen = [];
     Sim.wind = { ...DEFAULT_WIND };
     Water.init();
+    Unrest.init();
     Sim.rng = U.rng((opts.seed || 1) * 31 + 7);
     computeWaterNear();
   },
@@ -1956,6 +1987,10 @@ export const Sim = {
       Sim.stats.sewageLoad = Water.sewageLoad;
       hourlyBuildings();
       hourlyEconomy();
+      Unrest.step(Sim.buildings, Sim.cov, Sim.tax, Sim.stats.unemployment || 0, Sim.stats.pop);
+      Sim.stats.unrest = Unrest.state.score;
+      Sim.stats.unrestLevel = Unrest.state.level;
+      Sim.stats.activeStrikes = (Object.keys(Unrest.state.strikes) as (keyof StrikesState)[]).filter(k => Unrest.state.strikes[k]);
       dispatchServices();
       computeCoverage();
       if (Sim.rng() < 0.06 && Sim.hour > 7 && Sim.hour < 22) chirp();
@@ -2087,6 +2122,15 @@ export const Sim = {
           const b = World.bld[i] && (Sim.buildings.get(World.bld[i]) as any);
           if (b && (b.dead || 0) > 0) return [0.4, 0.2, 0.6, 0.9];
           return null;
+        };
+      case 'unrest':
+        return i => {
+          if (!play(i)) return null;
+          const u = Unrest.unrestGrid[i] || 0;
+          if (u < 0.20) return [0.15, 0.72, 0.35, 0.22];
+          if (u < 0.45) return [0.92, 0.76, 0.15, 0.45];
+          if (u < 0.70) return [0.92, 0.45, 0.10, 0.68];
+          return [0.88, 0.15, 0.15, 0.88];
         };
       default:
         return i => (play(i) && cv[key] ? ramp(Math.min(1, cv[key][i])) : null);

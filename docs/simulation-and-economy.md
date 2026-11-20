@@ -159,3 +159,23 @@ Cada comercio dispone de un almacén `b.stock` con capacidad máxima `b.stockMax
 - Si existe una fábrica local con existencias, se despacha un camión de mercancías físico (`kind: 'truck'`) que circula por la red viaria hasta el comercio para reponer hasta $25$ unidades.
 - Si no hay industria local suficiente, el camión entra desde la conexión exterior (`World.outIn`), acarreando un coste por flete arancelario para la ciudad.
 - **Exportación:** Las fábricas locales con almacén superior al $75\%$ despachan camiones hacia `World.outOut`, generando divisas de exportación directas para el presupuesto municipal.
+
+---
+
+## 7. Malestar Social, Conflictividad Fiscal y Huelgas (Fase 3.5)
+
+El motor de simulación integra el subsistema `UnrestEngine` (`src/sim/unrest.ts`) que modela la conflictividad social como una fuerza macroeconómica desestabilizadora:
+
+### 7.1 Cálculo Continuo de Fricción
+La puntuación global de malestar ($0$ a $100$) responde a seis presiones:
+1. **Presión Fiscal ($30\%$):** Impuestos superiores al $9\%$ generan malestar incremental; por encima del $13\%$ la tensión se dispara.
+2. **Desempleo ($25\%$):** Porcentaje de ciudadanos activos sin puesto de trabajo asignado.
+3. **Polución y Humos ($15\%$):** Celdas residenciales afectadas por chimeneas industriales o aguas negras.
+4. **Déficit de Servicios ($15\%$):** Barrios desprovistos de bomberos, comisarías, colegios o hospitales.
+5. **Desabastecimiento ($10\%$):** Comercios en rotura de stock que no pueden atender compras.
+6. **Cadáveres Insepultos ($15\%$):** Saturación de servicios funerarios.
+
+### 7.2 Huelgas de Servicios y Bloqueos
+- **Huelga General ($>65$):** Los servicios municipales se niegan a despachar vehículos de recogida de residuos, coches patrulla, ambulancias, autobuses ($25\%$ de flota) y camiones de bomberos.
+- **Disturbios y Barricadas ($>80$):** Se forman barricadas 3D en cruces y comitivas de manifestantes marchan por calzadas, multiplicando por $15\times$ y $4.5\times$ el coste de enrutamiento del tráfico.
+- **Mesa Sindical y Paz Social:** Posibilidad de acordar convenios colectivos con los cuatro sindicatos municipales por 12 meses, o recurrir a fondos de alivio social ($5,000) o policía antidisturbios ($2,800). Ver detalle completo en **[docs/social-unrest-and-strikes.md](file:///home/dev/projects/city-builder/docs/social-unrest-and-strikes.md)**.

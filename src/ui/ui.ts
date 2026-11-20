@@ -35,6 +35,7 @@ import { renderStatsPanel, updStats } from '@/ui/panels/stats';
 import { renderDistrictsPanel, updDistricts, openDistrict } from '@/ui/panels/districts';
 import { renderSettingsPanel } from '@/ui/panels/settings';
 import { renderSupplyPanel, updSupply } from '@/ui/panels/supply';
+import { renderUnrestPanel, updUnrest } from '@/ui/panels/unrest';
 
 import { CATS, catItems, MenuItem, refreshBadges, idOf } from '@/ui/catalog';
 import { openJunction, setJunctionCtrl } from '@/ui/panels/junction';
@@ -155,9 +156,41 @@ UI.init = function () {
     $('sp' + s).addEventListener('click', () => UI.setSpeed(s));
   }
 
+  // Hub dropdown menu controls
+  const closeHubDropdowns = () => {
+    $$<HTMLElement>('#menu .hub-dropdown').forEach(dd => (dd.hidden = true));
+    $$<HTMLElement>('#menu .hub-btn').forEach(btn => btn.classList.remove('open'));
+  };
+
+  $$<HTMLElement>('#menu [data-hub]').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      const hubId = btn.dataset.hub;
+      const dropdown = hubId ? $('hub_' + hubId) : null;
+      const isCurrentlyOpen = dropdown && !dropdown.hidden;
+
+      closeHubDropdowns();
+      if (!isCurrentlyOpen && dropdown) {
+        dropdown.hidden = false;
+        btn.classList.add('open');
+      }
+    });
+  });
+
   $$<HTMLElement>('#menu [data-panel]').forEach(b =>
-    b.addEventListener('click', () => UI.openPanel(UI.panel === b.dataset.panel ? null : b.dataset.panel || null))
+    b.addEventListener('click', e => {
+      e.stopPropagation();
+      closeHubDropdowns();
+      UI.openPanel(UI.panel === b.dataset.panel ? null : b.dataset.panel || null);
+    })
   );
+
+  document.addEventListener('click', e => {
+    const target = e.target as HTMLElement | null;
+    if (!target?.closest('#menu')) {
+      closeHubDropdowns();
+    }
+  });
 
   const D = [
     ['rlow', 'L', '#5fcf5a'],
@@ -199,6 +232,8 @@ UI.init = function () {
       UI.setOverlay('pollution');
     });
   }
+  const statUnrest = $('statUnrest');
+  if (statUnrest) statUnrest.addEventListener('click', () => UI.openPanel(UI.panel === 'unrest' ? null : 'unrest'));
   const demandEl = $('demand');
   if (demandEl) demandEl.addEventListener('click', () => UI.openCat(UI.cat === 'zones' ? null : 'zones'));
   const mileBtn = $('mileBtn');
@@ -215,6 +250,11 @@ UI.init = function () {
   // Keyboard shortcut: Escape closes modal, palette, inspector, or side panel cleanly
   window.addEventListener('keydown', e => {
     if (e.key === 'Escape') {
+      const anyDropdownOpen = document.querySelector('#menu .hub-dropdown:not([hidden])');
+      if (anyDropdownOpen) {
+        closeHubDropdowns();
+        return;
+      }
       const modal = $('modal');
       if (modal && !modal.hidden) {
         modal.hidden = true;
@@ -523,6 +563,18 @@ const PANELS: Record<string, (p: HTMLElement) => void> = {
   stats: renderStatsPanel,
   districts: renderDistrictsPanel,
   settings: renderSettingsPanel,
+  unrest: renderUnrestPanel,
+};
+
+const PANEL_HUBS: Record<string, string> = {
+  unrest: 'civic',
+  districts: 'civic',
+  transit: 'civic',
+  budget: 'economy',
+  supply: 'economy',
+  views: 'insights',
+  stats: 'insights',
+  settings: 'insights',
 };
 
 UI.openPanel = function (key: string | null) {
@@ -534,7 +586,20 @@ UI.openPanel = function (key: string | null) {
     Transit.showRibbons(tt === 'line' || tt === 'lineEdit' || tt === 'stop');
   }
   UI.panel = key;
+
+  // Close open dropdowns
+  $$<HTMLElement>('#menu .hub-dropdown').forEach(dd => (dd.hidden = true));
+  $$<HTMLElement>('#menu .hub-btn').forEach(btn => btn.classList.remove('open'));
+
+  // Update panel item active states
   $$<HTMLElement>('#menu [data-panel]').forEach(b => b.classList.toggle('on', b.dataset.panel === key));
+
+  // Update parent hub active states
+  const activeHub = key ? PANEL_HUBS[key] : null;
+  $$<HTMLElement>('#menu [data-hub]').forEach(btn => {
+    btn.classList.toggle('active-hub', btn.dataset.hub === activeHub);
+  });
+
   const p = $('sidePanel');
   if (!key) {
     p.hidden = true;
@@ -588,6 +653,28 @@ UI.update = function () {
   if (windSpdEl && wind) windSpdEl.textContent = Math.round(wind.speed) + ' km/h';
   const windDirEl = $('wind_dir');
   if (windDirEl && wind) windDirEl.textContent = '· ' + wind.dirName;
+  const unrestValEl = $('unrest_val');
+  if (unrestValEl) unrestValEl.textContent = Math.round(st.unrest || 0) + '%';
+  const unrestLvlEl = $('unrest_lvl');
+  if (unrestLvlEl) {
+    const lvl = st.unrestLevel || 'peaceful';
+    const colors: Record<string, string> = {
+      peaceful: '#22c55e',
+      tense: '#eab308',
+      protest: '#f97316',
+      strike: '#ea580c',
+      riot: '#dc2626',
+    };
+    const names: Record<string, string> = {
+      peaceful: 'Peaceful',
+      tense: 'Tense',
+      protest: 'Protest',
+      strike: 'Strike',
+      riot: 'Riot',
+    };
+    unrestLvlEl.textContent = names[lvl] || lvl;
+    unrestLvlEl.style.color = colors[lvl] || '#22c55e';
+  }
   const hh = Math.floor(S.hour),
     mm = Math.floor((S.hour - hh) * 60);
   $('time').textContent = String(hh).padStart(2, '0') + ':' + String(Math.floor(mm / 15) * 15).padStart(2, '0');
@@ -636,6 +723,7 @@ UI.update = function () {
     else if (UI.panel === 'transit') updTransit(sp);
     else if (UI.panel === 'stats' && tick % 4 === 0) updStats(sp);
     else if (UI.panel === 'districts' && tick % 4 === 0) updDistricts(sp);
+    else if (UI.panel === 'unrest' && tick % 4 === 0) updUnrest(sp);
   }
   if (UI.overlay && tick % 4 === 0) refreshOverlay();
   if (tick % 2 === 0) {

@@ -50,16 +50,33 @@ flowchart TD
 ```
 
 ### 3.1 Barra Cívica Superior Unificada (`.topbar`)
-Barra fija de 48px, translúcida, en una sola línea no rompible (*zero-wrapping*), que garantiza que nunca tape los paneles inferiores:
+Barra fija de 48px, translúcida con desenfoque de cristal (`backdrop-filter: blur(14px)`), en una sola línea no rompible (*zero-wrapping*), optimizada para pantallas desde 1280px hasta 4K:
 - **Identidad e Hitos:** Nombre de la metrópoli y botón píldora interactivo `#mileBtn` con barra de progreso. Al pulsar este botón, se despliega el cajón de objetivos `#goals` directamente bajo él.
 - **Constantes Vitales Clicables (*Drill-Down Directo*):**
   - **Fondos (`#statMoney`):** Muestra el tesoro y flujo neto (`+$2.400 / mo`). Al hacer clic, abre directamente el panel de **Presupuesto e Impuestos**.
   - **Población (`#statPop`):** Censo y puestos ocupados. Al hacer clic, abre las **Estadísticas de la Ciudad**.
   - **Felicidad (`#statHappy`):** Satisfacción ciudadana media. Al hacer clic, abre las **Vistas e Infomapas de Calor**.
+  - **Tensión Social (`#statUnrest`):** Índice de conflictividad laboral y disturbios (`0% Peaceful`). Al hacer clic, abre la **Mesa de Diálogo Social y Convenios**.
   - **Viento y Clima (`#statWind`):** Velocidad actual del viento en km/h, ráfagas y rosa de los vientos (ej: `14 km/h NE ↗`). Al hacer clic, abre inmediatamente la vista de **Polución y Dispersión Atmosférica**.
   - **Demanda RCI (`#demand`):** Indicadores verticales de presión residencial, comercial e industrial. Al hacer clic, abre la paleta de **Zonificación**.
 - **Reloj y Velocidad:** Selector de marcha de simulación (Pausa `Space`, 1x, 2x, 4x) y reloj en tiempo real.
-- **Menú de Gestión Rápida:** Botones de acceso directo a Vistas, Distritos, Presupuesto, Transporte, Estadísticas y Opciones.
+- **Menú de Gestión Agrupado por Hubs Categóricos (`#menu`):**
+  En lugar de saturar la barra horizontal con 8 botones individuales que se desbordan en monitores portátiles o pantallas con escalado, los paneles se agrupan en **3 Hubs desplegables con diseño glassmorphic**, ahorrando más del 60% de espacio horizontal y garantizando visibilidad limpia:
+  1. 🏛️ **Civic & Society (`civic`):**
+     - **✊ Peace & Unrest:** Huelgas de servicios, sindicatos y convenios colectivos.
+     - **🏛️ Districts & Policies:** Ordenanzas de distrito y especializaciones económicas.
+     - **🚌 Transit Networks:** Líneas de autobuses, tranvías, trenes y gestión de paradas.
+  2. 💼 **Economy & Trade (`economy`):**
+     - **💰 Budget & Treasury:** Fiscalidad, préstamos municipales y balances departamentales.
+     - **📦 Supply & Logistics:** Terminales de carga, cadenas de suministro y fletes.
+  3. 📊 **Insights & System (`insights`):**
+     - **👁️ Info Views:** Capas de información y mapas de calor (polución, agua, electricidad, valor del suelo).
+     - **📈 City Statistics:** Demografía, empleo y gráficas históricas.
+     - **⚙️ Settings & Saves:** Gráficos, sonido y gestor de partidas guardadas.
+  - **Interacción y Feedback Visual:**
+    - Botón de hub con chevron animado que rota al abrirse.
+    - Indicador de estado activo (`.active-hub` con punto luminoso de neón y borde iluminado) cuando cualquiera de sus paneles hijos está abierto.
+    - Cierre automático al hacer clic en un ítem, hacer clic fuera del menú o presionar la tecla `Escape`.
 
 ### 3.2 Cajón Desplegable de Metas (`#goals`)
 - Anclado de forma fija bajo el hito cívico (`top: 54px; left: 12px; width: 310px`).
@@ -102,13 +119,30 @@ En el panel de Vistas e Infomapas de Calor [src/ui/panels/views.ts](file:///home
   - Descripción funcional de la métrica en la simulación urbana.
   - Leyenda cromática con muestras (*swatches*), nombres y desglose de efectos para cada umbral de color.
   - Consejos de planificación y gestión urbanística (*City Planning Tips*).
-- Disponible para todas las infovistas del motor (Recursos Naturales, Agua y Red de Tuberías, Alcantarillado y Colectores, Polución Hídrica, Tráfico, Valor del Suelo, Felicidad, Polución Atmosférica con Plumas de Viento, Ruido, Policía, Bomberos, Sanidad y Triaje, Defunciones y Servicios Funerarios, Educación, Vertederos, Parques, Transporte y Distritos).
+- Disponible para todas las infovistas del motor (Recursos Naturales, Agua y Red de Tuberías, Alcantarillado y Colectores, Polución Hídrica, Tráfico, Valor del Suelo, Felicidad, Polución Atmosférica con Plumas de Viento, Ruido, Policía, Bomberos, Sanidad y Triaje, Defunciones y Servicios Funerarios, Educación, Vertederos, Parques, Transporte, Distritos y Malestar Social).
+
+### 3.8 Panel de Paz Social y Mesa de Diálogo Sindical (`#sidePanel` / `unrest`)
+Accesible desde el botón `Peace` del menú superior o haciendo clic sobre la pastilla vital `#statUnrest`:
+- **Termómetro de Tensión Urbana:** Barra gráfica dinámica con indicador numérico (0 a 100) y etiqueta de nivel (`Peaceful`, `Tense`, `Protest`, `Strike`, `Riot`).
+- **Desglose de Factores:** Barras proporcionales para presión fiscal, desempleo, polución, déficit de servicios, desabastecimiento comercial y cadáveres insepultos.
+- **Estado de Huelgas:** Indicadores en vivo de paros en basuras, transporte, bomberos, policía y sanidad.
+- **Mesa de Negociación:** Convenios colectivos interactivos con 4 sindicatos con coste mensual para garantizar paz laboral por 12 meses.
+- **Acciones de Emergencia:** Botones de intervención directa para despliegue de unidades antidisturbios ($2,800) y fondo de alivio social ($5,000).
+
+### 3.9 Gestor de Guardados Multiranura y Carga Drag & Drop (`#saveHubModal`)
+Accesible desde la pantalla de bienvenida (`btnOpenSaveHub`) o desde el panel de Configuración (`st_hub`):
+- **Selector de Partidas Visual:** Muestra tarjetas con capturas de pantalla 3D en tiempo real, estadísticas demográficas y económicas, y fecha del juego y real.
+- **Gestión Completa de Ranuras:** Creación de nuevas ranuras de guardado, sobreescritura, exportación a archivo `.viracity`, renombrado y borrado seguro.
+- **Importación por Arrastrar y Soltar:** Al soltar cualquier archivo `.viracity` o `.json` sobre la ventana del juego, se activa un telón translúcido de carga automática.
+- **Configuración de Autoguardado:** Selector de cadencia de guardado automático rotativo (5, 10 o 15 minutos, o desactivado).
 
 ---
 
 ## 4. Control de Teclado y Ergonomía de Acceso Rápido
 
 - **`Escape`:** Cierra ordenadamente ventanas modales activas $\rightarrow$ paleta de construcción $\rightarrow$ inspector $\rightarrow$ paneles de gestión laterales $\rightarrow$ cajón de objetivos.
+- **`Ctrl + S` / `F5`:** Guardado Rápido (*Quick Save*).
+- **`F9`:** Carga Rápida (*Quick Load*).
 - **`B`:** Conmuta la herramienta de demolición (*Bulldoze*).
 - **`C`:** Alterna entre los modos de trazado de calzada (Recto, Curvo, S-Bend, Grid).
 - **`R`:** Rota el sentido de emplazamiento de edificios cívicos de servicio.

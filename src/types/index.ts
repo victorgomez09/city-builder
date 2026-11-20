@@ -734,6 +734,9 @@ export interface SimStats {
   sewageLoad?: number;
   sickCount?: number;
   deadCount?: number;
+  unrest?: number;
+  unrestLevel?: UnrestLevel;
+  activeStrikes?: string[];
 }
 
 export interface Loan {
@@ -843,6 +846,71 @@ export interface SerializedTransit {
   stats?: TransitStats;
 }
 
+export type UnrestLevel = 'peaceful' | 'tense' | 'protest' | 'strike' | 'riot';
+
+export interface UnrestFactors {
+  taxPressure: number;
+  unemployment: number;
+  pollution: number;
+  serviceDeficit: number;
+  stockouts: number;
+  unattendedDead: number;
+}
+
+export interface StrikesState {
+  garbage: boolean;
+  fire: boolean;
+  police: boolean;
+  transit: boolean;
+  health: boolean;
+}
+
+export interface UnionDemand {
+  id: string;
+  union: 'civic' | 'transit' | 'emergency' | 'residents';
+  unionName: string;
+  repName: string;
+  title: string;
+  desc: string;
+  demands: string;
+  cost: number;
+  monthlyCost?: number;
+  durationMonths: number;
+  accepted: boolean;
+  monthsRemaining: number;
+}
+
+export interface Barricade {
+  id: number;
+  tile: number;
+  x: number;
+  z: number;
+  health: number;
+  duration: number;
+}
+
+export interface ProtestCrowd {
+  id: number;
+  tile: number;
+  targetTile: number;
+  banner: string;
+  size: number;
+  anger: number;
+  dir: number;
+}
+
+export interface UnrestState {
+  score: number;
+  level: UnrestLevel;
+  factors: UnrestFactors;
+  strikes: StrikesState;
+  pacts: UnionDemand[];
+  barricades: Barricade[];
+  crowds: ProtestCrowd[];
+  riotHours: number;
+  peaceTreatyMonths: number;
+}
+
 export interface SerializedDistrict {
   id: number;
   name: string;
@@ -888,6 +956,7 @@ export interface SerializedCity {
   waterPipe?: string;
   sewagePipe?: string;
   wind?: WindState;
+  unrest?: UnrestState;
   districts?: SerializedDistrict[];
   hce?: number[];
   hcEdits?: [number, number][];
@@ -901,4 +970,35 @@ export interface SerializedCity {
   nextDistrictId?: number;
   transit?: SerializedTransit;
   [key: string]: unknown;
+}
+
+export interface SaveMeta {
+  id: string;
+  name: string;
+  type: 'manual' | 'autosave' | 'quicksave' | 'imported';
+  timestamp: number;
+  dateStr: string;
+  pop: number;
+  money: number;
+  happy: number;
+  milestone: number;
+  milestoneName: string;
+  screenshot?: string;
+  seed: number;
+  map: string;
+  version: number;
+}
+
+export interface SaveFileContainer {
+  format: 'viracity';
+  version: number;
+  exportedAt: number;
+  meta: SaveMeta;
+  city: SerializedCity;
+}
+
+export interface SaveHubConfig {
+  autosaveIntervalMinutes: number;
+  maxAutosaves: number;
+  activeSlot?: string;
 }

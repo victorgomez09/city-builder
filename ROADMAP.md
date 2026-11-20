@@ -242,30 +242,39 @@ flowchart TD
 - [x] **Inspector Enriquecido:** Monitoreo en tiempo real de existencias en tiendas (`Inventory Stock [████░░░░]`) y especialización, tasa de producción y yacimiento en fábricas en [src/ui/panels/inspector.ts](file:///home/dev/projects/city-builder/src/ui/panels/inspector.ts).
 
 ### Fase 3.5: Malestar Social, Huelgas, Manifestaciones y Conflictividad Fiscal
-- [ ] **Simulador de Tensión Social (`Sim.unrest`):** Medidor de conflictividad social derivado de la presión fiscal por distrito, desempleo, polución y falta de servicios básicos.
-- [ ] **Manifestaciones Callejeras con Agentes Físicos:**
-  - Si la presión fiscal supera el $13\% - 15\%$ o la felicidad cae de 35%, los ciudadanos convocan manifestaciones.
-  - Spawning de grupos de peatones portando pancartas en el ayuntamiento y plazas públicas que cortan cruces y calzadas.
-  - Congestión inducida por protestas en el cálculo de rutas de [src/traffic/traffic.ts](file:///home/dev/projects/city-builder/src/traffic/traffic.ts).
-- [ ] **Huelgas de Servicios Esenciales (*Service Strikes*):**
-  - **Huelga de Recogida de Residuos:** Bloqueo de salida de camiones en vertederos si el presupuesto de basura se recorta; la basura rebasa los solares en días.
-  - **Huelga de Bomberos y Policía:** Tiempos de respuesta lentos o nulos; aumento drástico de incendios descontrolados y actos vandálicos nocturnos.
-  - **Paro de Trabajadores de Tránsito:** Conductores de autobús y tranvía en huelga, forzando a los ciudadanos a usar el coche privado y colapsando la red viaria.
-- [ ] **Barricadas y Disturbios Urbanos (*Riots*):** Eventos de crisis con contenedores incendiados si los disturbios persisten durante más de 72 horas.
-- [ ] **Panel de Negociación y Paz Social:** Interfaz en UI para dialogar con los sindicatos y comités vecinales, pactar moratorias fiscales o subsidios de choque.
+- [x] **Simulador de Tensión Social (`Sim.unrest`):** Medidor continuo de conflictividad social (0 a 100) en [src/sim/unrest.ts](file:///home/dev/projects/city-builder/src/sim/unrest.ts) derivado de la presión fiscal impositiva, tasa de desempleo, polución del aire y agua, déficit de servicios esenciales, rotura de existencias comerciales y cadáveres sin recoger.
+- [x] **Manifestaciones Callejeras con Agentes Físicos:**
+  - Si la tensión supera los 40 puntos o la felicidad decae, se convocan marchas vecinales (`ProtestCrowd`) con pancartas en calzadas urbanas.
+  - Generación de grupos de manifestantes marchando sobre la red viaria renderizados en [src/traffic/traffic.ts](file:///home/dev/projects/city-builder/src/traffic/traffic.ts) con mallas instanciadas.
+  - Congestión inducida por protestas aplicando un factor de impedancia de $4.5\times$ en el algoritmo $A^*$ en [src/traffic/pathfinding.ts](file:///home/dev/projects/city-builder/src/traffic/pathfinding.ts).
+- [x] **Huelgas de Servicios Esenciales (*Service Strikes*):**
+  - Al superar los 65 puntos de malestar, los trabajadores municipales inician huelgas sectoriales consultadas con `Unrest.isServiceStriking(svc)`.
+  - **Huelga de Recogida de Residuos:** Bloqueo de salida de camiones en vertederos; la basura rebasa los solares en días e incrementa el riesgo de epidemias.
+  - **Huelga de Bomberos y Policía:** Bloqueo de dotaciones; incendios sin sofocar y aumento drástico de criminalidad sin respuesta.
+  - **Paro de Trabajadores de Tránsito:** Flota reducida drásticamente al $25\%$, colapsando andenes y forzando a los ciudadanos al coche privado.
+  - **Huelga Sanitaria:** Ralentización de ambulancias y triaje médico de urgencia en hospitales.
+- [x] **Barricadas y Disturbios Urbanos (*Riots*):**
+  - Eventos de revuelta al superar los 80 puntos de tensión con levantamiento de barricadas físicas (`Barricade`) que aplican impedancia $15.0\times$ bloqueando el tráfico.
+  - Modelado 3D procedural de barricadas en [src/render/generators/vehicleGenerators.ts](file:///home/dev/projects/city-builder/src/render/generators/vehicleGenerators.ts) con palets de madera, neumáticos apilados y barriles metálicos ardiendo con fuego y ascuas.
+- [x] **Panel de Negociación y Paz Social:**
+  - Interfaz interactiva en [src/ui/panels/unrest.ts](file:///home/dev/projects/city-builder/src/ui/panels/unrest.ts) y pastilla HUD en barra superior `#statUnrest`.
+  - Mesa de diálogo social con 4 sindicatos (Limpieza, Transporte, Sanitarios y Asociaciones Vecinales) para pactar convenios colectivos con paz laboral garantizada por 12 meses.
+  - Acciones ejecutivas de emergencia: despliegue de unidades policiales antidisturbios ($2,800) y aprobación del Fondo Municipal de Alivio Social ($5,000).
 
 ### Fase 3.8: Sistema de Guardado Avanzado, Exportación de Archivos y Empaquetado Desktop (Tauri)
-- [ ] **Gestor de Guardados Multiranura (*Save/Load Hub*):**
-  - Selector de partidas guardadas con nombre, fecha/hora, población, dinero disponible y miniatura previa (*screenshot*) generada con `renderer.domElement.toDataURL()`.
-  - Sistema de guardado automático rotativo (*Rolling Autosaves*) cada 5, 10 o 15 minutos en ranuras independientes (`autosave_1`, `autosave_2`, `autosave_3`).
-- [ ] **Exportación e Importación de Archivos `.viracity`:**
-  - Descarga directa de archivos de partida para respaldo local o intercambio con otros jugadores en formato JSON comprimido / GZIP binario.
-  - Carga mediante arrastrar y soltar (*drag & drop*) de archivos `.viracity` directamente sobre el lienzo del juego.
-- [ ] **Empaquetado de Aplicación de Escritorio con TAURI:**
-  - Configuración del entorno de compilación nativo `src-tauri` con Rust y Tauri v2.
-  - Acceso nativo y seguro al sistema de archivos local (`~/.config/viracity/saves/` en Linux y `%APPDATA%/ViraCity/saves/` en Windows) sin los límites de almacenamiento del navegador ni cuotas de `localStorage`.
-  - Menús nativos de ventana (Guardar, Cargar, Salir, Pantalla Completa, Atajos de Teclado).
-  - Rendimiento óptimo: binario compilado de solo $\sim 10 - 15\text{ MB}$ con el webview nativo del sistema operativo (Edge WebView2 / WebKitGTK).
+- [x] **Gestor de Guardados Multiranura (*Save/Load Hub*):**
+  - Selector de partidas guardadas en [src/ui/panels/saveHub.ts](file:///home/dev/projects/city-builder/src/ui/panels/saveHub.ts) con nombre, fecha/hora real e in-game, población, fondos, felicidad, hito y miniatura previa (*screenshot*) generada con `Gfx.captureScreenshot()` en [src/render/gfx.ts](file:///home/dev/projects/city-builder/src/render/gfx.ts).
+  - Almacenamiento híbrido persistente en [src/sim/saveSystem.ts](file:///home/dev/projects/city-builder/src/sim/saveSystem.ts) mediante `IndexedDB` transaccional con respaldo en `localStorage` y carpetas nativas de sistema.
+  - Sistema de guardado automático rotativo (*Rolling Autosaves*) cada 5, 10 o 15 minutos en ranuras cíclicas (`autosave_1`, `autosave_2`, `autosave_3`).
+  - Atajos de teclado para Guardado Rápido (<kbd>Ctrl + S</kbd> / <kbd>F5</kbd>) y Carga Rápida (<kbd>F9</kbd>).
+- [x] **Exportación e Importación de Archivos `.viracity`:**
+  - Descarga directa de partidas en formato contenedor JSON `.viracity` con metadatos y carga útil RLE validada.
+  - Carga instantánea arrastrando y soltando (*drag & drop*) archivos `.viracity` o `.json` sobre el lienzo del juego con interfaz modal de recepción.
+  - Selector manual de archivos para importación con validación exhaustiva de integridad de esquema.
+- [x] **Empaquetado de Aplicación de Escritorio con TAURI:**
+  - Andamiaje y configuración de compilación nativa en `src-tauri/` con Rust y Tauri v2 ([src-tauri/tauri.conf.json](file:///home/dev/projects/city-builder/src-tauri/tauri.conf.json), [src-tauri/Cargo.toml](file:///home/dev/projects/city-builder/src-tauri/Cargo.toml), [src-tauri/src/main.rs](file:///home/dev/projects/city-builder/src-tauri/src/main.rs)).
+  - Puente nativo [src/sim/tauriBridge.ts](file:///home/dev/projects/city-builder/src/sim/tauriBridge.ts) con comandos IPC para acceso al sistema de archivos local (`~/.config/viracity/saves/` en Linux y `%APPDATA%/ViraCity/saves/` en Windows).
+  - Scripts en [package.json](file:///home/dev/projects/city-builder/package.json) para desarrollo (`pnpm run tauri:dev`) y compilación binaria optimizada (`pnpm run tauri:build`).
   - Preparado para distribución en Steam (soporte nativo de Steam Cloud Saves y Steam Overlay).
 
 ### Fase 3.9: Arquitectura de Internacionalización (i18n) y Localización Multilingüe

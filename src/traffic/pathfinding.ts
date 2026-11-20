@@ -7,6 +7,7 @@
 import { C } from '@/core/constants';
 import { U } from '@/core/utils';
 import { World } from '@/world/world';
+import { Unrest } from '@/sim/unrest';
 
 const T = C.TILE;
 const W = C.W;
@@ -125,6 +126,11 @@ export function roadCostWithLoad(i: number, trafficLoad: Float32Array): number {
   const cong = 1 + 4 * Math.max(0, ratio - 0.35) * Math.max(0, ratio - 0.35);
   let c = (T / R.speed) * cong;
   if (lanes === 1 && R.grp === 'small') c *= 1.06;
+  if (Unrest.isRoadBlocked(i)) {
+    c *= 15.0; // Street barricade severely blocks traffic
+  } else if (Unrest.isProtestOnRoad(i)) {
+    c *= 4.5;  // Protest march causing street friction
+  }
   const did = World.district ? World.district[i] : 0;
   if (did) {
     const dist = World.districts.get(did);

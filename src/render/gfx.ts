@@ -930,4 +930,20 @@ void main(){ vec3 d = normalize(vDir); float h = d.y;
       Gfx.renderer.render(Gfx.scene, Gfx.camera);
     }
   },
+
+  captureScreenshot(targetWidth = 320, targetHeight = 180): string | null {
+    if (!Gfx.renderer || !Gfx.scene || !Gfx.cam || !Gfx.cam.c) return null;
+    try {
+      Gfx.renderer.render(Gfx.scene, Gfx.cam.c);
+      const canvas = document.createElement('canvas');
+      canvas.width = targetWidth;
+      canvas.height = targetHeight;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return null;
+      ctx.drawImage(Gfx.renderer.domElement, 0, 0, targetWidth, targetHeight);
+      return canvas.toDataURL('image/jpeg', 0.72);
+    } catch {
+      return null;
+    }
+  },
 };

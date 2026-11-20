@@ -81,3 +81,20 @@ El subsistema de tráfico ha sido descompuesto en módulos especializados de alt
 - **[src/traffic/trajectories.ts](file:///home/dev/projects/city-builder/src/traffic/trajectories.ts):** Cálculo de curvas Bézier cuadráticas (`Bezier2D`), alineación de transiciones entre carriles (`boundaryLanes`) y desfases laterales de acera/calzada.
 - **[src/traffic/signals.ts](file:///home/dev/projects/city-builder/src/traffic/signals.ts):** Máquina de estados de semáforos (fases verde/ámbar/todo-rojo), arbitraje de señales de stop y detección de bloqueos en puntos de spawn.
 - **[src/traffic/visitorActivities.ts](file:///home/dev/projects/city-builder/src/traffic/visitorActivities.ts):** Simulación peatonal en parques y plazas: paseos procedimentales, sentarse en bancos, columpios, toboganes, skateparks y física de baloncesto.
+
+---
+
+## 6. Impedancia por Conflicto Social y Huelgas de Transporte (Fase 3.5)
+
+El sistema de tráfico y transporte integra las consecuencias del malestar social:
+
+### 6.1 Cortes por Manifestaciones y Barricadas
+En `src/traffic/pathfinding.ts:roadCostWithLoad()`, las celdas afectadas por conflictividad modifican el coste de enrutamiento $A^*$:
+- **Manifestaciones Vecinales (`Unrest.isProtestOnRoad`):** Multiplican el coste por **$4.5\times$**, forzando al tráfico privado y comercial a buscar vías secundarias.
+- **Barricadas de Disturbios (`Unrest.isRoadBlocked`):** Multiplican el coste por **$15.0\times$**, bloqueando de facto la calle para turismos y transporte público hasta su retirada o intervención policial.
+
+### 6.2 Estrangulamiento de Transporte Masivo por Huelga
+En `src/transit/transit.ts:spawnVehicles()`, si la huelga de transporte está activa (`Unrest.state.strikes.transit`):
+- El número máximo de convoyes y autobuses por línea se limita al **$25\%$** de la dotación nominal.
+- Se producen saturaciones agudas en andenes y colas masivas de viajeros en espera.
+- La firma del convenio con la *Federación Unitaria del Transporte* restaura de inmediato la frecuencia al $100\%$.

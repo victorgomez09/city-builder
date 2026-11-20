@@ -9,6 +9,8 @@ import { Traffic } from '@/traffic/traffic';
 import { Transit } from '@/transit/transit';
 import { Tools } from '@/tools/tools';
 import { UI } from '@/ui/ui';
+import { SaveSystem } from '@/sim/saveSystem';
+import { renderSaveHubModal } from '@/ui/panels/saveHub';
 
 if (typeof window !== 'undefined') {
   (window as any).THREE = THREE;
@@ -127,7 +129,15 @@ Game.applySettings = function (ns: Partial<GameSettings>) {
 Game.save = function (quiet?: boolean) {
   if (!Game.running) return false;
   try {
-    localStorage.setItem(C.SAVE_KEY, JSON.stringify(Sim.serialize()));
+    const serialized = Sim.serialize();
+    try {
+      localStorage.setItem(C.SAVE_KEY, JSON.stringify(serialized));
+    } catch {
+      /* ignore quota errors */
+    }
+    SaveSystem.saveCity(SaveSystem.config.activeSlot || 'slot_1', Sim.name, 'manual').catch(err => {
+      console.warn('[SaveSystem] async save error:', err);
+    });
     return true;
   } catch (e) {
     if (!quiet) UI.toast('Could not save: browser storage is blocked or full.', 'bad');
@@ -136,7 +146,8 @@ Game.save = function (quiet?: boolean) {
 };
 
 Game.autosave = function () {
-  Game.save(true);
+  if (!Game.running) return;
+  SaveSystem.triggerRollingAutosave();
 };
 
 function readSave() {
@@ -257,6 +268,47 @@ function readSave() {
       }
       location.reload();
     };
+
+    SaveSystem.init();
+    SaveSystem.initDragAndDrop((city, meta) => {
+      continueSave(city);
+      UI.toast(`City "${meta.name}" loaded from file.`, 'good');
+    });
+
+    const btnOpenSaveHub = $('btnOpenSaveHub');
+    if (btnOpenSaveHub) {
+      btnOpenSaveHub.onclick = () => {
+        renderSaveHubModal(city => continueSave(city));
+      };
+    }
+
+    // Keyboard shortcuts for Quick Save (Ctrl+S / F5) and Quick Load (F9)
+    window.addEventListener('keydown', e => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (Game.running) {
+          SaveSystem.quickSave().then(() => UI.toast('Quick save completed.', 'good'));
+        }
+      } else if (e.key === 'F5') {
+        e.preventDefault();
+        if (Game.running) {
+          SaveSystem.quickSave().then(() => UI.toast('Quick save completed.', 'good'));
+        }
+      } else if (e.key === 'F9') {
+        e.preventDefault();
+        if (Game.running) {
+          SaveSystem.quickLoad().then(data => {
+            if (data) {
+              continueSave(data);
+              UI.toast('Quick save loaded.', 'good');
+            } else {
+              UI.toast('No quick save file found.', 'bad');
+            }
+          });
+        }
+      }
+    });
+
     if (auto && save && useSave) continueSave(save);
     G0.orbit = true;
     requestAnimationFrame(loop);
@@ -317,6 +369,7 @@ function readSave() {
     Sim.buildings.forEach(b => { sx += b.x; sz += b.y; n++; });
     if (n) Gfx.focus(sx / n * C.TILE, sz / n * C.TILE, 420);
   }
+  Game.loadCity = continueSave;
 
   // ------------------------------------------------------------------
   let last = performance.now(), fpsT = 0, fpsN = 0, iconT = 0;
@@ -331,6 +384,15 @@ function readSave() {
       const steps = Math.ceil(simDt / 0.1);
       const sd = simDt / steps;
       for (let k = 0; k < steps; k++) { S.step(sd); Traffic.update(sd); Transit.update(sd); }
+
+      // Periodic rolling autosave check
+      const intervalMin = SaveSystem.config.autosaveIntervalMinutes || 5;
+      if (intervalMin > 0 && Date.now() - SaveSystem.lastAutosaveTimestamp > intervalMin * 60 * 1000) {
+        SaveSystem.lastAutosaveTimestamp = Date.now();
+        SaveSystem.triggerRollingAutosave().then(meta => {
+          if (meta) UI.toast(`Autosave complete (${meta.name}).`, 'good');
+        });
+      }
     }
     if (G0.orbit) { Gx.cam.yaw += dt * 0.04; Gx.cam.tdist = 520; Gx.cam.pitch = 0.5; }
     Gx.uni.uTime.value += dt;

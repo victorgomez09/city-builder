@@ -1151,7 +1151,7 @@ M.CAR_COLORS = CAR_COLORS;
     const G = Gfx;
     M.veh = {};
     const cars = G.settings.cars;
-    const caps = { car: cars, suv: Math.ceil(cars * 0.6), van: 80, truck: Math.ceil(cars * 0.5), bus: 200, tram: 120, police: 80, ambulance: 60, fire: 60, garbage: 120, hearse: 60, train: 600, bike: Math.ceil(cars * 0.7), bike2: Math.ceil(cars * 0.7), ped: Math.ceil(cars * 0.7), ped2: Math.ceil(cars * 0.7), sit: Math.ceil(cars * 0.5), ball: 300 };
+    const caps: Record<string, number> = { car: cars, suv: Math.ceil(cars * 0.6), van: 80, truck: Math.ceil(cars * 0.5), bus: 200, tram: 120, police: 80, ambulance: 60, fire: 60, garbage: 120, hearse: 60, train: 600, bike: Math.ceil(cars * 0.7), bike2: Math.ceil(cars * 0.7), ped: Math.ceil(cars * 0.7), ped2: Math.ceil(cars * 0.7), sit: Math.ceil(cars * 0.5), ball: 300, barricade: 200 };
     const detail = G.settings.detail;
     for (const k of M.VEH_KINDS) {
       const g = (detail && vehGeomHQ(k)) || vehGeom(k === 'ped2' ? 'ped' : k === 'bike2' ? 'bike' : k);
@@ -1337,10 +1337,11 @@ M.CAR_COLORS = CAR_COLORS;
   // ======================================================================
   // Problem icons
   // ======================================================================
-  const ICONS = {
+  const ICONS: Record<string, [string, string]> = {
     road: ['#e05a3a', 'R'], noconn: ['#e05a3a', '⛔'], garbage: ['#9a7a3a', '🗑'], fire: ['#ff5a1f', '🔥'],
     aband: ['#6a6a6a', '✕'], workers: ['#e0a03a', '👷'], customers: ['#3a8ae0', '$'], sick: ['#d03a3a', '+'], noroad: ['#e05a3a', '⚠'],
     nowater: ['#0284c7', '💧'], sewage: ['#b45309', '☣'], water_polluted: ['#7c3aed', '☠'], dead: ['#475569', '⚰'],
+    strike: ['#ea580c', '✊'], riot: ['#dc2626', '🔥'], protest: ['#eab308', '📢'], barricade: ['#b91c1c', '⛔'],
   };
   function initIcons() {
     M.iconTex = {};

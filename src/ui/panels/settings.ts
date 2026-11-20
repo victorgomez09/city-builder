@@ -5,6 +5,7 @@
 import { C } from '@/core/constants';
 import { Gfx } from '@/render/gfx';
 import { Game } from '@/game';
+import { renderSaveHubModal } from '@/ui/panels/saveHub';
 import { head, bindClose, q, $$ } from '@/ui/dom';
 import { UI } from '@/ui/ui';
 
@@ -146,7 +147,15 @@ export function renderSettingsPanel(p: HTMLElement): void {
       )}
     </div>
     <div class="sub" style="font-size:12px;margin-top:6px">The vehicle limit also caps how much traffic is simulated. Lower it if the game stutters in a big city.</div>
-    <div class="sec"><div class="lbl">Game</div><div class="btns"><button class="btn" id="st_save">Save now</button><button class="btn danger" id="st_new">Start a new city</button></div><div id="st_confirm"></div></div>
+    <div class="sec">
+      <div class="lbl">Saves & Storage</div>
+      <div class="btns">
+        <button class="btn" id="st_save">Save now</button>
+        <button class="btn" id="st_hub" style="background:#2563eb;color:#fff;">📂 Save & Load Hub</button>
+        <button class="btn danger" id="st_new">Start a new city</button>
+      </div>
+      <div id="st_confirm"></div>
+    </div>
     <div class="sec"><div class="lbl">Controls</div><div class="keys">
       <kbd>W A S D</kbd><span>Move the camera (Shift for faster)</span><kbd>Q / E</kbd><span>Rotate</span><kbd>R / F</kbd><span>Zoom in and out</span><kbd>T / G</kbd><span>Tilt</span>
       <kbd>Right-drag</kbd><span>Rotate and tilt</span><kbd>Middle-drag</kbd><span>Pan</span><kbd>Wheel</kbd><span>Zoom</span>
@@ -177,6 +186,15 @@ export function renderSettingsPanel(p: HTMLElement): void {
   if (btnSave) {
     btnSave.onclick = () => {
       if (Game.save()) UI.toast('City saved.', 'good');
+    };
+  }
+
+  const btnHub = q<HTMLElement>('#st_hub', p);
+  if (btnHub) {
+    btnHub.onclick = () => {
+      renderSaveHubModal(city => {
+        if (Game.loadCity) Game.loadCity(city);
+      });
     };
   }
 

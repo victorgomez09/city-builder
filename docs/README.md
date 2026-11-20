@@ -18,6 +18,8 @@ Este compendio detalla la arquitectura de bajo nivel, el modelo matemático de s
 | **[ui-and-tools.md](file:///home/dev/projects/city-builder/docs/ui-and-tools.md)** | Sistema de herramientas de construcción (`Tools`), trazado de carreteras (recta, curva, S-bend, rejilla), dock inferior y paneles flotantes. |
 | **[districts-and-policies.md](file:///home/dev/projects/city-builder/docs/districts-and-policies.md)** | Sistema de distritos municipales, 7 especializaciones económicas, 8 políticas urbanas y modificadores en vivo (Fase 1). |
 | **[water-and-sanitation.md](file:///home/dev/projects/city-builder/docs/water-and-sanitation.md)** | Redes de agua limpia, colectores fecales, depuradoras, contaminación hidrológica, dispersión por viento dinámico y ciclo funerario (Fase 2). |
+| **[social-unrest-and-strikes.md](file:///home/dev/projects/city-builder/docs/social-unrest-and-strikes.md)** | Malestar social, huelgas de servicios esenciales, cortes por manifestaciones, barricadas 3D y convenios sindicales (Fase 3.5). |
+| **[save-system-and-desktop.md](file:///home/dev/projects/city-builder/docs/save-system-and-desktop.md)** | Persistencia multiranura híbrida (IndexedDB/Tauri), capturas 3D, autoguardado rotativo, archivos `.viracity` y empaquetado desktop (Fase 3.8). |
 | **[refactoring-strategy.md](file:///home/dev/projects/city-builder/docs/refactoring-strategy.md)** | Plan de refactorización limpia (Fase 1.5): eliminación de `@ts-nocheck`, desacoplamiento de `window.CB` y modularización. |
 
 ---

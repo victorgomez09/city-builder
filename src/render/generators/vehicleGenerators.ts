@@ -25,6 +25,7 @@ export const VEH_KINDS = [
   'ped2',
   'sit',
   'ball',
+  'barricade',
 ];
 
 export const CAR_COLORS = [
@@ -655,16 +656,19 @@ export function vehGeomHQ(kind: string, raw: boolean = false): GB | THREE.Buffer
     case 'bike2':
       bikeHQ(gb, 1);
       break;
+    case 'barricade':
+      vehGeom('barricade', true, gb);
+      break;
     default:
       return null;
   }
   return raw ? gb : gb.geometry();
 }
 
-export function vehGeom(kind: string, raw?: false): THREE.BufferGeometry | null;
-export function vehGeom(kind: string, raw: true): GB | null;
-export function vehGeom(kind: string, raw: boolean = false): GB | THREE.BufferGeometry | null {
-  const gb = new GB();
+export function vehGeom(kind: string, raw?: false, existingGb?: GB): THREE.BufferGeometry | null;
+export function vehGeom(kind: string, raw: true, existingGb?: GB): GB | null;
+export function vehGeom(kind: string, raw: boolean = false, existingGb?: GB): GB | THREE.BufferGeometry | null {
+  const gb = existingGb || new GB();
   const wheels = (xs: number[], w: number) => {
     for (const x of xs)
       for (const z of [-w, w]) gb.box(x - 0.36, 0, z - 0.14, x + 0.36, 0.7, z + 0.14, '#111', 11);
@@ -794,6 +798,24 @@ export function vehGeom(kind: string, raw: boolean = false): GB | THREE.BufferGe
       gb.box(6.88, 1.7, -1.1, 6.96, 3.0, 1.1, '#fff', 9);
       gb.box(6.9, 0.8, -1.1, 6.96, 1.1, -0.6, '#fff', 6);
       gb.box(6.9, 0.8, 0.6, 6.96, 1.1, 1.1, '#fff', 6);
+      break;
+    case 'barricade':
+      // Base wooden pallet & timber obstruction
+      gb.box(-1.8, 0, -0.6, 1.8, 0.25, 0.6, '#8b5a2b');
+      gb.box(-1.7, 0.25, -0.5, 1.7, 0.45, 0.5, '#a06a38');
+      // Hazard-striped road blockade crossbeam
+      gb.box(-1.9, 0.45, -0.15, 1.9, 0.95, 0.15, '#f59f00');
+      gb.box(-1.3, 0.46, -0.16, -0.8, 0.94, 0.16, '#212529');
+      gb.box(-0.25, 0.46, -0.16, 0.25, 0.94, 0.16, '#212529');
+      gb.box(0.8, 0.46, -0.16, 1.3, 0.94, 0.16, '#212529');
+      // Piled scrap tires
+      gb.box(-1.4, 0, 0.2, -0.6, 0.4, 0.8, '#1e1e24');
+      gb.box(-1.3, 0.38, 0.25, -0.7, 0.76, 0.75, '#2b2d42');
+      gb.box(0.6, 0, -0.7, 1.4, 0.4, -0.2, '#1e1e24');
+      // Metal barrel with burning warning flame
+      gb.box(0.7, 0, 0.15, 1.3, 0.85, 0.65, '#5c1d1d');
+      gb.box(0.8, 0.85, 0.25, 1.2, 1.2, 0.55, '#f76707', 15);
+      gb.box(0.9, 1.15, 0.35, 1.1, 1.45, 0.45, '#ffd43b', 15);
       break;
   }
   return raw ? gb : gb.geometry();

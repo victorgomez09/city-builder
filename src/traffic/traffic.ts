@@ -8,6 +8,7 @@
 import { C } from '@/core/constants';
 import { U } from '@/core/utils';
 import { World } from '@/world/world';
+import { Unrest } from '@/sim/unrest';
 import {
   JunctionCluster,
   Vehicle,
@@ -876,6 +877,25 @@ export const Traffic = {
     }
     for (let k = 0; k < ballPos.length; k += 4) {
       Mx.pushVehicle('ball', ballPos[k], ballPos[k + 3] + ballPos[k + 1], ballPos[k + 2], 1, 0, BALL_COL, 0, 1);
+    }
+    // Render dynamic street barricades from social unrest & riots
+    for (const b of Unrest.state.barricades) {
+      const bx = (b.x + 0.5) * T, bz = (b.z + 0.5) * T;
+      const by = World.roadH(bx, bz);
+      Mx.pushVehicle('barricade', bx, by + 0.05, bz, 1, 0, null, 0, 1.2, 1.0);
+    }
+    // Render marching protest crowds and picket lines
+    for (const crowd of Unrest.state.crowds) {
+      const cx = (U.tx(crowd.tile) + 0.5) * T, cz = (U.ty(crowd.tile) + 0.5) * T;
+      const numPeople = Math.min(crowd.size, 14);
+      for (let p = 0; p < numPeople; p++) {
+        const offX = (((p * 17) % 7) - 3) * 0.7;
+        const offZ = (((p * 31) % 7) - 3) * 0.7;
+        const px = cx + offX, pz = cz + offZ;
+        const py = World.roadH(px, pz) + 0.15;
+        const col = p === 0 ? [0.92, 0.2, 0.1] : p === 1 ? [0.95, 0.65, 0.1] : [0.75, 0.75, 0.8];
+        Mx.pushVehicle(p % 2 === 0 ? 'ped' : 'ped2', px, py, pz, 1, 0, col, 0, 1, 0.95);
+      }
     }
     for (const cl of World.clusters) {
       if (cl.ctrl !== 'lights') continue;
