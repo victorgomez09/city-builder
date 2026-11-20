@@ -165,8 +165,9 @@ flowchart TD
     P1["Fase 1: Distritos, Políticas y Elasticidad Fiscal ✅"] --> P15["Fase 1.5: Refactorización Arquitectónica y Código Limpio ✅"]
     P15 --> P2["Fase 2: Redes de Agua/Desagüe y Ciclo Sanitario ✅"]
     P2 --> P3["Fase 3: Cadenas de Suministro y Recursos Naturales ✅"]
-    P3 --> P4["Fase 4: Movilidad Multimodal (Metro y Tranvía)"]
-    P4 --> P5["Fase 5: Clima Dinámico, Desastres y Macro-Monumentos"]
+    P3 --> P4["Fase 4: Movilidad Multimodal, Metro y Bicis ✅"]
+    P4 --> P5["Fase 5: Demografía, Empleo, Gentrificación y Epidemias ✅"]
+    P5 --> P6["Fase 6: Clima Dinámico, Desastres y Mega-Proyectos ✅"]
 ```
 
 ### Fase 1: Distritos y Políticas Locales (¡Completada! ✅)
@@ -313,12 +314,13 @@ flowchart TD
   - Capas térmicas `'subway'` y `'micromobility'` en [src/ui/panels/views.ts](file:///home/dev/projects/city-builder/src/ui/panels/views.ts) con guías y desgloses de color.
   - Localización al 100% en los 6 idiomas del juego (`en`, `es`, `de`, `fr`, `zh`, `ja`) cumpliendo la regla de `AGENTS.md`.
 
-### Fase 5: Dinámicas Demográficas, Mercado Laboral, Gentrificación y Epidemias
-- [ ] **Pirámide Poblacional y Cohortes:** Infancia, estudiantes universitarios, fuerza laboral activa y pensionistas con demandas de servicio diferenciadas.
-- [ ] **Desajuste Laboral y Fuga de Cerebros (*Brain Drain*):** Si no hay empleo cualificado, los universitarios emigran; si la industria pesada carece de operarios, las fábricas quiebran.
-- [ ] **Gentrificación y Desplazamiento Residencial:** Inversiones cívicas elevadas disparan el valor del suelo, expulsando a rentas bajas hacia zonas periféricas.
-- [ ] **Epidemias y Salubridad Pública:** Propagación de enfermedades infecciosas por mala higiene urbana o agua contaminada, saturando hospitales y reduciendo la productividad laboral.
-- [ ] **Economía Turística y Hotelería:** Complejos de ocio, palacios de congresos y hoteles para captar visitantes foráneos.
+### Fase 5: Dinámicas Demográficas, Mercado Laboral, Gentrificación y Epidemias (¡Completada! ✅)
+- [x] **Pirámide Poblacional y Cohortes:** 4 cohortes discretas (`children`, `students`, `workforce`, `seniors`), esperanza de vida dinámica (60-88 años modulada por sanidad, pureza de agua y polución) y tasa de fertilidad variable en [src/sim/demographics.ts](file:///home/dev/projects/city-builder/src/sim/demographics.ts).
+- [x] **Desajuste Laboral y Fuga de Cerebros (*Brain Drain*):** Clasificación del mercado en trabajadores cualificados (titulados universitarios) y no cualificados, emparejamiento con vacantes en oficinas, sanidad, industria y comercio, cálculo del índice de desajuste laboral `laborMismatchIndex` y emigración mensual de titulados (`brainDrainRate`) ante falta de puestos técnicos.
+- [x] **Gentrificación y Desplazamiento Residencial:** Detección de casitas bajas (`rlow`) en suelo de alto valor ($\text{lv} > 66$), demolición y reconversión forzosa en bloques de apartamentos (`rapt`), desahucio de inquilinos vulnerables (`displacedCitizens`) con repunte de malestar social, y blindaje mediante la ordenanza de control de alquileres (`rentControl`).
+- [x] **Epidemias y Salubridad Pública:** Modelo epidemiológico SIR con contagio vial acelerado por agua contaminada, acumulación de basuras o polución atmosférica, control de camas hospitalarias saturables (`hospitalOccupancy`) y tres directivas de emergencia sanitaria (Desinfección Municipal Masiva, Vacunación de Emergencia y Cuarentena Sanitaria Dirigida).
+- [x] **Economía Turística y Hotelería:** Nuevos servicios de hostelería con generadores 3D dedicados (Gran Hotel de Lujo `hotel_grand`, Centro Internacional de Convenciones `convention_center` y Resort de Ocio y Parque Acuático `resort_leisure`) en [src/render/generators/buildingGenerators.ts](file:///home/dev/projects/city-builder/src/render/generators/buildingGenerators.ts), cálculo de afluencia turística mensual (`touristCount`) y ratio de ocupación hotelera (`hotelOccupancy`).
+- [x] **Centro de Mando Demográfico y Vistas GPU:** Panel interactivo en [src/ui/panels/demographics.ts](file:///home/dev/projects/city-builder/src/ui/panels/demographics.ts) en el hub Civic con visualización gráfica de pirámide poblacional, capas GPU de infovisión `'epidemic'` y `'gentrification'` en [src/ui/panels/views.ts](file:///home/dev/projects/city-builder/src/ui/panels/views.ts) y localización 100% multilingüe en los 6 idiomas (`en`, `es`, `de`, `fr`, `zh`, `ja`).
 
 ### Fase 6: Eventos de Emergencia, Clima Dinámico y Mega-Edificios (¡Completada! ✅)
 - [x] **Viento dinámico y sistema de partículas climáticas 3D en GPU:** Emisor `THREE.Points` (3.000 partículas en buffer plano) con caída y deriva angular por vector de viento ($\vec{v} = v_{\text{wind}} \cdot (\cos\theta, \sin\theta)$), lluvia, nieve, olas de calor (+35% demanda hídrica y eléctrica), olas de frío polar, relámpagos con destellos y truenos en Web Audio en [src/render/gfx.ts](file:///home/dev/projects/city-builder/src/render/gfx.ts) y [src/sim/weather.ts](file:///home/dev/projects/city-builder/src/sim/weather.ts).

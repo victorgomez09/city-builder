@@ -4,12 +4,13 @@ import { I18n } from '../i18n';
 import { World } from '../world/world';
 import { Traffic } from '../traffic/traffic';
 import { Transit } from '../transit/transit';
-import { Building, Vehicle, Milestone, TaxRates, BuildingSpec, ServiceLotResult, SimIcon, SimNotice, SerializedCity, SupplyChainStats, SimStats, WindState, StrikesState, WeatherState, BankruptcyState } from '../types';
+import { Building, Vehicle, Milestone, TaxRates, BuildingSpec, ServiceLotResult, SimIcon, SimNotice, SerializedCity, SupplyChainStats, SimStats, WindState, StrikesState, WeatherState, BankruptcyState, DemographicsState } from '../types';
 import { LoanItem } from './budget';
 import { COV_KEYS, computeCoverage as runComputeCoverage, computeWaterNear } from './coverage';
 import { Water } from './waterNet';
 import { Unrest } from './unrest';
 import { WeatherSystem } from './weather';
+import { DemographicsSystem } from './demographics';
 import {
   blankBudget,
   hourlyEconomy as runHourlyEconomy,
@@ -1587,6 +1588,10 @@ export const Sim = {
     return WeatherSystem.state;
   },
 
+  get demographics(): DemographicsState {
+    return DemographicsSystem.state;
+  },
+
   acceptBailout() {
     Sim.money += 50000;
     Sim.bankruptcy.inDefault = true;
@@ -1653,6 +1658,7 @@ export const Sim = {
     Water.init();
     Unrest.init();
     WeatherSystem.init();
+    DemographicsSystem.init();
     Sim.bankruptcy = {
       inWarning: false,
       warningDaysLeft: 10,
@@ -2189,6 +2195,7 @@ export const Sim = {
     });
 
     generateTrips(dtH);
+    DemographicsSystem.step(dtS);
     Sim.tickAcc += dtS;
     if (Sim.tickAcc >= 0.25) {
       Sim.tickAcc = 0;
@@ -2219,6 +2226,8 @@ export const Sim = {
       Sim.stats.activeStrikes = (Object.keys(Unrest.state.strikes) as (keyof StrikesState)[]).filter(k => Unrest.state.strikes[k]);
       dispatchServices();
       computeCoverage();
+      DemographicsSystem.hourlyTick();
+      Sim.stats.demographics = DemographicsSystem.state;
       if (Sim.rng() < 0.06 && Sim.hour > 7 && Sim.hour < 22) chirp();
     }
     Sim.dayAcc = (Sim.dayAcc || 0) + dtS;
@@ -2226,6 +2235,7 @@ export const Sim = {
       Sim.dayAcc -= 24;
       Sim.month++;
       monthly();
+      DemographicsSystem.monthlyTick();
 
       // Daily bankruptcy check
       if (Sim.bankruptcy.inWarning && !Sim.bankruptcy.inDefault) {
@@ -2396,6 +2406,27 @@ export const Sim = {
           }
           if (World.pmask[i]) return [0.95, 0.65, 0.15, 0.75];
           return null;
+        };
+      case 'epidemic':
+        return i => {
+          if (!play(i)) return null;
+          const bid = World.bld ? World.bld[i] : 0;
+          if (bid) {
+            const b = Sim.buildings.get(bid);
+            if (b && (b.sick || 0) > 0) return [0.95, 0.15, 0.15, Math.min(1, 0.5 + (b.sick || 0) * 0.2)];
+          }
+          return null;
+        };
+      case 'gentrification':
+        return i => {
+          if (!play(i)) return null;
+          const bid = World.bld ? World.bld[i] : 0;
+          if (bid) {
+            const b = Sim.buildings.get(bid);
+            if (b && b.gentrified) return [0.75, 0.25, 0.95, 0.85];
+          }
+          const lv = cv?.lv ? cv.lv[i] : 0;
+          return lv > 60 ? [0.95, 0.85, 0.25, (lv - 60) / 40 * 0.6] : null;
         };
       default:
         return i => (play(i) && cv[key] ? ramp(Math.min(1, cv[key][i])) : null);

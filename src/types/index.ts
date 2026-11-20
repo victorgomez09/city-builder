@@ -253,6 +253,9 @@ export interface Building {
   transit?: number;
   cust?: number;
   custRatio?: number;
+  skilledJobs?: number;
+  unskilledJobs?: number;
+  gentrified?: boolean;
   abandT?: number;
   buildT?: number;
   st?: number;
@@ -653,6 +656,37 @@ export interface BankruptcyState {
   totalBailoutReceived: number;
 }
 
+export interface DemographicsState {
+  children: number;
+  students: number;
+  workforce: number;
+  seniors: number;
+  fertilityRate: number;
+  lifeExpectancy: number;
+  unskilledWorkers: number;
+  skilledWorkers: number;
+  unskilledJobs: number;
+  skilledJobs: number;
+  laborMismatchIndex: number;
+  brainDrainRate: number;
+  brainDrainActive: boolean;
+  displacedCitizens: number;
+  gentrificationIndex: number;
+  infectedCitizens: number;
+  hospitalCapacity: number;
+  hospitalOccupancy: number;
+  quarantineActive: boolean;
+  vaccinationActive: boolean;
+  sanitationBlitzActive: boolean;
+  quarantineTimer: number;
+  vaccinationTimer: number;
+  sanitationTimer: number;
+  touristCount: number;
+  touristSpendMonthly: number;
+  hotelCapacity: number;
+  hotelOccupancy: number;
+}
+
 export interface ToolState {
   type: string;
   road?: number;
@@ -698,6 +732,7 @@ export interface DistrictPolicies {
   freeTransit?: boolean;
   bikeCity?: boolean;
   localBusinessTaxRelief?: boolean;
+  rentControl?: boolean;
 }
 
 export interface DistrictStats {
@@ -794,6 +829,7 @@ export interface SimStats {
   unrest?: number;
   unrestLevel?: UnrestLevel;
   activeStrikes?: string[];
+  demographics?: DemographicsState;
 }
 
 export interface Loan {
@@ -1037,6 +1073,7 @@ export interface SerializedCity {
   weather?: WeatherState;
   disasters?: DisasterIncident[];
   bankruptcy?: BankruptcyState;
+  demographics?: DemographicsState;
   [key: string]: unknown;
 }
 

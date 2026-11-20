@@ -64,6 +64,7 @@ export const C = {
     ['police', 'Police'],
     ['fire', 'Fire'],
     ['edu', 'Education'],
+    ['tourism', 'Tourism & Hospitality'],
   ] as [string, string][],
 
   PIPE_WATER_COST: 15,
@@ -247,6 +248,9 @@ C.SERVICES = {
   bikeshare: SV({ name: 'Bike-Sharing Station', cat: 'transit', tab: 'micro', size: [1, 1], cost: 650, upkeep: 25, radius: 14, cov: 'park', unlock: 1, desc: 'Public bike rental dock that boosts local cycling commute share and active mobility.' }),
   park_and_ride: SV({ name: 'Park & Ride Terminal', cat: 'transit', tab: 'hub', size: [2, 2], cost: 4200, upkeep: 90, radius: 24, cov: 'transit', unlock: 4, desc: 'Suburban commuter lot allowing car drivers to park and transfer smoothly to mass transit.' }),
   ped_plaza: SV({ name: 'Civic Pedestrian Plaza', cat: 'transit', tab: 'micro', size: [2, 2], cost: 2200, upkeep: 45, radius: 12, cov: 'park', unlock: 2, desc: 'Paved car-free urban square with greenery, boosting foot traffic, walking share, and shop visits.' }),
+  hotel_grand: SV({ name: 'Grand Luxury Hotel', cat: 'services', tab: 'tourism', size: [3, 3], cost: 45000, upkeep: 750, radius: 26, unlock: 4, desc: '5-star neoclassical grand hotel for affluent tourists and business visitors. Injects commercial spending into local shops.' }),
+  convention_center: SV({ name: 'International Convention Center', cat: 'services', tab: 'tourism', size: [4, 3], cost: 85000, upkeep: 1300, radius: 36, unlock: 6, desc: 'Major multi-hall exposition and congress palace. Draws high-yield business travelers and stimulates office sector demand.' }),
+  resort_leisure: SV({ name: 'Leisure & Waterpark Resort', cat: 'services', tab: 'tourism', size: [4, 4], cost: 65000, upkeep: 1100, radius: 32, unlock: 5, desc: 'Extensive family vacation resort with tropical lagoons, water slides, and recreational amenities.' }),
 };
 
 const PARKS: [string, string, string, number, number, number, number, number, number][] = [

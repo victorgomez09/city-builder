@@ -36,6 +36,8 @@ export const VIEWS: [string | null, string, string][] = [
   ['unrest', 'Social Unrest', 'linear-gradient(90deg,#22c55e,#eab308,#ea580c,#dc2626)'],
   ['subway', 'Subway & Underground', 'linear-gradient(90deg,#6366f1,#8b5cf6,#a855f7)'],
   ['micromobility', 'Micro-Mobility & Cycling', 'linear-gradient(90deg,#10b981,#06b6d4,#3b82f6)'],
+  ['epidemic', 'Epidemic & Health Risk', 'linear-gradient(90deg,#10b981,#eab308,#ef4444,#7f1d1d)'],
+  ['gentrification', 'Gentrification Pressure', 'linear-gradient(90deg,#3b82f6,#a855f7,#ec4899,#b91c1c)'],
 ];
 
 export interface ViewGuideColor {
@@ -458,6 +460,66 @@ export const VIEW_GUIDES: Record<string, ViewGuide> = {
     tips: [
       'Placing Bike-Sharing Stations near metro and tram stops allows citizens to use bicycles as first/last-mile transit feeders.',
       'The "Encourage Biking" municipal policy combined with protected bike lanes cuts private car usage by up to 35%.',
+    ],
+  },
+  epidemic: {
+    title: 'Epidemic & Infection Risk',
+    desc: 'Visualizes contagious disease vectors, active sick clusters, and epidemiological outbreak risk along road connections.',
+    colors: [
+      {
+        color: '#10b981',
+        name: 'Safe & Sanitary (Emerald)',
+        desc: 'Clean water, regular waste collection, and high hospital coverage keep viral transmission negligible.',
+      },
+      {
+        color: '#eab308',
+        name: 'Elevated Vector Risk (Yellow)',
+        desc: 'Uncollected garbage, smog, or polluted water creating favorable conditions for viral incubation.',
+      },
+      {
+        color: '#ef4444',
+        name: 'Active Contagion Outbreak (Red)',
+        desc: 'Symptomatic cases spreading through neighboring homes and commercial hubs.',
+      },
+      {
+        color: '#7f1d1d',
+        name: 'Critical Cluster (Crimson)',
+        desc: 'Severe hospital bed deficit and rapid infection rate; requires emergency quarantine or vaccination.',
+      },
+    ],
+    tips: [
+      'Maintain 100% clean water treatment and garbage pickup to prevent secondary pathogen vectors.',
+      'Deploy the Emergency Vaccination Drive or Quarantine directives in Demographics to suppress outbreaks.',
+    ],
+  },
+  gentrification: {
+    title: 'Gentrification & Displacement',
+    desc: 'Tracks real-estate rent pressure where soaring land values threaten low-density residential cottages with forced redevelopment.',
+    colors: [
+      {
+        color: '#3b82f6',
+        name: 'Stable / Rent Controlled (Blue)',
+        desc: 'Protected by district rent control ordinances or low speculative land pressure.',
+      },
+      {
+        color: '#a855f7',
+        name: 'Rising Market Squeeze (Purple)',
+        desc: 'Surrounding land values increasing beyond affordable levels for low-income residents.',
+      },
+      {
+        color: '#ec4899',
+        name: 'Severe Displacement Pressure (Pink)',
+        desc: 'High rent inflation forcing low-income tenants out of low-density dwellings.',
+      },
+      {
+        color: '#b91c1c',
+        name: 'Demolition & Redevelopment (Dark Red)',
+        desc: 'Cottages replaced with high-yield apartment complexes, sparking social unrest.',
+      },
+    ],
+    tips: [
+      'Enact the Rent Control ordinance in vulnerable residential districts to stop forced displacement.',
+      'Balance luxury parks and amenities with mixed-income social housing to stabilize neighborhood turnover.',
     ],
   },
 };

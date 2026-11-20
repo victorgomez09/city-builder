@@ -9,6 +9,7 @@ import { Building, SerializedCity, BudgetLedger, BudgetState, BudgetReport } fro
 import { blankBudget, LoanItem } from './budget';
 import { Unrest } from './unrest';
 import { WeatherSystem } from './weather';
+import { DemographicsSystem } from './demographics';
 
 const N = C.W * C.W;
 
@@ -122,6 +123,7 @@ export function serializeCity(sim: SimSerializationHost): SerializedCity {
     weather: WeatherSystem.serialize(),
     disasters: WeatherSystem.incidents,
     bankruptcy: (sim as any).bankruptcy,
+    demographics: DemographicsSystem.serialize(),
   } as any;
 }
 
@@ -224,6 +226,7 @@ export function loadCity(
   }
 
   WeatherSystem.init(d.weather, d.disasters);
+  DemographicsSystem.init(d.demographics);
   (sim as any).bankruptcy = d.bankruptcy || {
     inWarning: false,
     warningDaysLeft: 10,

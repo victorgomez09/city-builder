@@ -38,6 +38,7 @@ import { renderSettingsPanel, openSettingsModal, closeSettingsModal } from '@/ui
 import { renderSupplyPanel, updSupply } from '@/ui/panels/supply';
 import { renderUnrestPanel, updUnrest } from '@/ui/panels/unrest';
 import { renderWeatherPanel } from '@/ui/panels/weather';
+import { renderDemographicsPanel } from '@/ui/panels/demographics';
 
 import { CATS, catItems, MenuItem, refreshBadges, idOf } from '@/ui/catalog';
 import { openJunction, setJunctionCtrl } from '@/ui/panels/junction';
@@ -640,12 +641,14 @@ const PANELS: Record<string, (p: HTMLElement) => void> = {
   settings: renderSettingsPanel,
   unrest: renderUnrestPanel,
   weather: renderWeatherPanel,
+  demographics: renderDemographicsPanel,
 };
 
 const PANEL_HUBS: Record<string, string> = {
   unrest: 'civic',
   districts: 'civic',
   transit: 'civic',
+  demographics: 'civic',
   budget: 'economy',
   supply: 'economy',
   views: 'insights',
@@ -842,6 +845,7 @@ UI.update = function () {
     else if (UI.panel === 'stats' && tick % 4 === 0) updStats(sp);
     else if (UI.panel === 'districts' && tick % 4 === 0) updDistricts(sp);
     else if (UI.panel === 'unrest' && tick % 4 === 0) updUnrest(sp);
+    else if (UI.panel === 'demographics' && tick % 4 === 0) renderDemographicsPanel(sp);
   }
   if (UI.overlay && tick % 4 === 0) refreshOverlay();
   if (tick % 2 === 0) {

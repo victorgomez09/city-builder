@@ -1157,6 +1157,106 @@ export const SGEN: Record<string, any> = {};
     }
   };
 
+  SGEN.hotel_grand = function (gb, b, r, LW, LD) {
+    foundation(gb, LW, LD, b, '#e2e8f0');
+    gb.flat(2, 2, LW - 2, LD - 2, 0.2, '#cbd5e1');
+
+    // Central 7-story Grand Palace Hotel
+    const hx0 = 8, hx1 = LW - 8, hz0 = 10, hz1 = LD - 8;
+    gb.box(hx0, 0.2, hz0, hx1, 24, hz1, '#f8fafc');
+
+    // Stepped corner pavilion wings
+    gb.box(hx0 - 2, 0.2, hz0 - 2, hx0 + 8, 26, hz0 + 8, '#f1f5f9');
+    gb.box(hx1 - 8, 0.2, hz0 - 2, hx1 + 2, 26, hz0 + 8, '#f1f5f9');
+
+    // Mansard copper roof
+    gb.box(hx0, 24, hz0, hx1, 28, hz1, '#334155');
+
+    // Rooftop penthouse pool & sky lounge
+    const px0 = 16, px1 = LW - 16, pz0 = 14, pz1 = LD - 14;
+    gb.box(px0, 28, pz0, px1, 29.5, pz1, '#64748b');
+    gb.flat(px0 + 2, pz0 + 2, px1 - 2, pz1 - 2, 29.6, '#0284c7'); // infinity pool surface
+
+    // Grand Entrance Porte-Cochere
+    const cx = LW / 2;
+    gb.box(cx - 6, 0.2, 4, cx + 6, 4.5, hz0, '#facc15', 9);
+    gb.cyl(cx - 5, 0.2, 5, 0.4, 4.3, 8, '#e2e8f0');
+    gb.cyl(cx + 5, 0.2, 5, 0.4, 4.3, 8, '#e2e8f0');
+
+    // Rows of hotel suite windows with evening ambient glow
+    for (let fl = 1; fl <= 5; fl++) {
+      const y = fl * 4 + 1;
+      for (let w = 0; w < 4; w++) {
+        const wx = hx0 + 4 + w * 7;
+        gb.box(wx, y, hz0 - 0.1, wx + 3.5, y + 2.5, hz0 + 0.1, '#fef08a', 9);
+      }
+    }
+
+    // Landscaping palm/conifer trees in forecourt
+    yardTree(gb, 6, 6, r);
+    yardTree(gb, LW - 6, 6, r);
+  };
+
+  SGEN.convention_center = function (gb, b, r, LW, LD) {
+    foundation(gb, LW, LD, b, '#cbd5e1');
+    gb.flat(2, 2, LW - 2, LD - 2, 0.15, '#e2e8f0');
+
+    // Sweeping modernist exposition concourse
+    const cx0 = 6, cx1 = LW - 6, cz0 = 8, cz1 = LD - 8;
+    gb.box(cx0, 0.2, cz0, cx1, 14, cz1, '#f8fafc');
+
+    // Slanted blue glass curtain walls
+    gb.box(cx0 - 0.2, 1.5, cz0 - 0.2, cx1 + 0.2, 12.5, cz0 + 0.6, '#0284c7', 9);
+
+    // Aerodynamic wave roof canopy in titanium white
+    gb.box(cx0 - 2, 14, cz0 - 2, cx1 + 2, 16.5, cz1 + 2, '#f1f5f9');
+    // Rooftop structural steel trusses
+    for (let tx = cx0; tx <= cx1; tx += 8) {
+      gb.box(tx - 0.3, 16.5, cz0 - 1, tx + 0.3, 18.5, cz1 + 1, '#64748b');
+    }
+
+    // Front plaza monumental sculpture
+    const fx = LW / 2;
+    gb.cyl(fx, 0.2, 4, 1.8, 0.6, 8, '#334155');
+    gb.cyl(fx, 0.8, 4, 0.5, 4.5, 6, '#38bdf8', 9);
+    gb.box(fx - 1.2, 4, 3.8, fx + 1.2, 5.2, 4.2, '#facc15');
+
+    // Plaza trees
+    yardTree(gb, 4, 4, r);
+    yardTree(gb, LW - 4, 4, r);
+  };
+
+  SGEN.resort_leisure = function (gb, b, r, LW, LD) {
+    foundation(gb, LW, LD, b, '#fde68a');
+    gb.flat(2, 2, LW - 2, LD - 2, 0.15, '#fef08a');
+
+    // Main central hotel lodge with wrap-around balconies
+    gb.box(6, 0.2, 6, 32, 15, 30, '#fef3c7');
+    gb.box(4, 15, 4, 34, 17.5, 32, '#b45309'); // thatched timber roof
+
+    // Resort swimming lagoon pool
+    const px0 = 32, px1 = LW - 6, pz0 = 8, pz1 = LD - 10;
+    gb.box(px0, 0.1, pz0, px1, 0.7, pz1, '#e2e8f0'); // pool coping
+    gb.flat(px0 + 1.5, pz0 + 1.5, px1 - 1.5, pz1 - 1.5, 0.65, '#06b6d4'); // lagoon pool water
+
+    // Spiral water slide tower
+    const sx = LW - 12, sz = 14;
+    gb.box(sx - 2, 0.2, sz - 2, sx + 2, 12, sz + 2, '#78350f'); // wooden slide platform
+    // Curved yellow and orange slide flume chutes
+    gb.cyl(sx - 5, 6, sz + 6, 1.4, 0.8, 8, '#f97316');
+    gb.cyl(sx - 10, 2, sz + 10, 1.4, 0.8, 8, '#eab308');
+
+    // Outdoor Tiki Bar
+    const bx = 16, bz = 44;
+    gb.cyl(bx, 0.2, bz, 3.5, 2.5, 8, '#78350f');
+    gb.cyl(bx, 2.5, bz, 4.5, 1.5, 8, '#a16207'); // thatched canopy
+
+    // Tropical landscaping
+    for (const [tx, tz] of [[40, 50], [52, 48], [10, 52], [54, 28]]) {
+      yardTree(gb, tx, tz, r);
+    }
+  };
+
   SGEN.plaza = function (gb, b, r, LW, LD) {
     foundation(gb, LW, LD, b, '#c9c0ae');
     gb.cyl(10, 0, 10, 4, 0.7, 14, '#b7b0a2', 0, '#1d6f8a');
