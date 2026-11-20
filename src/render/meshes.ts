@@ -597,6 +597,165 @@ M.CAR_COLORS = CAR_COLORS;
     }
   }
 
+  function genPipeTile(gb: any, i: number) {
+    const Wd = World;
+    if (!Wd.road[i]) return;
+    const hasClean = Wd.waterPipe && Wd.waterPipe[i] > 0;
+    const hasSewage = Wd.sewagePipe && Wd.sewagePipe[i] > 0;
+    if (!hasClean && !hasSewage) return;
+
+    const x = U.tx(i), y = U.ty(i);
+    const X0 = x * T, Z0 = y * T;
+    const cx = X0 + T * 0.5;
+    const cz = Z0 + T * 0.5;
+
+    // Height function that guarantees exact, identical elevation at shared tile boundaries
+    const pipeH = (wx: number, wz: number): number => {
+      const tx = Math.max(0, Math.min(W - 1, Math.floor(wx / T)));
+      const ty = Math.max(0, Math.min(W - 1, Math.floor(wz / T)));
+      const ti = U.idx(tx, ty);
+      const bridge = Wd.isWater(ti);
+      const gh = bridge ? Wd.BRIDGE_H : Math.max(Wd.groundH(wx, wz), C.WATER + 0.3);
+      return gh + 0.35;
+    };
+
+    const DX = [0, 1, 0, -1];
+    const DY = [-1, 0, 1, 0];
+    const cleanConn = [false, false, false, false];
+    const sewageConn = [false, false, false, false];
+    let cleanDeg = 0, sewageDeg = 0;
+
+    for (let d = 0; d < 4; d++) {
+      const nx = x + DX[d], ny = y + DY[d];
+      if (U.inWorld(nx, ny)) {
+        const ni = U.idx(nx, ny);
+        if (Wd.road[ni]) {
+          if (hasClean && Wd.waterPipe && Wd.waterPipe[ni] > 0) {
+            cleanConn[d] = true;
+            cleanDeg++;
+          }
+          if (hasSewage && Wd.sewagePipe && Wd.sewagePipe[ni] > 0) {
+            sewageConn[d] = true;
+            sewageDeg++;
+          }
+        }
+      }
+    }
+
+    const renderPipe = (
+      isSewage: boolean,
+      conn: boolean[],
+      deg: number,
+      lat: number
+    ) => {
+      const r = isSewage ? 0.22 : 0.18;
+      const rJoint = r * 1.45;
+      const rFlange = r * 1.68;
+      const mainCol = isSewage ? '#d97706' : '#0284c7';
+      const jointCol = isSewage ? '#9a3412' : '#0369a1';
+      const bandCol = isSewage ? '#475569' : '#cbd5e1';
+      const seg = 8;
+
+      const rd = Wd.rdir[i] || 0;
+      const isRoadNS = rd === 0 || rd === 2 || (Wd.roadMask(i) & 5) !== 0;
+
+      // Center anchor point for this pipe system inside tile i
+      let px = cx, pz = cz;
+      const hasNS = conn[0] || conn[2];
+      const hasEW = conn[1] || conn[3];
+
+      if (deg === 0) {
+        if (isRoadNS) px += lat;
+        else pz += lat;
+      } else {
+        if (hasNS) px += lat;
+        if (hasEW) pz += lat;
+      }
+
+      const py = pipeH(px, pz);
+      const Pcenter: [number, number, number] = [px, py, pz];
+
+      // Handle isolated tile (no pipe neighbors)
+      if (deg === 0) {
+        const B0: [number, number, number] = isRoadNS
+          ? [px, pipeH(px, Z0), Z0]
+          : [X0, pipeH(X0, pz), pz];
+        const B1: [number, number, number] = isRoadNS
+          ? [px, pipeH(px, Z0 + T), Z0 + T]
+          : [X0 + T, pipeH(X0 + T, pz), pz];
+
+        gb.tube(B0, B1, r, seg, mainCol, 0, true);
+        const M0: [number, number, number] = [
+          (B0[0] + B1[0]) * 0.5 - (isRoadNS ? 0 : 0.3),
+          (B0[1] + B1[1]) * 0.5,
+          (B0[2] + B1[2]) * 0.5 - (isRoadNS ? 0.3 : 0),
+        ];
+        const M1: [number, number, number] = [
+          (B0[0] + B1[0]) * 0.5 + (isRoadNS ? 0 : 0.3),
+          (B0[1] + B1[1]) * 0.5,
+          (B0[2] + B1[2]) * 0.5 + (isRoadNS ? 0.3 : 0),
+        ];
+        gb.tube(M0, M1, rJoint, seg, jointCol);
+        return;
+      }
+
+      // Boundary targets in 4 directions that match neighboring tiles exactly:
+      // d = 0: North (Z = Z0)
+      // d = 1: East (X = X0 + T)
+      // d = 2: South (Z = Z0 + T)
+      // d = 3: West (X = X0)
+      const bounds: [number, number, number][] = [
+        [px, pipeH(px, Z0), Z0],
+        [X0 + T, pipeH(X0 + T, pz), pz],
+        [px, pipeH(px, Z0 + T), Z0 + T],
+        [X0, pipeH(X0, pz), pz],
+      ];
+
+      // Draw each active connected branch from Pcenter out to boundary Bd
+      for (let d = 0; d < 4; d++) {
+        if (!conn[d]) continue;
+        const Bd = bounds[d];
+
+        // Main cylindrical tube
+        gb.tube(Pcenter, Bd, r, seg, mainCol);
+
+        // Interpolation helper along the branch
+        const lerpPt = (t: number): [number, number, number] => [
+          Pcenter[0] + t * (Bd[0] - Pcenter[0]),
+          Pcenter[1] + t * (Bd[1] - Pcenter[1]),
+          Pcenter[2] + t * (Bd[2] - Pcenter[2]),
+        ];
+
+        // 1. Mid-segment coupling collar
+        gb.tube(lerpPt(0.42), lerpPt(0.58), rJoint, seg, jointCol);
+        gb.tube(lerpPt(0.47), lerpPt(0.53), rFlange, seg, bandCol);
+
+        // 2. Boundary coupling collar at the tile edge (forms a unified double-joint with neighbor)
+        gb.tube(lerpPt(0.88), Bd, rJoint, seg, jointCol);
+        gb.tube(lerpPt(0.91), lerpPt(0.97), rFlange, seg, bandCol);
+      }
+
+      // Center fitting hub at intersection / turn / dead-end
+      const isCorner = (conn[0] && conn[1]) || (conn[0] && conn[3]) || (conn[2] && conn[1]) || (conn[2] && conn[3]);
+      if (deg !== 2 || isCorner) {
+        gb.box(
+          px - rJoint * 1.15, py - rJoint * 1.15, pz - rJoint * 1.15,
+          px + rJoint * 1.15, py + rJoint * 1.15, pz + rJoint * 1.15,
+          jointCol
+        );
+        gb.box(
+          px - rFlange * 1.05, py - rFlange * 1.05, pz - rFlange * 1.05,
+          px + rFlange * 1.05, py + rFlange * 1.05, pz + rFlange * 1.05,
+          bandCol
+        );
+      }
+    };
+
+    // Clean water is consistently offset to the left (-0.7m), sewage to the right (+0.7m)
+    if (hasClean) renderPipe(false, cleanConn, cleanDeg, -0.7);
+    if (hasSewage) renderPipe(true, sewageConn, sewageDeg, 0.7);
+  }
+
   // ======================================================================
   // Chunks
   // ======================================================================
@@ -606,7 +765,7 @@ M.CAR_COLORS = CAR_COLORS;
     const G = Gfx;
     M.root = new THREE.Group(); G.scene.add(M.root);
     for (let cy = 0; cy < CW; cy++) for (let cx = 0; cx < CW; cx++) {
-      M.chunks.push({ cx, cy, infra: null, bld: null, infraDirty: true, bldDirty: true, ids: new Set() });
+      M.chunks.push({ cx, cy, infra: null, pipe: null, bld: null, infraDirty: true, bldDirty: true, ids: new Set() });
     }
     M.cons = new Map();
     initTrees(); initLamps(); initVehicles(); initGhosts(); initIcons(); initSignals();
@@ -735,16 +894,27 @@ M.CAR_COLORS = CAR_COLORS;
   function setChunkMesh(ch, key, gb, shadow) {
     const G = Gfx;
     const old = ch[key];
-    if (old) { M.root.remove(old); old.geometry.dispose(); G.cityMeshes.delete(old); ch[key] = null; }
+    if (old) {
+      M.root.remove(old);
+      old.geometry.dispose();
+      if (key !== 'pipe') G.cityMeshes.delete(old);
+      ch[key] = null;
+    }
     if (gb.count === 0) return;
-    const mesh = new THREE.Mesh(gb.geometry(), G.mats.city);
+    const mat = key === 'pipe' ? (G.mats.pipe || G.mats.city) : G.mats.city;
+    const mesh = new THREE.Mesh(gb.geometry(), mat);
     mesh.castShadow = shadow; mesh.receiveShadow = true;
-    G.cityMeshes.add(mesh);
+    if (key === 'pipe') {
+      mesh.renderOrder = 15;
+      mesh.visible = M.pipeVisible !== false;
+    } else {
+      G.cityMeshes.add(mesh);
+    }
     M.root.add(mesh);
     ch[key] = mesh;
   }
   function buildInfra(ch) {
-    const Wd = World, gb = new GB();
+    const Wd = World, gb = new GB(), gbPipe = new GB();
     const x0 = ch.cx * CS, y0 = ch.cy * CS;
     let elev = false;
     for (let y = y0; y < Math.min(W, y0 + CS); y++) for (let x = x0; x < Math.min(W, x0 + CS); x++) {
@@ -752,13 +922,25 @@ M.CAR_COLORS = CAR_COLORS;
       if (Wd.road[i]) genRoadTile(gb, i);
       if (Wd.pmask[i]) genPathTile(gb, i);
       if (Wd.rail[i] === 1) { genRailTile(gb, i); elev = true; }
+      if (Wd.waterPipe && (Wd.waterPipe[i] || Wd.sewagePipe[i])) {
+        genPipeTile(gbPipe, i);
+      }
     }
     if (Transit) for (const s of Transit.stops) {
       const sx = U.tx(s.tile), sy = U.ty(s.tile);
       if (sx >= x0 && sx < x0 + CS && sy >= y0 && sy < y0 + CS) { genStop(gb, s); elev = true; }
     }
     setChunkMesh(ch, 'infra', gb, elev);
+    setChunkMesh(ch, 'pipe', gbPipe, false);
   }
+  M.pipeVisible = false;
+  M.setPipeVisibility = function (v: boolean) {
+    M.pipeVisible = v;
+    if (!M.chunks) return;
+    for (const ch of M.chunks) {
+      if (ch.pipe) ch.pipe.visible = v;
+    }
+  };
   function buildBld(ch) {
     const gb = new GB();
     const S = Sim;
@@ -969,7 +1151,7 @@ M.CAR_COLORS = CAR_COLORS;
     const G = Gfx;
     M.veh = {};
     const cars = G.settings.cars;
-    const caps = { car: cars, suv: Math.ceil(cars * 0.6), van: 80, truck: Math.ceil(cars * 0.5), bus: 200, tram: 120, police: 80, ambulance: 60, fire: 60, garbage: 120, train: 600, bike: Math.ceil(cars * 0.7), bike2: Math.ceil(cars * 0.7), ped: Math.ceil(cars * 0.7), ped2: Math.ceil(cars * 0.7), sit: Math.ceil(cars * 0.5), ball: 300 };
+    const caps = { car: cars, suv: Math.ceil(cars * 0.6), van: 80, truck: Math.ceil(cars * 0.5), bus: 200, tram: 120, police: 80, ambulance: 60, fire: 60, garbage: 120, hearse: 60, train: 600, bike: Math.ceil(cars * 0.7), bike2: Math.ceil(cars * 0.7), ped: Math.ceil(cars * 0.7), ped2: Math.ceil(cars * 0.7), sit: Math.ceil(cars * 0.5), ball: 300 };
     const detail = G.settings.detail;
     for (const k of M.VEH_KINDS) {
       const g = (detail && vehGeomHQ(k)) || vehGeom(k === 'ped2' ? 'ped' : k === 'bike2' ? 'bike' : k);
@@ -1158,6 +1340,7 @@ M.CAR_COLORS = CAR_COLORS;
   const ICONS = {
     road: ['#e05a3a', 'R'], noconn: ['#e05a3a', '⛔'], garbage: ['#9a7a3a', '🗑'], fire: ['#ff5a1f', '🔥'],
     aband: ['#6a6a6a', '✕'], workers: ['#e0a03a', '👷'], customers: ['#3a8ae0', '$'], sick: ['#d03a3a', '+'], noroad: ['#e05a3a', '⚠'],
+    nowater: ['#0284c7', '💧'], sewage: ['#b45309', '☣'], water_polluted: ['#7c3aed', '☠'], dead: ['#475569', '⚰'],
   };
   function initIcons() {
     M.iconTex = {};

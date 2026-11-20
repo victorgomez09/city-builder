@@ -317,6 +317,22 @@ function makeMaterials() {
   if (m.city) m.city.dispose();
   if (m.terrain) m.terrain.dispose();
   if (m.water) m.water.dispose();
+  if (m.pipe) m.pipe.dispose();
+  m.pipe = pbr
+    ? new THREE.MeshStandardMaterial({
+        vertexColors: true,
+        roughness: 0.38,
+        metalness: 0.28,
+        transparent: true,
+        opacity: 0.95,
+        depthTest: false,
+      })
+    : new THREE.MeshLambertMaterial({
+        vertexColors: true,
+        transparent: true,
+        opacity: 0.95,
+        depthTest: false,
+      });
   m.city = pbr
     ? new THREE.MeshStandardMaterial({
         vertexColors: true,

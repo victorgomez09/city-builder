@@ -70,7 +70,7 @@ export interface ZoneDef {
   rows?: boolean;
 }
 
-export type ServiceCategory = 'services' | 'parks' | 'landmarks';
+export type ServiceCategory = 'services' | 'parks' | 'landmarks' | 'water';
 
 export interface ServiceDef {
   name: string;
@@ -269,6 +269,17 @@ export interface Building {
   age?: number;
   waterNear?: boolean;
   waterEdge?: boolean;
+  sick?: number;
+  dead?: number;
+  water?: boolean;
+  sewage?: boolean;
+  waterPolluted?: boolean;
+  graves?: number;
+  maxGraves?: number;
+  waterCap?: number;
+  sewageCap?: number;
+  waterFlow?: number;
+  sewageFlow?: number;
   stock?: number;
   stockMax?: number;
   stockoutHours?: number;
@@ -575,6 +586,16 @@ export interface TransitRoute {
   _t0?: number;
 }
 
+export interface WindState {
+  angle: number;
+  speed: number;
+  targetAngle: number;
+  targetSpeed: number;
+  gust: number;
+  name: string;
+  dirName: string;
+}
+
 export interface ToolState {
   type: string;
   road?: number;
@@ -596,6 +617,7 @@ export interface ToolState {
   editJunction?: number;
   districtId?: number;
   radius?: number;
+  pipeType?: 'clean' | 'sewage' | 'dual';
   [key: string]: unknown;
 }
 
@@ -659,6 +681,10 @@ export interface CoverageMaps {
   pollution: Float32Array;
   landValue: Float32Array;
   waterNear: Uint8Array;
+  water?: Float32Array;
+  sewage?: Float32Array;
+  waterPollution?: Float32Array;
+  [key: string]: Float32Array | Uint8Array | undefined;
 }
 
 export interface DemandData {
@@ -701,6 +727,13 @@ export interface SimStats {
   unhappyCrime?: number;
   unhappyPollution?: number;
   supply?: SupplyChainStats;
+  waterSupply?: number;
+  waterDemand?: number;
+  waterPurity?: number;
+  sewageCap?: number;
+  sewageLoad?: number;
+  sickCount?: number;
+  deadCount?: number;
 }
 
 export interface Loan {
@@ -852,6 +885,9 @@ export interface SerializedCity {
   tree: string;
   resource?: string;
   district?: string;
+  waterPipe?: string;
+  sewagePipe?: string;
+  wind?: WindState;
   districts?: SerializedDistrict[];
   hce?: number[];
   hcEdits?: [number, number][];

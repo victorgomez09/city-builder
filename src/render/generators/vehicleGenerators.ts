@@ -17,6 +17,7 @@ export const VEH_KINDS = [
   'ambulance',
   'fire',
   'garbage',
+  'hearse',
   'train',
   'bike',
   'bike2',
@@ -355,6 +356,15 @@ function heavyHQ(gb: GB, kind: string): boolean {
       tail(gb, -2.85, 1.05, 0.8);
       for (const x of [-1.85, 1.95]) axle(gb, x, 1.05, 0.38, 0.26);
       break;
+    case 'hearse':
+      boxBody(gb, -2.9, 1.25, 0.35, 2.5, 0.98, '#18191b');
+      cabHQ(gb, 1.25, 2.7, 2.05, 0.96, '#18191b', { slope: 0.55 });
+      windowBand(gb, -0.6, 1.0, 1.45, 1.85, 0.95);
+      gb.box(-2.5, 1.3, -1.0, -0.5, 1.4, -0.96, '#d8d8d8');
+      gb.box(-2.5, 1.3, 0.96, -0.5, 1.4, 1.0, '#d8d8d8');
+      tail(gb, -2.95, 0.95, 0.75);
+      for (const x of [-1.8, 1.8]) axle(gb, x, 0.98, 0.36, 0.25);
+      break;
     case 'truck':
       cabHQ(gb, 1.55, 3.6, 2.95, 1.15, '#fff', { slope: 0.35 });
       boxBody(gb, -3.65, 1.45, 0.75, 3.55, 1.22, '#e8e6e0');
@@ -612,6 +622,7 @@ export function vehGeomHQ(kind: string, raw: boolean = false): GB | THREE.Buffer
       break;
     case 'van':
     case 'ambulance':
+    case 'hearse':
     case 'truck':
     case 'garbage':
     case 'fire':
@@ -723,6 +734,13 @@ export function vehGeom(kind: string, raw: boolean = false): GB | THREE.BufferGe
       gb.box(-2.8, 1.2, -1.06, 2.8, 1.5, 1.06, '#d92a2a');
       gb.box(0.6, 2.8, -0.7, 1.3, 3.0, 0.7, '#ff3030', 5);
       wheels([-1.8, 1.9], 0.95);
+      break;
+    case 'hearse':
+      gb.box(-2.8, 0.35, -0.95, 1.4, 2.3, 0.95, '#1a1a1c');
+      gb.box(1.4, 0.35, -0.95, 2.7, 1.5, 0.95, '#1a1a1c');
+      gb.box(1.4, 1.5, -0.9, 2.0, 2.1, 0.9, '#fff', 9);
+      gb.box(-2.8, 1.1, -0.96, 2.7, 1.25, 0.96, '#c0c0c0');
+      wheels([-1.7, 1.8], 0.88);
       break;
     case 'fire':
       gb.box(-3.6, 0.5, -1.2, 3.6, 2.6, 1.2, '#c8231c');

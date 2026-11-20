@@ -64,6 +64,17 @@ const Tl = Tools;
         UI.setOverlay('district');
       }
     }
+    if (Tl.tool.type === 'pipe') {
+      const ptype = Tl.tool.pipeType;
+      const targetOv = ptype === 'sewage' ? 'sewage' : 'water';
+      if (UI?.setOverlay && UI.overlay !== targetOv) {
+        UI.setOverlay(targetOv);
+      }
+      if (Meshes?.setPipeVisibility) Meshes.setPipeVisibility(true);
+    } else {
+      const isWaterOv = UI?.overlay === 'water' || UI?.overlay === 'sewage' || UI?.overlay === 'water_pollution';
+      if (Meshes?.setPipeVisibility) Meshes.setPipeVisibility(isWaterOv);
+    }
     const transitTool = Tl.tool.type === 'line' || Tl.tool.type === 'stop' || Tl.tool.type === 'rail' || Tl.tool.type === 'lineEdit';
     Transit.showRibbons(transitTool || UI.overlay === 'transit', Tl.tool.type === 'lineEdit' ? Transit.lineById(Tl.tool.line) : null);
     if (Tl.tool.type === 'svc') Tl.rot = 0;
@@ -263,6 +274,43 @@ const Tl = Tools;
     return { list, cost, bad };
   }
 
+  function pipeEval(tiles: number[], ptype: 'clean' | 'sewage' | 'dual' = 'clean') {
+    const Wd = World;
+    let cost = 0, bad: string | null = null;
+    const list = tiles.map(i => {
+      let ok = true, c = 0;
+      const x = U.tx(i), y = U.ty(i);
+      if (!U.inPlay(x, y)) {
+        ok = false;
+        bad = 'Outside the city limits';
+      } else if (!Wd.road[i]) {
+        ok = false;
+        bad = 'Pipes can only be laid under roads';
+      }
+      const hasClean = Wd.waterPipe && Wd.waterPipe[i];
+      const hasSewage = Wd.sewagePipe && Wd.sewagePipe[i];
+      if (ptype === 'clean') {
+        if (!hasClean) c = C.PIPE_WATER_COST;
+      } else if (ptype === 'sewage') {
+        if (!hasSewage) c = C.PIPE_SEWAGE_COST;
+      } else {
+        if (!hasClean && !hasSewage) c = C.PIPE_DUAL_COST;
+        else if (!hasClean) c = C.PIPE_WATER_COST;
+        else if (!hasSewage) c = C.PIPE_SEWAGE_COST;
+      }
+      cost += c;
+      const col: [number, number, number] = !ok
+        ? [1.0, 0.25, 0.25]
+        : ptype === 'sewage'
+        ? [0.85, 0.45, 0.1]
+        : ptype === 'dual'
+        ? [0.1, 0.75, 0.65]
+        : [0.1, 0.65, 0.95];
+      return { i, ok, col, h: 0.35 };
+    });
+    return { list, cost, bad };
+  }
+
   // Road drawing is click-based, like a pen tool. Every mode keeps drawing from the end of the last piece
   // until Esc / right-click.
   //   straight: click the start, click the end.
@@ -432,7 +480,7 @@ const Tl = Tools;
     const h = Tl.hover; if (!h || h.i < 0) return;
     const t = Tl.tool.type;
     if (t === 'road') return; // roads are click to start, click to end
-    if (t === 'rail' || t === 'zone' || t === 'dezone' || t === 'bulldoze') Tl.drag = { start: h.i, p: { x: h.x, z: h.z } };
+    if (t === 'rail' || t === 'pipe' || t === 'zone' || t === 'dezone' || t === 'bulldoze') Tl.drag = { start: h.i, p: { x: h.x, z: h.z } };
     if (t === 'path') Tl.drag = { start: h.i, f: fcellAt(h) };
     if (t === 'district') {
       Tl.drag = { start: h.i, painting: true };
@@ -494,6 +542,26 @@ const Tl = Tools;
       if (!spend(ev.cost)) return;
       for (const i of tiles) if (Wd.rail[i] !== t.rr) S.setRail(i, t.rr);
       S.networkChanged(); UI.sfx('build');
+      return;
+    }
+    if (t.type === 'pipe' && Tl.drag) {
+      const tiles = lPath(Tl.drag.start, h ? h.i : Tl.drag.start);
+      const ptype = t.pipeType || 'clean';
+      const ev = pipeEval(tiles, ptype);
+      Tl.drag = null; clearPreview();
+      if (ev.bad) { UI.toast(ev.bad, 'bad'); return; }
+      if (!spend(ev.cost)) return;
+
+      for (const i of tiles) {
+        if (ptype === 'clean' || ptype === 'dual') Wd.waterPipe[i] = 1;
+        if (ptype === 'sewage' || ptype === 'dual') Wd.sewagePipe[i] = 1;
+        if (Meshes && Meshes.markInfra) Meshes.markInfra(i);
+      }
+      if (Meshes && Sim) {
+        Meshes.writeOverlay(Sim.overlayFn(ptype === 'sewage' ? 'sewage' : 'water'));
+      }
+      UI.sfx('build');
+      UI.toast(`Laid ${tiles.length} pipes (${U.money(ev.cost)})`, 'good');
       return;
     }
     if ((t.type === 'zone' || t.type === 'dezone') && Tl.drag) {
@@ -578,7 +646,10 @@ const Tl = Tools;
       const R = C.ROADS[Wd.road[i]]; if (!R) return;
       refund += R.cost / R.w * 0.5;
       if (i === Wd.outIn || i === Wd.outOut) return; // the highway to the outside world stays
-      Wd.unlinkAll(i); S.setRoad(i, 0); Wd.rdir[i] = 0; Wd.rpart[i] = 0; Wd.curv[i] = 0; net = true; any = true;
+      Wd.unlinkAll(i); S.setRoad(i, 0); Wd.rdir[i] = 0; Wd.rpart[i] = 0; Wd.curv[i] = 0;
+      if (Wd.waterPipe && Wd.waterPipe[i]) { Wd.waterPipe[i] = 0; }
+      if (Wd.sewagePipe && Wd.sewagePipe[i]) { Wd.sewagePipe[i] = 0; }
+      net = true; any = true;
     };
     if (single) {
       if (!U.inPlay(r.x0, r.y0)) return;
@@ -587,7 +658,13 @@ const Tl = Tools;
       else if (Wd.pmask[i]) killPath(i);
       else if (X.stops.some(s => s.tile === i)) killStops(i);
       else if (Wd.rail[i]) killRail(i);
-      else if (Wd.road[i]) { const seg = roadCut(i); for (const t of seg) killRoad(t); markAround(seg); } // just this tile (and the other carriageway beside it)
+      else if (Wd.road[i]) { const seg = roadCut(i); for (const t of seg) killRoad(t); markAround(seg); }
+      else if (Wd.waterPipe && (Wd.waterPipe[i] || Wd.sewagePipe[i])) {
+        Wd.waterPipe[i] = 0;
+        Wd.sewagePipe[i] = 0;
+        if (Meshes && Meshes.markInfra) Meshes.markInfra(i);
+        any = true;
+      }
     } else {
       for (let y = r.y0; y <= r.y1; y++) for (let x = r.x0; x <= r.x1; x++) {
         if (!U.inPlay(x, y)) continue;
@@ -597,6 +674,8 @@ const Tl = Tools;
         killStops(i);
         if (Wd.rail[i]) killRail(i);
         if (Wd.road[i]) killRoad(i);
+        if (Wd.waterPipe && Wd.waterPipe[i]) { Wd.waterPipe[i] = 0; if (Meshes && Meshes.markInfra) Meshes.markInfra(i); any = true; }
+        if (Wd.sewagePipe && Wd.sewagePipe[i]) { Wd.sewagePipe[i] = 0; if (Meshes && Meshes.markInfra) Meshes.markInfra(i); any = true; }
       }
     }
     if (net) S.networkChanged();
@@ -784,6 +863,12 @@ const Tl = Tools;
       const ev = railEval(tiles, t.rr);
       Mx.setGhostTiles(ev.list);
       Tl.tip = (Tl.drag ? tiles.length + ' tiles · ' : '') + U.money(ev.cost) + (ev.bad ? ' · ' + ev.bad : '');
+    } else if (t.type === 'pipe') {
+      const tiles = Tl.drag ? lPath(Tl.drag.start, h.i) : [h.i];
+      const ptype = t.pipeType || 'clean';
+      const ev = pipeEval(tiles, ptype);
+      Mx.setGhostTiles(ev.list);
+      Tl.tip = (Tl.drag ? tiles.length + ' tiles · ' : '') + U.money(ev.cost) + (ev.bad ? ' · ' + ev.bad : ' · Drag to lay pipe along road');
     } else if (t.type === 'zone' || t.type === 'dezone' || t.type === 'bulldoze') {
       const r = Tl.drag ? rectOf(Tl.drag.start, h.i) : rectOf(h.i, h.i);
       G.uni.uBrushOn.value = 1;

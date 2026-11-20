@@ -81,6 +81,52 @@ export function stamp(
   }
 }
 
+/**
+ * Directional atmospheric pollution plume driven by dynamic variable wind vectors.
+ * Stretches downwind into a widening parabolic/elliptical plume and contracts upwind.
+ */
+export function stampWindPlume(
+  arr: Float32Array,
+  cx: number,
+  cy: number,
+  baseR: number,
+  strength: number,
+  windAngle: number,
+  windSpeed: number
+): void {
+  const wx = Math.cos(windAngle);
+  const wy = Math.sin(windAngle);
+  const spdFactor = Math.max(0.1, windSpeed / 20);
+  const downwindR = baseR * (1.0 + spdFactor * 1.5);
+  const upwindR = Math.max(1.5, baseR * (0.6 / (1.0 + spdFactor * 0.9)));
+  const maxR = Math.ceil(downwindR);
+
+  const minY = Math.max(0, Math.floor(cy - maxR));
+  const maxY = Math.min(W - 1, Math.ceil(cy + maxR));
+  const minX = Math.max(0, Math.floor(cx - maxR));
+  const maxX = Math.min(W - 1, Math.ceil(cx + maxR));
+
+  for (let y = minY; y <= maxY; y++) {
+    for (let x = minX; x <= maxX; x++) {
+      const dx = x + 0.5 - cx;
+      const dy = y + 0.5 - cy;
+
+      const dPara = dx * wx + dy * wy;
+      const dPerp = Math.abs(dx * wy - dy * wx);
+
+      const rPara = dPara >= 0 ? downwindR : upwindR;
+      const rPerp = Math.max(1.5, baseR * (0.75 + 0.35 * Math.max(0, dPara / (downwindR + 0.001))));
+
+      const normDist2 = (dPara / rPara) ** 2 + (dPerp / rPerp) ** 2;
+      if (normDist2 > 1.0) continue;
+
+      const f = strength * ((1.0 - normDist2) ** 0.85);
+      const i = y * W + x;
+      arr[i] = Math.min(1.8, arr[i] + f);
+    }
+  }
+}
+
 export function falloff(
   arr: Float32Array,
   cx: number,
@@ -111,8 +157,12 @@ export function falloff(
  */
 export function computeCoverage(
   cv: Record<string, Float32Array>,
-  buildings: Map<number, Building>
+  buildings: Map<number, Building>,
+  wind?: { angle: number; speed: number }
 ): void {
+  const wAngle = wind?.angle ?? 0.8;
+  const wSpeed = wind?.speed ?? 22;
+
   for (const k of COV_KEYS) {
     if (cv[k]) cv[k].fill(0);
   }
@@ -134,12 +184,12 @@ export function computeCoverage(
         );
       }
       if (sv.pollute && cv.pollution) {
-        stamp(cv.pollution, cx, cy, 6, sv.pollute, true);
+        stampWindPlume(cv.pollution, cx, cy, 6, sv.pollute, wAngle, wSpeed);
       }
     } else if (b.zone === 6 && b.state === 'live') {
       const lvl = b.level ?? b.lvl ?? 1;
       if (cv.pollution) {
-        stamp(cv.pollution, cx, cy, 6 + lvl, 0.32 + lvl * 0.05, true);
+        stampWindPlume(cv.pollution, cx, cy, 6 + lvl, 0.32 + lvl * 0.05, wAngle, wSpeed);
       }
     }
   });

@@ -44,18 +44,29 @@ export const IC: Record<string, string> = {
   playground: '<path d="M4 20V8l8-4 8 4v12M8 20v-6h8v6"/>',
   landmark: '<path d="M12 2l3 7h7l-5.5 4 2 7-6.5-4.5L5.5 20l2-7L2 9h7z"/>',
   recycle: '<path d="M7 19l-4-7 4-7M17 5l4 7-4 7M8 5h8M8 19h8"/>',
+  water: '<path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z"/>',
+  pipe: '<path d="M4 10h16v4H4zM2 8v8h3V8zm17 0v8h3V8z"/>',
+  cemetery: '<path d="M6 21V9a6 6 0 0 1 12 0v12zM9 10h6M12 7v8"/>',
+  wind: '<path d="M9.59 4.59A2 2 0 1 1 11 8H2m10.59 11.41A2 2 0 1 0 14 16H2m15.73-8.27A2.5 2.5 0 1 1 19.5 12H2"/>',
 };
 
 export const svg = (k: string): string =>
   '<svg viewBox="0 0 24 24" aria-hidden="true">' + (IC[k] || IC.landmark || '') + '</svg>';
 
 export const SVC_ICON: Record<string, string> = {
+  water_pump: 'water',
+  water_tower: 'water',
+  water_treatment: 'water',
+  sewage_drain: 'water',
+  clinic: 'health',
+  hospital: 'health',
+  field_hospital: 'health',
+  cemetery: 'cemetery',
+  crematory: 'fire',
   police: 'police',
   policehq: 'police',
   fire: 'fire',
   firehq: 'fire',
-  clinic: 'health',
-  hospital: 'health',
   elem: 'edu',
   high: 'edu',
   univ: 'edu',
@@ -72,9 +83,11 @@ export const SVC_ICON: Record<string, string> = {
 };
 
 export const SVC_COL: Record<string, string> = {
+  water: '#0284c7',
+  health: '#c8323e',
+  death: '#475569',
   police: '#2c5aa0',
   fire: '#b8322a',
-  health: '#c8323e',
   edu: '#a0632f',
   garbage: '#4d7a4a',
   park: '#3f8a3a',

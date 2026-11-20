@@ -192,6 +192,13 @@ UI.init = function () {
   if (statPop) statPop.addEventListener('click', () => UI.openPanel(UI.panel === 'stats' ? null : 'stats'));
   const statHappy = $('statHappy');
   if (statHappy) statHappy.addEventListener('click', () => UI.openPanel(UI.panel === 'views' ? null : 'views'));
+  const statWind = $('statWind');
+  if (statWind) {
+    statWind.addEventListener('click', () => {
+      UI.openPanel('views');
+      UI.setOverlay('pollution');
+    });
+  }
   const demandEl = $('demand');
   if (demandEl) demandEl.addEventListener('click', () => UI.openCat(UI.cat === 'zones' ? null : 'zones'));
   const mileBtn = $('mileBtn');
@@ -256,6 +263,8 @@ UI.openCat = function (key: string | null) {
   }
   UI.cat = key;
   $$<HTMLElement>('#toolbar [data-cat]').forEach(b => b.classList.toggle('on', b.dataset.cat === key));
+  const isPipeActive = key === 'water' || UI.overlay === 'water' || UI.overlay === 'sewage' || UI.overlay === 'water_pollution' || Tools.tool.type === 'pipe';
+  if (Meshes && Meshes.setPipeVisibility) Meshes.setPipeVisibility(isPipeActive);
   const p = $('palette');
   if (!key) {
     p.hidden = true;
@@ -574,6 +583,11 @@ UI.update = function () {
     : st.happy > 40
     ? 'Uneasy'
     : 'Unhappy';
+  const wind = S.wind;
+  const windSpdEl = $('wind_spd');
+  if (windSpdEl && wind) windSpdEl.textContent = Math.round(wind.speed) + ' km/h';
+  const windDirEl = $('wind_dir');
+  if (windDirEl && wind) windDirEl.textContent = '· ' + wind.dirName;
   const hh = Math.floor(S.hour),
     mm = Math.floor((S.hour - hh) * 60);
   $('time').textContent = String(hh).padStart(2, '0') + ':' + String(Math.floor(mm / 15) * 15).padStart(2, '0');

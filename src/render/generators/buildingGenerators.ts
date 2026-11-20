@@ -948,6 +948,85 @@ export const SGEN: Record<string, any> = {};
     lampPost(gb, 20.5, 6); lampPost(gb, 1.2, 4);
   };
   SGEN.hospital = (gb, b, r, LW, LD) => SGEN.clinic(gb, b, r, LW, LD, true);
+  SGEN.field_hospital = function (gb, b, r, LW, LD) {
+    foundation(gb, LW, LD, b, '#84cc16');
+    const cx = LW / 2, cz = LD / 2;
+    gb.pyr(cx - 8.5, cz - 6, cx - 1, cz + 6, 0.5, 4.2, '#f8fafc');
+    gb.pyr(cx + 1, cz - 6, cx + 8.5, cz + 6, 0.5, 4.2, '#f8fafc');
+    gb.box(cx - 5.5, 4.2, cz - 0.6, cx - 4.0, 4.4, cz + 0.6, '#ef4444');
+    gb.box(cx - 5.1, 4.2, cz - 1.5, cx - 4.4, 4.4, cz + 1.5, '#ef4444');
+    gb.box(cx + 4.0, 4.2, cz - 0.6, cx + 5.5, 4.4, cz + 0.6, '#ef4444');
+    gb.box(cx + 4.4, 4.2, cz - 1.5, cx + 5.1, 4.4, cz + 1.5, '#ef4444');
+    gb.box(cx - 2, 0, cz + 7, cx + 2, 1.8, cz + 9.5, '#3b82f6');
+  };
+  SGEN.cemetery = function (gb, b, r, LW, LD) {
+    foundation(gb, LW, LD, b, '#365314');
+    const cx = LW / 2, cz = LD / 2;
+    gb.box(cx - 3.8, 0, cz - 8, cx + 3.8, 6.5, cz - 1.5, '#64748b');
+    gb.pyr(cx - 4.2, cz - 8.4, cx + 4.2, cz - 1.1, 6.5, 3.2, '#334155');
+    gb.box(cx - 0.2, 9.7, cz - 4.8, cx + 0.2, 11.2, cz - 4.6, '#cbd5e1');
+    gb.box(cx - 0.6, 10.5, cz - 4.8, cx + 0.6, 10.9, cz - 4.6, '#cbd5e1');
+    gb.flat(cx - 1.2, cz - 9.5, cx + 1.2, LD - 0.5, 0.12, '#94a3b8');
+    gb.flat(1.5, cz + 4, LW - 1.5, cz + 6.2, 0.12, '#94a3b8');
+    for (let rx = 2.5; rx <= LW - 3; rx += 2.8) {
+      if (Math.abs(rx - cx) < 2.0) continue;
+      for (let rz = 2.5; rz <= LD - 3; rz += 3.2) {
+        if (rz < cz - 1 && Math.abs(rx - cx) < 5) continue;
+        gb.box(rx - 0.45, 0, rz - 0.15, rx + 0.45, 1.1, rz + 0.15, '#cbd5e1');
+      }
+    }
+    yardTree(gb, 3, 3, r);
+    yardTree(gb, LW - 3, 3, r);
+  };
+  SGEN.crematory = function (gb, b, r, LW, LD) {
+    foundation(gb, LW, LD, b, '#475569');
+    const cx = LW / 2, cz = LD / 2;
+    gb.box(cx - 6.5, 0, cz - 5.5, cx + 6.5, 5.8, cz + 5.5, '#334155');
+    gb.box(cx - 6.8, 5.8, cz - 5.8, cx + 6.8, 6.4, cz + 5.8, '#1e293b');
+    gb.cyl(cx + 4.2, 5.8, cz - 3.2, 0.7, 9.5, 8, '#64748b');
+    gb.cyl(cx + 4.2, 15.3, cz - 3.2, 1.0, 0.6, 8, '#1e293b');
+    gb.box(cx - 3, 0, cz + 5.5, cx + 3, 3.5, cz + 6.2, '#f8fafc', 9);
+  };
+  SGEN.water_pump = function (gb, b, r, LW, LD) {
+    foundation(gb, LW, LD, b, '#9da3a6');
+    const cx = LW / 2, cz = LD / 2;
+    gb.box(cx - 5.5, 0, cz - 4.5, cx + 5.5, 5.2, cz + 4.5, '#475569');
+    gb.pyr(cx - 5.8, cz - 4.8, cx + 5.8, cz + 4.8, 5.2, 1.8, '#334155');
+    gb.cyl(cx - 2.5, 1.2, cz - 6.5, 0.7, 4.0, 8, '#0284c7');
+    gb.cyl(cx + 2.5, 1.2, cz - 6.5, 0.7, 4.0, 8, '#0284c7');
+    gb.box(cx + 6.2, 0, cz - 2, cx + 8.2, 2.8, cz + 2, '#64748b');
+    gb.box(cx - 8.2, 0, cz - 2, cx - 6.2, 2.2, cz + 2, '#64748b');
+  };
+  SGEN.water_tower = function (gb, b, r, LW, LD) {
+    foundation(gb, LW, LD, b, '#4f7d34');
+    const cx = LW / 2, cz = LD / 2;
+    for (const [dx, dz] of [[-3.5, -3.5], [3.5, -3.5], [-3.5, 3.5], [3.5, 3.5]]) {
+      gb.cyl(cx + dx, 0, cz + dz, 0.45, 18, 6, '#94a3b8');
+    }
+    for (let y = 4; y <= 16; y += 4) {
+      gb.box(cx - 3.8, y, cz - 3.8, cx + 3.8, y + 0.35, cz + 3.8, '#64748b');
+    }
+    gb.cyl(cx, 0, cz, 1.2, 18, 8, '#0284c7');
+    gb.cyl(cx, 18, cz, 6.2, 7.5, 16, '#e2e8f0');
+    gb.pyr(cx - 6.4, cz - 6.4, cx + 6.4, cz + 6.4, 25.5, 2.5, '#0284c7');
+  };
+  SGEN.water_treatment = function (gb, b, r, LW, LD) {
+    foundation(gb, LW, LD, b, '#cbd5e1');
+    const cx = LW / 2, cz = LD / 2;
+    gb.cyl(cx - 6.5, 0, cz, 5.2, 2.5, 16, '#64748b', 0, '#0284c7');
+    gb.cyl(cx + 6.5, 0, cz, 5.2, 2.5, 16, '#64748b', 0, '#0284c7');
+    gb.box(cx - 11.5, 2.6, cz - 0.3, cx - 1.5, 3.1, cz + 0.3, '#f8fafc');
+    gb.box(cx + 1.5, 2.6, cz - 0.3, cx + 11.5, 3.1, cz + 0.3, '#f8fafc');
+    gb.box(cx - 5, 0, cz + 7.5, cx + 5, 4.2, cz + 12.5, '#475569');
+  };
+  SGEN.sewage_drain = function (gb, b, r, LW, LD) {
+    foundation(gb, LW, LD, b, '#64748b');
+    const cx = LW / 2, cz = LD / 2;
+    gb.box(cx - 6.5, 0, cz - 2, cx + 6.5, 3.8, cz + 2, '#475569');
+    gb.cyl(cx - 2.8, 1.4, cz + 2.5, 1.3, 3.5, 10, '#334155');
+    gb.cyl(cx + 2.8, 1.4, cz + 2.5, 1.3, 3.5, 10, '#334155');
+    gb.flat(cx - 5.5, cz + 2, cx + 5.5, cz + 7.5, 0.15, '#78350f');
+  };
   SGEN.plaza = function (gb, b, r, LW, LD) {
     foundation(gb, LW, LD, b, '#c9c0ae');
     gb.cyl(10, 0, 10, 4, 0.7, 14, '#b7b0a2', 0, '#1d6f8a');

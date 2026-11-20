@@ -96,6 +96,16 @@ export const CATS: CategoryDef[] = [
       ['work', 'Industry & Office'],
     ],
   },
+  {
+    key: 'water',
+    name: 'Water & Sewage',
+    icon: 'water',
+    tabs: [
+      ['pipes', 'Pipes'],
+      ['supply', 'Fresh Water'],
+      ['waste', 'Sanitation & Waste'],
+    ],
+  },
   { key: 'services', name: 'Services', icon: 'police', tabs: C.SVC_TABS },
   { key: 'parks', name: 'Parks', icon: 'park', tabs: C.PARK_TABS },
   {
@@ -222,6 +232,42 @@ export function catItems(key: string, tab?: string | null): MenuItem[] {
       });
     }
     items.push({ name: 'Remove Zoning', cost: 'Free', unlock: 0, tool: { type: 'dezone' }, icon: 'dezone', col: '#555c66' });
+  } else if (key === 'water') {
+    if (tab === 'pipes' || !tab) {
+      items.push({
+        name: 'Clean Water Pipe',
+        cost: U.money(C.PIPE_WATER_COST) + '/tile',
+        unlock: 0,
+        tool: { type: 'pipe', pipeType: 'clean' },
+        icon: 'pipe',
+        col: '#0284c7',
+        desc: 'Supplies fresh pressurized water to buildings within 4 tiles.',
+      });
+      items.push({
+        name: 'Sewage Collector Pipe',
+        cost: U.money(C.PIPE_SEWAGE_COST) + '/tile',
+        unlock: 0,
+        tool: { type: 'pipe', pipeType: 'sewage' },
+        icon: 'pipe',
+        col: '#b45309',
+        desc: 'Collects and drains wastewater from buildings to disposal/treatment.',
+      });
+      items.push({
+        name: 'Dual Utility Pipe',
+        cost: U.money(C.PIPE_DUAL_COST) + '/tile',
+        unlock: 0,
+        tool: { type: 'pipe', pipeType: 'dual' },
+        icon: 'pipe',
+        col: '#0d9488',
+        desc: 'Lays clean water and sewage pipes simultaneously in one trench.',
+      });
+    } else if (tab === 'supply') {
+      items.push(svcItem('water_pump'));
+      items.push(svcItem('water_tower'));
+    } else if (tab === 'waste') {
+      items.push(svcItem('water_treatment'));
+      items.push(svcItem('sewage_drain'));
+    }
   } else if (key === 'transit') {
     const TR = C.TRANSIT;
     if (tab === 'bus') {

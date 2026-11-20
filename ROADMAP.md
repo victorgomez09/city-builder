@@ -163,8 +163,8 @@ Arquitectura integral para guardar partidas y distribución como aplicación eje
 ```mermaid
 flowchart TD
     P1["Fase 1: Distritos, Políticas y Elasticidad Fiscal ✅"] --> P15["Fase 1.5: Refactorización Arquitectónica y Código Limpio ✅"]
-    P15 --> P2["Fase 2: Redes de Agua/Desagüe y Ciclo Sanitario ⏳"]
-    P2 --> P3["Fase 3: Cadenas de Suministro y Recursos Naturales"]
+    P15 --> P2["Fase 2: Redes de Agua/Desagüe y Ciclo Sanitario ✅"]
+    P2 --> P3["Fase 3: Cadenas de Suministro y Recursos Naturales ✅"]
     P3 --> P4["Fase 4: Movilidad Multimodal (Metro y Tranvía)"]
     P4 --> P5["Fase 5: Clima Dinámico, Desastres y Macro-Monumentos"]
 ```
@@ -199,11 +199,33 @@ flowchart TD
 - [x] **Limpieza Integral de Código Legado JavaScript:** Eliminado por completo el directorio legado `js/` (más de 550 KB de archivos `.js` obsoletos: `core.js`, `gfx.js`, `main.js`, `meshes.js`, `sim.js`, `tools.js`, `traffic.js`, `transit.js`, `ui.js`, `world.js`) y los scripts residuales de concatenación `build.sh` y `build.ps1`. El proyecto es ahora 100% TypeScript moderno gobernado por Vite.
 - [x] **Blindaje de Regresiones:** El proyecto supera `npm run typecheck` (`tsc --noEmit`) y compila limpiamente con `pnpm run build` con 0 errores y 0 avisos críticos.
 
-### Fase 2: Ciclo de Agua Completo, Contaminación y Sanidad
-- [ ] Separar tuberías de agua limpia y colectores fecales con plantas depuradoras.
-- [ ] Simulación de contaminación de aguas subterráneas y costeras.
-- [ ] Sistema de hospitales de campaña y ambulancias dirigidas a emergencias locales.
-- [ ] Cementerios y coches fúnebres con cobertura de radio de influencia.
+### Fase 2: Ciclo de Agua Completo, Contaminación, Viento Dinámico y Sanidad (¡Completada! ✅)
+- [x] **Separación de redes subterráneas de agua limpia y colectores fecales con plantas depuradoras:**
+  - Buffers contiguos tipificados `World.waterPipe: Uint8Array(W * W)` y `World.sewagePipe: Uint8Array(W * W)` con serialización RLE en [src/sim/serialization.ts](file:///home/dev/projects/city-builder/src/sim/serialization.ts).
+  - **Invariante Vial y Modelado 3D de Tuberías:** Restricción estricta de tendido de tuberías exclusivamente bajo carreteras existentes (`World.road[i] > 0`), con demolición sincronizada al retirar calzadas y modelado paramétrico 3D completo en [src/render/meshes.ts](file:///home/dev/projects/city-builder/src/render/meshes.ts) con cilindros ortogonales (`cylX`, `cylZ`), manguitos de unión intermedios, bridas metálicas, nudos de distribución central y material X-Ray reactivo (`Gfx.mats.pipe`).
+  - Herramientas interactivas de tendido en [src/tools/tools.ts](file:///home/dev/projects/city-builder/src/tools/tools.ts) para Tubería de Agua Limpia ($15/casilla), Colector de Alcantarillado ($15/casilla) y Conducto Dual Combinado ($25/casilla) con validación vial y vista previa de shader en tiempo real.
+  - Edificios de infraestructura en [src/core/constants.ts](file:///home/dev/projects/city-builder/src/core/constants.ts) y [src/render/generators/buildingGenerators.ts](file:///home/dev/projects/city-builder/src/render/generators/buildingGenerators.ts): Estación de Bombeo Fluvial/Marina (`water_pump`), Torre de Agua Subterránea (`water_tower`), Planta Depuradora Ecológica (`water_treatment`) y Emisario de Vertido Directo (`sewage_drain`).
+  - Motor hidráulico [src/sim/waterNet.ts](file:///home/dev/projects/city-builder/src/sim/waterNet.ts) con propagación BFS de presión de red, cálculo de oferta vs demanda y alertas `nowater` y `sewage`.
+- [x] **Simulación hidrológica de contaminación de aguas superficiales y acuíferos freáticos:**
+  - Arrays tipificados `Water.waterPollution: Float32Array` y `Water.groundWaterPollution: Float32Array` con difusión de fluidos y lixiviación vertical desde la superficie.
+  - Modelo de contaminación cruzada: si las bombas de agua o torres captan agua/suelo contaminado, el índice `waterPurity` colapsa e inyecta agua tóxica a la red (`water_polluted`), desatando epidemias e intoxicaciones.
+- [x] **Dispersión atmosférica por vector de viento dinámico y variable:**
+  - Estado de viento en tiempo real `Sim.wind` (ángulo $\theta$, velocidad km/h, rumbo cardinal `dirName`, clasificación meteorológica) con variaciones meteorológicas deterministas.
+  - Algoritmo de advección cónica `stampWindPlume` en [src/sim/coverage.ts](file:///home/dev/projects/city-builder/src/sim/coverage.ts) que proyecta penachos elípticos a sotavento según el vector $(\cos\theta, \sin\theta)$, contrayendo a barlovento y expandiendo a sotavento.
+  - Widget meteorológico de viento en la barra cívica HUD (`#tb_wind`) con acceso directo a la infovista de polución.
+- [x] **Sistema hospitalario de campaña y ambulancias dirigidas a emergencias locales:**
+  - Dinámica de morbilidad por agua contaminada, polución del aire y basuras.
+  - Despacho focalizado de ambulancias (`kind: 'ambulance'`) en [src/sim/sim.ts](file:///home/dev/projects/city-builder/src/sim/sim.ts) dirigidas a edificios con enfermos (`b.sick > 0`) para proporcionar atención médica in situ.
+  - Nuevo servicio: Hospital de Campaña / Triaje de Emergencia (`field_hospital`).
+- [x] **Ciclo funerario, cementerios, crematorios y coches fúnebres:**
+  - Mortalidad por vejez o falta de atención sanitaria con alerta `dead` ("Deceased awaiting hearse").
+  - Cementerio Municipal (`cemetery`) con capacidad finita de 800 sepulturas y Crematorio Moderno (`crematory`) con incineración continua.
+  - Coches fúnebres físicos (`kind: 'hearse'`) con modelo 3D procedural en [src/render/generators/vehicleGenerators.ts](file:///home/dev/projects/city-builder/src/render/generators/vehicleGenerators.ts) que recogen a los difuntos a domicilio.
+  - Penalización severa de felicidad (-35%) y abandono por insalubridad si los cuerpos no son retirados.
+- [x] **Infovistas GPU e inspección detallada:**
+  - Capas térmicas `'water'`, `'sewage'`, `'water_pollution'` y `'pollution'` en [src/ui/panels/views.ts](file:///home/dev/projects/city-builder/src/ui/panels/views.ts).
+  - Monitorización de caudales, pureza de agua, ocupación de tumbas y pacientes enfermos en [src/ui/panels/inspector.ts](file:///home/dev/projects/city-builder/src/ui/panels/inspector.ts).
+  - Documentación técnica completa en [docs/water-and-sanitation.md](file:///home/dev/projects/city-builder/docs/water-and-sanitation.md).
 
 ### Fase 3: Recursos Naturales, Cadenas de Suministro e Industria Especializada
 - [x] **Generación Procedural de Capas de Recursos Naturales:** Buffer tipificado contiguo `World.resource: Uint8Array(W * W)` con 4 tipos de yacimientos (`C.RES_FERTILE`, `C.RES_FOREST`, `C.RES_ORE`, `C.RES_OIL`) distribuidos armónicamente mediante ruido Simplex / FBM en [src/world/terrainGen.ts](file:///home/dev/projects/city-builder/src/world/terrainGen.ts), con persistencia RLE en [src/sim/serialization.ts](file:///home/dev/projects/city-builder/src/sim/serialization.ts).

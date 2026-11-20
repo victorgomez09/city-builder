@@ -75,6 +75,7 @@ const LEN: Record<string, number> = {
   ambulance: 5.8,
   fire: 7.4,
   garbage: 7.4,
+  hearse: 5.4,
 };
 
 const head = new Int32Array(N).fill(-1);
@@ -848,6 +849,7 @@ export const Traffic = {
       ambulance: 0.84,
       fire: 0.8,
       garbage: 0.8,
+      hearse: 0.82,
     };
     for (const v of Traffic.vehicles) {
       const y = World.roadH(v.x, v.z);

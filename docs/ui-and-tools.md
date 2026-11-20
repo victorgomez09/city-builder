@@ -23,6 +23,7 @@ El objeto `Tools.tool` gestiona la acción activa:
 
 - **`select`:** Inspecciona edificios, sigue vehículos en marcha (`vfollow`), o consulta andenes de transporte.
 - **`road`:** Construye calles, avenidas, autopistas y puentes.
+- **`pipe`:** Tiende redes subterráneas de tuberías exclusivamente bajo carreteras existentes (`World.road[i] > 0`) con 3 modos: agua potable (`clean`), alcantarillado (`sewage`) o ambas integradas (`dual`), con trazado continuo Bresenham, previsualización de costes y modelado 3D cilíndrico con juntas de acople.
 - **`path`:** Tiende aceras peatonales y carriles bici segregados (`pk`).
 - **`rail`:** Tiende vías de ferrocarril superficial o túneles de metro subterráneo (`rr`).
 - **`zone` / `dezone`:** Asigna o desasigna densidades residenciales, comerciales o industriales en casillas zonables.
@@ -55,6 +56,7 @@ Barra fija de 48px, translúcida, en una sola línea no rompible (*zero-wrapping
   - **Fondos (`#statMoney`):** Muestra el tesoro y flujo neto (`+$2.400 / mo`). Al hacer clic, abre directamente el panel de **Presupuesto e Impuestos**.
   - **Población (`#statPop`):** Censo y puestos ocupados. Al hacer clic, abre las **Estadísticas de la Ciudad**.
   - **Felicidad (`#statHappy`):** Satisfacción ciudadana media. Al hacer clic, abre las **Vistas e Infomapas de Calor**.
+  - **Viento y Clima (`#statWind`):** Velocidad actual del viento en km/h, ráfagas y rosa de los vientos (ej: `14 km/h NE ↗`). Al hacer clic, abre inmediatamente la vista de **Polución y Dispersión Atmosférica**.
   - **Demanda RCI (`#demand`):** Indicadores verticales de presión residencial, comercial e industrial. Al hacer clic, abre la paleta de **Zonificación**.
 - **Reloj y Velocidad:** Selector de marcha de simulación (Pausa `Space`, 1x, 2x, 4x) y reloj en tiempo real.
 - **Menú de Gestión Rápida:** Botones de acceso directo a Vistas, Distritos, Presupuesto, Transporte, Estadísticas y Opciones.
@@ -100,7 +102,7 @@ En el panel de Vistas e Infomapas de Calor [src/ui/panels/views.ts](file:///home
   - Descripción funcional de la métrica en la simulación urbana.
   - Leyenda cromática con muestras (*swatches*), nombres y desglose de efectos para cada umbral de color.
   - Consejos de planificación y gestión urbanística (*City Planning Tips*).
-- Disponible para las 14 infovistas del motor (Recursos Naturales, Tráfico, Valor del Suelo, Felicidad, Polución, Ruido, Policía, Bomberos, Sanidad, Educación, Vertederos, Parques, Transporte y Distritos).
+- Disponible para todas las infovistas del motor (Recursos Naturales, Agua y Red de Tuberías, Alcantarillado y Colectores, Polución Hídrica, Tráfico, Valor del Suelo, Felicidad, Polución Atmosférica con Plumas de Viento, Ruido, Policía, Bomberos, Sanidad y Triaje, Defunciones y Servicios Funerarios, Educación, Vertederos, Parques, Transporte y Distritos).
 
 ---
 

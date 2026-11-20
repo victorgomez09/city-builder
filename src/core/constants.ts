@@ -57,12 +57,19 @@ export const C = {
   SERVICES: {} as Record<string, ServiceDef>,
   PARK_TABS: [['small', 'Small'], ['medium', 'Medium'], ['large', 'Large']] as [string, string][],
   SVC_TABS: [
-    ['garbage', 'Garbage'],
+    ['water', 'Water & Sewage'],
     ['health', 'Healthcare'],
+    ['death', 'Deathcare'],
+    ['garbage', 'Garbage'],
     ['police', 'Police'],
     ['fire', 'Fire'],
     ['edu', 'Education'],
   ] as [string, string][],
+
+  PIPE_WATER_COST: 15,
+  PIPE_SEWAGE_COST: 15,
+  PIPE_DUAL_COST: 25,
+  PIPE_RADIUS: 4,
 
   TRANSIT: {} as Record<string, TransitVehicleConfig>,
   RAIL: [] as (RailDef | null)[],
@@ -215,11 +222,20 @@ C.ZONES = [
 const SV = (o: Partial<ServiceDef>): ServiceDef => Object.assign({ upkeep: 0, radius: 8 }, o) as ServiceDef;
 
 C.SERVICES = {
+  // water & sanitation
+  water_pump: SV({ name: 'Water Pumping Station', cat: 'services', tab: 'water', size: [2, 2], cost: 8000, upkeep: 380, radius: 10, unlock: 0, desc: 'Pumps fresh water from nearby rivers or lakes. Will poison network if placed in polluted water!' }),
+  water_tower: SV({ name: 'Water Tower', cat: 'services', tab: 'water', size: [2, 2], cost: 6500, upkeep: 280, radius: 10, unlock: 0, desc: 'Pumps clean subterranean groundwater. Will poison network if ground soil is polluted!' }),
+  water_treatment: SV({ name: 'Eco Water Treatment Plant', cat: 'services', tab: 'water', size: [3, 3], cost: 24000, upkeep: 980, radius: 12, unlock: 3, desc: 'Advanced ecological biological sewage purification. Filters 95% of wastewater.' }),
+  sewage_drain: SV({ name: 'Sewage Drain Pipe', cat: 'services', tab: 'water', size: [2, 2], cost: 7000, upkeep: 320, radius: 10, unlock: 0, desc: 'Discharges raw, untreated sewage directly into open water. Causes heavy local water pollution!' }),
+
   // services
   garbage: SV({ name: 'Waste Transfer Station', cat: 'services', tab: 'garbage', size: [3, 2], cost: 6000, upkeep: 380, radius: 30, cov: 'garbage', unlock: 1, veh: 'garbage', vehCount: 6, pollute: 0.5, desc: 'Garbage trucks collect from buildings in range.' }),
   recycle: SV({ name: 'Recycling Center', cat: 'services', tab: 'garbage', size: [3, 3], cost: 14000, upkeep: 650, radius: 40, cov: 'garbage', unlock: 4, veh: 'garbage', vehCount: 9, pollute: 0.15, desc: 'Bigger range, much less pollution.' }),
-  clinic: SV({ name: 'Medical Clinic', cat: 'services', tab: 'health', size: [2, 2], cost: 5000, upkeep: 300, radius: 13, cov: 'health', unlock: 1, veh: 'ambulance', vehCount: 1, desc: 'Keeps residents healthy and happy.' }),
-  hospital: SV({ name: 'Hospital', cat: 'services', tab: 'health', size: [3, 3], cost: 20000, upkeep: 1100, radius: 28, cov: 'health', unlock: 5, veh: 'ambulance', vehCount: 4, desc: 'Large health coverage.' }),
+  clinic: SV({ name: 'Medical Clinic', cat: 'services', tab: 'health', size: [2, 2], cost: 5000, upkeep: 300, radius: 13, cov: 'health', unlock: 1, veh: 'ambulance', vehCount: 2, desc: 'Keeps residents healthy, dispatches ambulances for medical emergencies.' }),
+  hospital: SV({ name: 'Hospital', cat: 'services', tab: 'health', size: [3, 3], cost: 20000, upkeep: 1100, radius: 28, cov: 'health', unlock: 5, veh: 'ambulance', vehCount: 5, desc: 'Large healthcare facility with rapid emergency ambulance response.' }),
+  field_hospital: SV({ name: 'Field Triage Hospital', cat: 'services', tab: 'health', size: [2, 2], cost: 4500, upkeep: 260, radius: 16, cov: 'health', unlock: 1, veh: 'ambulance', vehCount: 3, desc: 'Rapid mobile medical triage clinic for epidemic containment.' }),
+  cemetery: SV({ name: 'Municipal Cemetery', cat: 'services', tab: 'death', size: [3, 3], cost: 12000, upkeep: 450, radius: 32, unlock: 2, veh: 'hearse', vehCount: 4, desc: 'Peaceful memorial park. Dispatches hearses to collect deceased citizens (up to 800 graves).' }),
+  crematory: SV({ name: 'Modern Crematorium', cat: 'services', tab: 'death', size: [2, 2], cost: 19000, upkeep: 850, radius: 48, unlock: 4, veh: 'hearse', vehCount: 6, pollute: 0.08, desc: 'High-throughput modern cremation facility with unlimited capacity.' }),
   police: SV({ name: 'Police Station', cat: 'services', tab: 'police', size: [2, 2], cost: 6000, upkeep: 350, radius: 14, cov: 'police', unlock: 2, veh: 'police', vehCount: 2, desc: 'Patrols reduce crime nearby.' }),
   policehq: SV({ name: 'Police Headquarters', cat: 'services', tab: 'police', size: [3, 3], cost: 18000, upkeep: 900, radius: 26, cov: 'police', unlock: 5, veh: 'police', vehCount: 5, desc: 'Large police coverage.' }),
   fire: SV({ name: 'Fire Station', cat: 'services', tab: 'fire', size: [2, 2], cost: 6000, upkeep: 350, radius: 15, cov: 'fire', unlock: 2, veh: 'fire', vehCount: 2, desc: 'Fire trucks put out fires before buildings burn down.' }),
@@ -290,11 +306,11 @@ C.RAIL = [
 ];
 
 C.MILESTONES = [
-  { name: 'Settlement', pop: 0, reward: 0, unlocks: '' },
-  { name: 'Hamlet', pop: 50, reward: 8000, unlocks: 'Garbage collection, Medical Clinic, bike lanes, small parks' },
-  { name: 'Village', pop: 150, reward: 12000, unlocks: 'Police, fire, schools, avenues, more small roads' },
-  { name: 'Small Town', pop: 300, reward: 18000, unlocks: 'Buses, medium density housing, medium parks, protected bike lanes' },
-  { name: 'Town', pop: 600, reward: 25000, unlocks: 'Highways, streetcars, high school, recycling, dense commercial' },
+  { name: 'Settlement', pop: 0, reward: 0, unlocks: 'Water & Sewer Pipes, Pumping Station, Water Tower, Sewage Drain' },
+  { name: 'Hamlet', pop: 50, reward: 8000, unlocks: 'Garbage collection, Medical Clinic, Field Triage Hospital, bike lanes, small parks' },
+  { name: 'Village', pop: 150, reward: 12000, unlocks: 'Cemetery & Hearses, Police, fire, schools, avenues, more small roads' },
+  { name: 'Small Town', pop: 300, reward: 18000, unlocks: 'Eco Water Treatment Plant, Buses, medium density housing, medium parks' },
+  { name: 'Town', pop: 600, reward: 25000, unlocks: 'Modern Crematorium, Highways, streetcars, high school, recycling, dense commercial' },
   { name: 'Large Town', pop: 1200, reward: 35000, unlocks: 'Boulevards, offices, hospital, police and fire HQ' },
   { name: 'Small City', pop: 2500, reward: 50000, unlocks: 'Trains and metro, university, high density housing, large parks' },
   { name: 'City', pop: 5000, reward: 70000, unlocks: 'First landmarks: Claude Arch, VS Code Tower, Octocat, Rubber Duck' },

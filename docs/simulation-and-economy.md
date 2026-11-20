@@ -47,6 +47,13 @@ stateDiagram-v2
 ### Factores de Felicidad Residencial:
 $$H_{res} = 42 + 14 \cdot \text{salud} + 12 \cdot \text{policía} + 9 \cdot \text{educación} + 15 \cdot \text{parques} + 6 \cdot \text{bomberos} + 10 \cdot \text{monumentos} - 38 \cdot \text{polución} - 12 \cdot \text{ruido} - (\text{impuesto} - 10) \cdot 2.2 + \text{bonus\_empleo} + \text{bonus\_distrito}$$
 
+### Penalizaciones Críticas de Servicios Básicos (Fase 2):
+Los edificios residenciales y comerciales monitorean continuamente el ciclo de agua, alcantarillado y sanidad (véase [docs/water-and-sanitation.md](file:///home/dev/projects/city-builder/docs/water-and-sanitation.md)):
+- **Corte de Agua Potable (`nowater`):** Penalización de $-30\%$ de felicidad; riesgo elevado de abandono.
+- **Aguas Residuales Desbordadas (`sewage`):** Penalización de $-25\%$ de felicidad y foco local de contaminación.
+- **Intoxicación por Agua Contaminada (`water_polluted`):** Detona un brote epidemiológico masivo donde la tasa de enfermos (`b.sick`) se multiplica por 4x.
+- **Fallecidos Sin Recoger (`dead`):** La presencia de cadáveres en el inmueble a la espera de coches fúnebres impone $-35\%$ de felicidad y acelera el abandono si no es atendido por cementerios o crematorios.
+
 ---
 
 ## 3. Coberturas de Servicios y Propagación BFS

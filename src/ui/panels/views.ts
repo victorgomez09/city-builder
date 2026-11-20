@@ -27,6 +27,9 @@ export const VIEWS: [string | null, string, string][] = [
   ['garbage', 'Garbage', '#4d7a4a'],
   ['park', 'Parks', '#3f8a3a'],
   ['transit', 'Transit', '#2f86e0'],
+  ['water', 'Water Supply', '#0284c7'],
+  ['sewage', 'Sewage Drainage', '#b45309'],
+  ['water_pollution', 'Water Pollution', '#7c3aed'],
   ['district', 'Districts', '#3b82f6'],
   ['resources', 'Natural Resources', 'linear-gradient(90deg,#eab308,#16a34a,#64748b,#1e1b4b)'],
 ];
@@ -146,23 +149,87 @@ export const VIEW_GUIDES: Record<string, ViewGuide> = {
     ],
   },
   pollution: {
-    title: 'Ground & Environmental Pollution',
-    desc: 'Toxic soil contamination produced by fossil power plants, waste facilities, and heavy industry.',
+    title: 'Air & Ground Pollution (Dynamic Wind Dispersion)',
+    desc: 'Atmospheric smoke and soil contamination driven by dynamic variable wind vectors. Plumes stretch downwind (sotavento) and rotate as weather shifts.',
     colors: [
       {
         color: '#8a5a2a',
-        name: 'Brown (Toxic Soil Contamination)',
-        desc: 'Heavily contaminated ground. Severely degrades citizen health, causing illnesses and abandonment.',
+        name: 'Brown / Amber (Atmospheric Plume & Soil Toxins)',
+        desc: 'Heavily contaminated air/ground pushed by the wind. Drastically reduces land value and sickens residents downwind.',
       },
       {
         color: '#4ade80',
-        name: 'Light Green (Clean Ground)',
-        desc: 'Healthy, uncontaminated natural terrain.',
+        name: 'Light Green (Clean Air & Soil)',
+        desc: 'Healthy, uncontaminated natural terrain outside the smoke plume.',
       },
     ],
     tips: [
-      'Never zone residential housing or place drinking water pumps over brown contaminated terrain.',
-      'Enact the Recycling Program policy and designate High-Tech or Eco-Residential districts to keep pollution low.',
+      'Check the wind direction indicator in the topbar! Zone residential areas UPWIND from industrial clusters.',
+      'As wind direction shifts throughout the year, plumes rotate. Plan buffer zones with forests or parks.',
+      'Never place drinking water towers on ground contaminated by industrial pollution.',
+    ],
+  },
+  water: {
+    title: 'Clean Water Network & Supply',
+    desc: 'Underground drinking water distribution pipes, river pumping stations, and groundwater towers.',
+    colors: [
+      {
+        color: '#0ea5e9',
+        name: 'Cyan Blue (Pressurized Water Pipes)',
+        desc: 'Active underground water pipes carrying pressurized clean water.',
+      },
+      {
+        color: '#1d4ed8',
+        name: 'Soft Blue (Water Service Area)',
+        desc: 'Buildings in this radius have clean running water.',
+      },
+    ],
+    tips: [
+      'Lay water pipes under all developed districts. Buildings without water cannot grow and will be abandoned.',
+      'Place Water Pumping Stations on clean rivers or lakes, away from sewage outlets.',
+      'Water Towers pump groundwater and do not require shorelines, but must be kept far from industrial pollution.',
+    ],
+  },
+  sewage: {
+    title: 'Sewage Sanitation & Wastewater',
+    desc: 'Underground sanitary sewer collector pipes, wastewater treatment plants, and coastal drain flumes.',
+    colors: [
+      {
+        color: '#f97316',
+        name: 'Orange (Sewage Collector Pipes)',
+        desc: 'Underground sewer pipes draining wastewater towards treatment plants or outlets.',
+      },
+      {
+        color: '#9a3412',
+        name: 'Brownish Red (Drainage Coverage)',
+        desc: 'Areas with active sewage disposal.',
+      },
+    ],
+    tips: [
+      'Ensure sewage treatment capacity exceeds city wastewater production to prevent disgusting sewage backups.',
+      'Eco Water Treatment Plants purify 95% of wastewater. Raw Sewage Drain Pipes discharge directly into waterways.',
+      'Never place sewage drains upstream or near drinking water pumps!',
+    ],
+  },
+  water_pollution: {
+    title: 'Hydrological & Aquifer Contamination',
+    desc: 'Tracks surface water pollution from raw sewage dumping and subterranean groundwater contamination from heavy industry.',
+    colors: [
+      {
+        color: '#a855f7',
+        name: 'Purple / Violet (Surface Water Contamination)',
+        desc: 'Rivers and bays contaminated by raw sewage discharge. Highly dangerous if drawn by drinking water pumps!',
+      },
+      {
+        color: '#eab308',
+        name: 'Yellow-Brown (Subterranean Aquifer Pollution)',
+        desc: 'Groundwater contaminated by industrial runoff and dumps. Toxifies nearby water towers.',
+      },
+    ],
+    tips: [
+      'If drinking water purity falls below 95%, poisoned water spreads through pipes and causes citywide epidemics!',
+      'Build Eco Treatment Plants instead of raw sewage drain flumes to eliminate river pollution.',
+      'Relocate water towers immediately if surrounding ground shows yellow industrial aquifer contamination.',
     ],
   },
   noise: {
@@ -316,6 +383,8 @@ export function setOverlay(k: string | null): void {
   UI.overlay = k;
   Gfx.uni.uOvOn.value = k ? 1 : 0;
   Transit.showRibbons(k === 'transit' || ['line', 'stop', 'rail'].includes(Tools.tool.type));
+  const isPipeOv = k === 'water' || k === 'sewage' || k === 'water_pollution' || Tools.tool.type === 'pipe';
+  if (Meshes && Meshes.setPipeVisibility) Meshes.setPipeVisibility(isPipeOv);
   if (k) refreshOverlay();
 }
 

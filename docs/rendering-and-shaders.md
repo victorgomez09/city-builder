@@ -77,3 +77,12 @@ const sy = (-_projV.y * 0.5 + 0.5) * window.innerHeight;
 
 - **Oclusión:** Se ocultan automáticamente si están a la espalda de la cámara (`_projV.z >= 1.0`) o fuera del encuadre visual.
 - **Interactividad nativa:** Soportan eventos de ratón (`hover`, escalado suave CSS, clic para enfocar cámara y abrir panel de políticas).
+
+---
+
+## 6. Malla Paramétrica Subterránea de Tuberías (`ch.pipe` y `Gfx.mats.pipe`)
+
+En [src/render/meshes.ts](file:///home/dev/projects/city-builder/src/render/meshes.ts), cada chunk divide su infraestructura en `ch.infra` (calzadas, aceras y vías) y `ch.pipe` (conducciones subterráneas de agua y saneamiento):
+- **Cilindros y Juntas de Acople:** Ensamblados proceduralmente con `GB.tube(P0, P1, r, seg, col)` que interpola la inclinación 3D exacta del terreno entre el centro de la casilla y las fronteras compartidas, eliminando cualquier discontinuidad entre tramos contiguos. Incluye collares de acople intermedios, bridas metálicas y manifolds de nudo central.
+- **Material X-Ray (`Gfx.mats.pipe`):** Emplea `depthTest: false` y `renderOrder: 15`, lo que permite visualizar las conducciones a través de la calzada superior.
+- **Gestión de Visibilidad Reactiva:** `Meshes.setPipeVisibility()` activa o desactiva las mallas de tuberías según el contexto de la interfaz (modo tubería, vistas de agua o alcantarillado), manteniendo la vista principal despejada para el tráfico urbano.

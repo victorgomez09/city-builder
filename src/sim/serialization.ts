@@ -71,6 +71,11 @@ export function serializeCity(sim: SimSerializationHost): SerializedCity {
       stockoutHours: b.stockoutHours,
       industryType: b.industryType,
       outputRate: b.outputRate,
+      sick: b.sick || 0,
+      dead: b.dead || 0,
+      water: b.water,
+      sewage: b.sewage,
+      graves: b.graves || 0,
     })
   );
 
@@ -103,6 +108,9 @@ export function serializeCity(sim: SimSerializationHost): SerializedCity {
     zone: U.encodeRLE(World.zone),
     tree: U.encodeRLE(World.tree),
     resource: U.encodeRLE(World.resource),
+    waterPipe: U.encodeRLE(World.waterPipe),
+    sewagePipe: U.encodeRLE(World.sewagePipe),
+    wind: (sim as any).wind,
     district: U.encodeRLE(World.district),
     districts: Array.from(World.districts.values()),
     nextDistrictId: World.nextDistrictId,
@@ -179,6 +187,30 @@ export function loadCity(
     World.resource.set(U.decodeRLE(d.resource, Uint8Array, N));
   }
 
+  if (d.waterPipe) {
+    World.waterPipe.set(U.decodeRLE(d.waterPipe, Uint8Array, N));
+  } else {
+    World.waterPipe.fill(0);
+  }
+
+  if (d.sewagePipe) {
+    World.sewagePipe.set(U.decodeRLE(d.sewagePipe, Uint8Array, N));
+  } else {
+    World.sewagePipe.fill(0);
+  }
+
+  // Strict invariant: pipes can only exist where roads exist
+  for (let i = 0; i < N; i++) {
+    if (!World.road[i]) {
+      World.waterPipe[i] = 0;
+      World.sewagePipe[i] = 0;
+    }
+  }
+
+  if (d.wind) {
+    (sim as any).wind = d.wind;
+  }
+
   if (d.district) {
     World.district.set(U.decodeRLE(d.district, Uint8Array, N));
   } else {
@@ -222,6 +254,11 @@ export function loadCity(
         vehOut: 0,
         fire: 0,
         prob: null,
+        sick: o.sick || 0,
+        dead: o.dead || 0,
+        water: o.water ?? true,
+        sewage: o.sewage ?? true,
+        graves: o.graves || 0,
         stock: isCom ? 25 * (o.level || 1) : 0,
         stockMax: isCom ? 50 * (o.level || 1) : 0,
         stockoutHours: 0,

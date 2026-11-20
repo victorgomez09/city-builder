@@ -17,6 +17,7 @@ Este compendio detalla la arquitectura de bajo nivel, el modelo matemático de s
 | **[rendering-and-shaders.md](file:///home/dev/projects/city-builder/docs/rendering-and-shaders.md)** | Motor Three.js, mallas instanciadas (`InstancedMesh`), shaders GLSL personalizados, texturas de datos GPU y etiquetas 3D flotantes. |
 | **[ui-and-tools.md](file:///home/dev/projects/city-builder/docs/ui-and-tools.md)** | Sistema de herramientas de construcción (`Tools`), trazado de carreteras (recta, curva, S-bend, rejilla), dock inferior y paneles flotantes. |
 | **[districts-and-policies.md](file:///home/dev/projects/city-builder/docs/districts-and-policies.md)** | Sistema de distritos municipales, 7 especializaciones económicas, 8 políticas urbanas y modificadores en vivo (Fase 1). |
+| **[water-and-sanitation.md](file:///home/dev/projects/city-builder/docs/water-and-sanitation.md)** | Redes de agua limpia, colectores fecales, depuradoras, contaminación hidrológica, dispersión por viento dinámico y ciclo funerario (Fase 2). |
 | **[refactoring-strategy.md](file:///home/dev/projects/city-builder/docs/refactoring-strategy.md)** | Plan de refactorización limpia (Fase 1.5): eliminación de `@ts-nocheck`, desacoplamiento de `window.CB` y modularización. |
 
 ---

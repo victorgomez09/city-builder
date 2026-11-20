@@ -3,9 +3,10 @@ import { U } from '../core/utils';
 import { World } from '../world/world';
 import { Traffic } from '../traffic/traffic';
 import { Transit } from '../transit/transit';
-import { Building, Vehicle, Milestone, TaxRates, BuildingSpec, ServiceLotResult, SimIcon, SimNotice, SerializedCity, SupplyChainStats, SimStats } from '../types';
+import { Building, Vehicle, Milestone, TaxRates, BuildingSpec, ServiceLotResult, SimIcon, SimNotice, SerializedCity, SupplyChainStats, SimStats, WindState } from '../types';
 import { LoanItem } from './budget';
 import { COV_KEYS, computeCoverage as runComputeCoverage, computeWaterNear } from './coverage';
+import { Water } from './waterNet';
 import {
   blankBudget,
   hourlyEconomy as runHourlyEconomy,
@@ -40,7 +41,7 @@ const zoneOf = (b: Building) => (b.kind === 'zone' ? C.ZONES[b.zone] : null);
 
 
 function computeCoverage() {
-  runComputeCoverage(Sim.cov, Sim.buildings);
+  runComputeCoverage(Sim.cov, Sim.buildings, Sim.wind);
   Sim.covDirty = false;
 }
 
@@ -70,6 +71,47 @@ function moveIn(b: Building, n?: number) {
     onArrive: () => land(),
     onFail: () => land(),
   });
+}
+
+export const DEFAULT_WIND: WindState = {
+  angle: 0.78,
+  speed: 22,
+  targetAngle: 0.78,
+  targetSpeed: 22,
+  gust: 1.0,
+  name: 'Moderate Breeze',
+  dirName: 'NE',
+};
+
+function updateWind() {
+  const S = Sim;
+  if (!S.wind) S.wind = { ...DEFAULT_WIND };
+
+  if (S.simHours % 6 === 0) {
+    const h = U.hash(S.simHours, S.month, 42);
+    S.wind.targetAngle = (h % 628) / 100;
+    S.wind.targetSpeed = 10 + (U.hash(S.simHours, S.month, 101) % 45);
+  }
+
+  let diff = S.wind.targetAngle - S.wind.angle;
+  while (diff < -Math.PI) diff += 2 * Math.PI;
+  while (diff > Math.PI) diff -= 2 * Math.PI;
+  S.wind.angle += diff * 0.08;
+  S.wind.speed += (S.wind.targetSpeed - S.wind.speed) * 0.08;
+
+  const dirs = ['E', 'SE', 'S', 'SW', 'W', 'NW', 'N', 'NE'];
+  const a = ((S.wind.angle % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+  const idx = Math.round(a / (Math.PI / 4)) % 8;
+  S.wind.dirName = dirs[idx];
+
+  const spd = S.wind.speed;
+  if (spd < 12) S.wind.name = 'Light Air';
+  else if (spd < 24) S.wind.name = 'Gentle Breeze';
+  else if (spd < 36) S.wind.name = 'Moderate Breeze';
+  else if (spd < 48) S.wind.name = 'Fresh Wind';
+  else S.wind.name = 'Strong Gale';
+
+  S.covDirty = true;
 }
 
 function moveOut(b: Building) {
@@ -325,7 +367,9 @@ function hourlyBuildings() {
     cityDemand = 0,
     stockoutStores = 0,
     totalComStores = 0,
-    stockedComStores = 0;
+    stockedComStores = 0,
+    totalSick = 0,
+    totalDead = 0;
   const icons: SimIcon[] = [];
   const toRemove: Building[] = [];
   const resDemand = Math.max(Sim.demand.rlow, Sim.demand.rmed, Sim.demand.rhigh);
@@ -393,6 +437,29 @@ function hourlyBuildings() {
         (wk ? (emp / wk - 0.75) * 24 : 0) +
         4 * cv.transit[i];
       if (b.commute > 0) h += U.clamp((70 - b.commute) / 6, -14, 6);
+      if (b.water === false) h -= 28;
+      if (b.sewage === false) h -= 22;
+      if (b.waterPolluted) h -= 30;
+      if ((b.sick || 0) > 0) h -= Math.min(28, (b.sick || 0) * 12);
+      if ((b.dead || 0) > 0) h -= Math.min(35, (b.dead || 0) * 16);
+
+      // Sickness & mortality dynamics
+      if (b.state === 'live') {
+        const airPoll = cv.pollution ? Math.min(1, cv.pollution[i]) : 0;
+        const waterP = b.waterPolluted ? 0.35 : 0;
+        const hCov = cv.health ? cv.health[i] : 0.5;
+        const sickRisk = (0.012 + airPoll * 0.15 + waterP + (b.garbage > 100 ? 0.12 : 0)) * Math.max(0.2, 1.2 - hCov);
+        if (Sim.rng() < sickRisk && (b.sick || 0) < Math.ceil(b.res * 0.5)) {
+          b.sick = (b.sick || 0) + 1;
+        }
+
+        const deathRisk = 0.003 + (b.sick || 0) * 0.04;
+        if (Sim.rng() < deathRisk && (b.dead || 0) < 4) {
+          b.dead = (b.dead || 0) + 1;
+          if ((b.sick || 0) > 0) b.sick--;
+        }
+      }
+
       if (dist?.policies.smokingBan) h += 4;
       if (dist?.policies.bikeCity) h += 5;
       if (dist?.policies.freeTransit) h += 4;
@@ -411,6 +478,8 @@ function hourlyBuildings() {
         6 * cv.health[i] +
         fr * 22 -
         (tax - 10) * 2.2;
+      if (b.water === false) h -= 22;
+      if (b.sewage === false) h -= 18;
       if (z.cat === 'com') {
         totalComStores++;
         const sMax = b.stockMax || (b.stockMax = 50 * (b.level || 1));
@@ -597,12 +666,21 @@ function hourlyBuildings() {
       if (CB?.Meshes) CB.Meshes.refreshBuilding(b);
       return;
     }
+    if ((b.sick || 0) > 0) totalSick += b.sick!;
+    if ((b.dead || 0) > 0) totalDead += b.dead!;
+
     if (noRoad) b.prob = 'noroad';
     else if (noConn) b.prob = 'noconn';
+    else if (b.water === false) b.prob = 'nowater';
+    else if (b.sewage === false) b.prob = 'sewage';
+    else if (b.waterPolluted) b.prob = 'water_polluted';
+    else if ((b.dead || 0) > 0) b.prob = 'dead';
+    else if ((b.sick || 0) > 0) b.prob = 'sick';
     else if (b.garbage > 100) b.prob = 'garbage';
     else if (z.cat === 'com' && (b.stock || 0) <= 0) b.prob = 'stockout';
     else if (!res && b.age > 36 && b.filled + b.outside < b.jobs * 0.3) b.prob = 'workers';
     else if (z.cat === 'com' && b.age > 48 && b.custRatio < 0.25) b.prob = 'customers';
+    else b.prob = null;
     if (b.prob) icons.push(iconFor(b));
   });
 
@@ -619,6 +697,8 @@ function hourlyBuildings() {
   st.edu = pop ? eduSum / pop : 0;
   st.commute = commN ? comm / commN : 0;
   st.buildingCount = Sim.buildings.size;
+  st.sickCount = totalSick;
+  st.deadCount = totalDead;
   Sim.supply.rawFood = rawFood;
   Sim.supply.rawTimber = rawTimber;
   Sim.supply.rawOre = rawOre;
@@ -781,10 +861,112 @@ function dispatchServices() {
           done();
         },
       });
-    } else if (
-      (sv.cov === 'police' || sv.cov === 'health') &&
-      Sim.rng() < (sv.cov === 'police' ? 0.55 : 0.3)
-    ) {
+    } else if (sv.cov === 'health') {
+      // Prioritize responding to sick citizens
+      let target: Building | null = null;
+      let bd = 1e9;
+      for (const b of all) {
+        if (b.kind === 'zone' && (b.sick || 0) > 0 && !(b as any).medTarget && World.conn[b.road]) {
+          const d = Math.hypot(b.x - cx, b.y - cy);
+          if (d < bd) {
+            bd = d;
+            target = b;
+          }
+        }
+      }
+      // If no sick citizens, occasional preventive healthcare patrol
+      if (!target && Sim.rng() < 0.2) {
+        for (let k = 0; k < 6; k++) {
+          const b = all[Math.floor(Sim.rng() * all.length)];
+          if (b.kind !== 'zone' || b.state !== 'live') continue;
+          const d = Math.hypot(b.x - cx, b.y - cy);
+          if (d < bd) {
+            bd = d;
+            target = b;
+          }
+        }
+      }
+      if (!target) continue;
+      if ((target.sick || 0) > 0) (target as any).medTarget = true;
+      s.vehOut++;
+      const done = () => {
+        s.vehOut = Math.max(0, s.vehOut - 1);
+      };
+      const curTarget = target;
+      Traffic.request({
+        from: s.road,
+        to: curTarget.road,
+        kind: 'ambulance',
+        purpose: (curTarget.sick || 0) > 0 ? 'Medical emergency' : 'Routine health call',
+        onArrive: (_v: Vehicle | null, ok: boolean) => {
+          if (ok && (curTarget.sick || 0) > 0) {
+            curTarget.sick = 0;
+            if (curTarget.prob === 'sick' || curTarget.prob === 'water_polluted') curTarget.prob = null;
+            curTarget.happy = Math.min(100, (curTarget.happy || 50) + 14);
+          }
+          (curTarget as any).medTarget = false;
+          Traffic.request({
+            from: curTarget.road,
+            to: s.road,
+            kind: 'ambulance',
+            purpose: 'Returning to hospital',
+            onArrive: done,
+            onFail: done,
+          });
+        },
+        onFail: () => {
+          (curTarget as any).medTarget = false;
+          done();
+        },
+      });
+    } else if (sv.veh === 'hearse') {
+      // Deathcare: dispatch hearse to collect deceased citizens
+      if (s.svc === 'cemetery' && (s.graves || 0) >= (s.maxGraves || 800)) continue;
+      let target: Building | null = null;
+      let bd = 1e9;
+      for (const b of all) {
+        if (b.kind === 'zone' && (b.dead || 0) > 0 && !(b as any).hearseTarget && World.conn[b.road]) {
+          const d = Math.hypot(b.x - cx, b.y - cy);
+          if (d < bd) {
+            bd = d;
+            target = b;
+          }
+        }
+      }
+      if (!target) continue;
+      (target as any).hearseTarget = true;
+      s.vehOut++;
+      const done = () => {
+        s.vehOut = Math.max(0, s.vehOut - 1);
+      };
+      const curTarget = target;
+      Traffic.request({
+        from: s.road,
+        to: curTarget.road,
+        kind: 'hearse',
+        purpose: 'Collecting deceased',
+        onArrive: (_v: Vehicle | null, ok: boolean) => {
+          if (ok && (curTarget.dead || 0) > 0) {
+            curTarget.dead = Math.max(0, (curTarget.dead || 1) - 1);
+            if (curTarget.dead === 0 && curTarget.prob === 'dead') curTarget.prob = null;
+            if (s.svc === 'cemetery') s.graves = (s.graves || 0) + 1;
+          }
+          (curTarget as any).hearseTarget = false;
+          Traffic.request({
+            from: curTarget.road,
+            to: s.road,
+            kind: 'hearse',
+            purpose: 'Returning to cemetery',
+            onArrive: done,
+            onFail: done,
+          });
+        },
+        onFail: () => {
+          (curTarget as any).hearseTarget = false;
+          done();
+        },
+      });
+    } else if (sv.cov === 'police' && Sim.rng() < 0.55) {
       let target: Building | null = null,
         bd = 1e9;
       for (let k = 0; k < 6; k++) {
@@ -804,13 +986,13 @@ function dispatchServices() {
       Traffic.request({
         from: s.road,
         to: target.road,
-        kind: sv.veh,
-        purpose: sv.cov === 'police' ? 'On patrol' : 'Medical call',
+        kind: 'police',
+        purpose: 'On patrol',
         onArrive: () =>
           Traffic.request({
             from: target.road,
             to: s.road,
-            kind: sv.veh,
+            kind: 'police',
             purpose: 'Returning to station',
             onArrive: done,
             onFail: done,
@@ -1259,6 +1441,7 @@ export const Sim = {
   resRot: 0,
   simHours: 0,
   resDemandBase: 50,
+  wind: { ...DEFAULT_WIND } as WindState,
   icons: [] as SimIcon[],
   notices: [] as SimNotice[],
   unseen: [] as string[],
@@ -1309,6 +1492,8 @@ export const Sim = {
     Sim.icons = [];
     Sim.notices = [];
     Sim.unseen = [];
+    Sim.wind = { ...DEFAULT_WIND };
+    Water.init();
     Sim.rng = U.rng((opts.seed || 1) * 31 + 7);
     computeWaterNear();
   },
@@ -1762,10 +1947,17 @@ export const Sim = {
     if (Sim.hourAcc >= 1) {
       Sim.hourAcc -= 1;
       Sim.simHours = (Sim.simHours || 0) + 1;
+      updateWind();
+      Water.step(Sim.buildings, Sim.cov);
+      Sim.stats.waterSupply = Water.waterSupply;
+      Sim.stats.waterDemand = Water.waterDemand;
+      Sim.stats.waterPurity = Math.round(Water.waterPurity * 100);
+      Sim.stats.sewageCap = Water.sewageCap;
+      Sim.stats.sewageLoad = Water.sewageLoad;
       hourlyBuildings();
       hourlyEconomy();
       dispatchServices();
-      if (Sim.simHours % 3 === 0) computeCoverage();
+      computeCoverage();
       if (Sim.rng() < 0.06 && Sim.hour > 7 && Sim.hour < 22) chirp();
     }
     Sim.dayAcc = (Sim.dayAcc || 0) + dtS;
@@ -1854,6 +2046,46 @@ export const Sim = {
           if (r === C.RES_FOREST) return [0.12, 0.68, 0.22, 0.7];
           if (r === C.RES_ORE) return [0.45, 0.55, 0.72, 0.75];
           if (r === C.RES_OIL) return [0.22, 0.12, 0.32, 0.8];
+          return null;
+        };
+      case 'water':
+        return i => {
+          if (!play(i)) return null;
+          if (World.waterPipe && World.waterPipe[i] > 0) return [0.08, 0.72, 1.0, 0.95];
+          if (Water.waterServed && Water.waterServed[i] > 0) return [0.15, 0.55, 0.95, 0.38];
+          return [0.18, 0.22, 0.28, 0.18];
+        };
+      case 'sewage':
+        return i => {
+          if (!play(i)) return null;
+          if (World.sewagePipe && World.sewagePipe[i] > 0) return [0.95, 0.55, 0.1, 0.95];
+          if (Water.sewageServed && Water.sewageServed[i] > 0) return [0.85, 0.45, 0.15, 0.38];
+          return [0.26, 0.2, 0.16, 0.18];
+        };
+      case 'water_pollution':
+        return i => {
+          if (World.isWater(i)) {
+            const p = Water.waterPollution[i];
+            return p > 0.02 ? [0.65 + p * 0.3, 0.1, 0.75, U.clamp(p * 1.5, 0.25, 0.95)] : null;
+          }
+          if (play(i)) {
+            const gp = Water.groundWaterPollution[i];
+            return gp > 0.02 ? [0.75, 0.45, 0.1, U.clamp(gp * 1.3, 0.2, 0.85)] : null;
+          }
+          return null;
+        };
+      case 'health':
+        return i => {
+          if (!play(i)) return null;
+          const b = World.bld[i] && (Sim.buildings.get(World.bld[i]) as any);
+          if (b && (b.sick || 0) > 0) return [0.95, 0.15, 0.15, 0.9];
+          return cv.health[i] > 0 ? [0.2, 0.8, 0.4, cv.health[i] * 0.4] : null;
+        };
+      case 'death':
+        return i => {
+          if (!play(i)) return null;
+          const b = World.bld[i] && (Sim.buildings.get(World.bld[i]) as any);
+          if (b && (b.dead || 0) > 0) return [0.4, 0.2, 0.6, 0.9];
           return null;
         };
       default:

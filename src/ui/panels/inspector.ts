@@ -24,6 +24,11 @@ const PROB: Record<string, [string, string]> = {
     'Not connected to the highway',
     'Residents and goods cannot reach this building. Connect its road to the rest of the city.',
   ],
+  nowater: ['No drinking water', 'Connect clean water pipes and pumping stations to supply fresh water.'],
+  sewage: ['Sewage is backing up', 'Connect sewer pipes and treatment facilities to drain wastewater.'],
+  water_polluted: ['Poisoned water supply', 'Water pumps or towers are drawing from contaminated water/soil! Check environmental overlays.'],
+  sick: ['Medical emergency', 'Citizens are sick. Local clinics or hospitals need to dispatch an ambulance.'],
+  dead: ['Deceased awaiting hearse', 'Bodies need collection. Build a Cemetery or Crematorium within range.'],
   garbage: ['Garbage is piling up', 'Build a Waste Transfer Station within range.'],
   stockout: ['No goods to sell', 'Commercial business lacks stock. Build freight connections or local industry to supply goods.'],
   workers: ['Not enough workers', 'More housing nearby, or better transit, will fill these jobs.'],
@@ -222,6 +227,9 @@ export function renderBuilding(p: HTMLElement, b: Building): void {
              } m</b></div>`
            : ''
        }
+       ${b.svc === 'cemetery' ? `<div class="row"><span>Graves Occupied</span><b>${b.graves || 0} / 800</b></div>` : ''}
+       ${b.svc === 'water_pump' || b.svc === 'water_tower' ? `<div class="row"><span>Water Pumping</span><b>${(b.waterFlow || 0).toLocaleString()} m³/mo</b></div>` : ''}
+       ${b.svc === 'water_treatment' || b.svc === 'sewage_drain' ? `<div class="row"><span>Sanitation Flow</span><b>${(b.sewageCap || 0).toLocaleString()} m³/mo</b></div>` : ''}
        ${s.veh ? `<div class="row"><span>Vehicles out</span><b data-v="veh"></b></div>` : ''}
        <div data-v="sprob" class="sub"></div>
        <div class="btns" style="margin-top:10px"><button class="btn" id="bmove" title="Pick it up and place it somewhere else">Relocate · ${U.money(
@@ -267,6 +275,12 @@ export function renderBuilding(p: HTMLElement, b: Building): void {
        ]
          .map(k => `<div class="row"><span>${k[1]}</span>${meter('c_' + k[0])}</div>`)
          .join('')}</div>
+       <div class="sec"><div class="lbl">Utilities & Health</div>
+       <div class="row"><span>Water Supply</span><b data-v="waterStatus"></b></div>
+       <div class="row"><span>Sewage Drain</span><b data-v="sewageStatus"></b></div>
+       <div class="row"><span>Sick Citizens</span><b data-v="sickStatus">0</b></div>
+       <div class="row"><span>Deceased Citizens</span><b data-v="deadStatus">0</b></div>
+       </div>
        <div class="btns" style="margin-top:10px"><button class="btn danger" id="bdel">Demolish</button></div>`;
   }
 
@@ -357,4 +371,10 @@ export function updBuilding(p: HTMLElement, b: Building): void {
     const v = Math.min(1, cv[k][i]);
     sm(p, 'c_' + k, v, goodCol(v));
   }
+  const waterTxt = b.waterPolluted ? 'Contaminated!' : b.water ? 'Connected (Clean)' : 'No Supply';
+  const sewageTxt = b.sewage ? 'Connected' : 'Backed Up';
+  sv(p, 'waterStatus', waterTxt);
+  sv(p, 'sewageStatus', sewageTxt);
+  sv(p, 'sickStatus', String(b.sick || 0));
+  sv(p, 'deadStatus', String(b.dead || 0));
 }

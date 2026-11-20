@@ -338,6 +338,136 @@ export class GB {
     }
   }
 
+  tube(
+    p0: [number, number, number],
+    p1: [number, number, number],
+    r: number,
+    seg: number,
+    col: string | number[],
+    st: number = 0,
+    cap: boolean = false
+  ): void {
+    const vx = p1[0] - p0[0],
+      vy = p1[1] - p0[1],
+      vz = p1[2] - p0[2];
+    const len = Math.hypot(vx, vy, vz);
+    if (len < 1e-4) return;
+    const dx = vx / len,
+      dy = vy / len,
+      dz = vz / len;
+
+    let ux: number, uy: number, uz: number;
+    if (Math.abs(dy) < 0.95) {
+      const cx = -dz, cy = 0, cz = dx;
+      const clen = Math.hypot(cx, cz) || 1;
+      ux = cx / clen; uy = 0; uz = cz / clen;
+    } else {
+      const cx = dy, cy = -dx, cz = 0;
+      const clen = Math.hypot(cx, cy) || 1;
+      ux = cx / clen; uy = cy / clen; uz = 0;
+    }
+    const wx = dy * uz - dz * uy;
+    const wy = dz * ux - dx * uz;
+    const wz = dx * uy - dy * ux;
+
+    for (let k = 0; k < seg; k++) {
+      const a1 = (k / seg) * Math.PI * 2;
+      const a2 = ((k + 1) / seg) * Math.PI * 2;
+      const c1 = Math.cos(a1), s1 = Math.sin(a1);
+      const c2 = Math.cos(a2), s2 = Math.sin(a2);
+
+      const n1x = c1 * ux + s1 * wx;
+      const n1y = c1 * uy + s1 * wy;
+      const n1z = c1 * uz + s1 * wz;
+
+      const n2x = c2 * ux + s2 * wx;
+      const n2y = c2 * uy + s2 * wy;
+      const n2z = c2 * uz + s2 * wz;
+
+      const p0a = [p0[0] + r * n2x, p0[1] + r * n2y, p0[2] + r * n2z];
+      const p1a = [p1[0] + r * n2x, p1[1] + r * n2y, p1[2] + r * n2z];
+      const p1b = [p1[0] + r * n1x, p1[1] + r * n1y, p1[2] + r * n1z];
+      const p0b = [p0[0] + r * n1x, p0[1] + r * n1y, p0[2] + r * n1z];
+
+      this.quad(p0a, p1a, p1b, p0b, col, st);
+
+      if (cap) {
+        this.tri(p0, [p0[0] + r * n2x, p0[1] + r * n2y, p0[2] + r * n2z], [p0[0] + r * n1x, p0[1] + r * n1y, p0[2] + r * n1z], col, st);
+        this.tri(p1, [p1[0] + r * n1x, p1[1] + r * n1y, p1[2] + r * n1z], [p1[0] + r * n2x, p1[1] + r * n2y, p1[2] + r * n2z], col, st);
+      }
+    }
+  }
+
+  cylX(
+    x0: number,
+    x1: number,
+    cy: number,
+    cz: number,
+    r: number,
+    seg: number,
+    col: string | number[],
+    st: number = 0,
+    cap: boolean = false
+  ): void {
+    if (x1 < x0) [x0, x1] = [x1, x0];
+    if (x1 <= x0) return;
+    for (let k = 0; k < seg; k++) {
+      const a1 = (k / seg) * Math.PI * 2,
+        a2 = ((k + 1) / seg) * Math.PI * 2;
+      const c1 = Math.cos(a1),
+        s1 = Math.sin(a1),
+        c2 = Math.cos(a2),
+        s2 = Math.sin(a2);
+      this.quad(
+        [x0, cy + c2 * r, cz + s2 * r],
+        [x1, cy + c2 * r, cz + s2 * r],
+        [x1, cy + c1 * r, cz + s1 * r],
+        [x0, cy + c1 * r, cz + s1 * r],
+        col,
+        st
+      );
+      if (cap) {
+        this.tri([x0, cy, cz], [x0, cy + c2 * r, cz + s2 * r], [x0, cy + c1 * r, cz + s1 * r], col, st);
+        this.tri([x1, cy, cz], [x1, cy + c1 * r, cz + s1 * r], [x1, cy + c2 * r, cz + s2 * r], col, st);
+      }
+    }
+  }
+
+  cylZ(
+    z0: number,
+    z1: number,
+    cx: number,
+    cy: number,
+    r: number,
+    seg: number,
+    col: string | number[],
+    st: number = 0,
+    cap: boolean = false
+  ): void {
+    if (z1 < z0) [z0, z1] = [z1, z0];
+    if (z1 <= z0) return;
+    for (let k = 0; k < seg; k++) {
+      const a1 = (k / seg) * Math.PI * 2,
+        a2 = ((k + 1) / seg) * Math.PI * 2;
+      const c1 = Math.cos(a1),
+        s1 = Math.sin(a1),
+        c2 = Math.cos(a2),
+        s2 = Math.sin(a2);
+      this.quad(
+        [cx + c1 * r, cy + s1 * r, z1],
+        [cx + c1 * r, cy + s1 * r, z0],
+        [cx + c2 * r, cy + s2 * r, z0],
+        [cx + c2 * r, cy + s2 * r, z1],
+        col,
+        st
+      );
+      if (cap) {
+        this.tri([cx, cy, z0], [cx + c1 * r, cy + s1 * r, z0], [cx + c2 * r, cy + s2 * r, z0], col, st);
+        this.tri([cx, cy, z1], [cx + c2 * r, cy + s2 * r, z1], [cx + c1 * r, cy + s1 * r, z1], col, st);
+      }
+    }
+  }
+
   cone(
     cx: number,
     y0: number,
