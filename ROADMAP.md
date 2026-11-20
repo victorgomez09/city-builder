@@ -158,6 +158,40 @@ Arquitectura integral para guardar partidas y distribución como aplicación eje
 
 ---
 
+### ⚡ Pilar J: Sistema de Dificultad Dinámica y Modo "Pesadilla Administrativa" (*Edge of Collapse*)
+Arquitectura de dificultad modular que permite desde una experiencia relajada y creativa hasta un reto extremo y despiadado donde **toda la lógica de negocio del simulador opera simultáneamente al límite**:
+1. **Gradación de Dificultad (4 Niveles):**
+   - **Modo Relajado / Constructor:** Fondos abundantes ($150.000), sin bancarrota, desastres infrecuentes, huelgas inactivas, alta tolerancia impositiva (hasta 14% sin protestas) y costes de servicio reducidos un 40%.
+   - **Modo Estándar / Alcalde:** Simulación equilibrada canónica de Vira City (fondos $50.000$, impuestos óptimos al 9%, huelgas moderadas y clima dinámico estándar).
+   - **Modo Desafío / Crisis Permanente:** Fondos reducidos ($25.000$), sensibilidad acentuada al tráfico, desajuste laboral severo y menor margen de descubierto.
+   - **Modo Pesadilla / Colapso Burocrático ("Al Borde del Abismo"):**
+     - Diseñado deliberadamente para poner a prueba sin piedad **todos los subsistemas del motor** en una experiencia implacable que lleva al jugador al límite:
+       - **Presupuesto al límite:** Fondos iniciales raquíticos ($12.000$). Costes de construcción +75% y demolición con recargo por desescombro ($50 - $250 por casilla).
+       - **Elasticidad fiscal implacable:** Tolerancia impositiva máxima del 7.5%. A partir del 8.0%, el malestar se dispara +3.5% diario con quiebra masiva de tiendas.
+       - **Huelgas salvajes y barricadas en cascada:** Ante malestar > 40%, huelga simultánea de policía, bomberos y basureros, con barricadas cortando avenidas e impidiendo la circulación de emergencias.
+       - **Epidemias contagiosas fulminantes ($R_0 \ge 2.8$):** Una sola tubería contaminada o residuo desatendido propaga una peste vial devastadora que satura camas hospitalarias en días y multiplica por 4 la mortalidad.
+       - **Fuga de cerebros relámpago:** Los graduados universitarios emigran en semanas si no hay oficinas de alta tecnología disponibles.
+       - **Incendios a sotavento devastadores:** Propagación celular voraz acelerada por viento; si no hay hidrantes presurizados o los bomberos protestan, distritos enteros arden hasta los cimientos.
+       - **Cadena de suministros sin margen:** Comercios con 48h de desabastecimiento (*stockout*) quiebran y son abandonados; sobrecostes de importación triplicados.
+       - **Gentrificación asfixiante:** El valor del suelo desplaza familias a ritmo récord, colapsando el tráfico periférico e impidiendo el paso a ambulancias.
+       - **Bancarrota letal:** Descubierto máximo de solo -$5.000, intereses usurarios del 22% y condiciones de austeridad destructivas.
+     - **Distintivo y Logro:** Insignia exclusiva y monumento conmemorativo de prestigio para quienes logren 50.000 habitantes en este modo.
+
+---
+
+### 🎓 Pilar K: Onboarding Guiado, Tour Cívico y Sistema de Aprendizaje Interactivo (*The Civic Tour*)
+Sistema de tutorial paso a paso inmersivo diseñado como un tour interactivo por la ciudad para nuevos alcaldes:
+1. **Motor de Foco y Máscara Visual (*Spotlight Overlay*):**
+   - Oscurecimiento del fondo con recorte SVG/CSS iluminando el elemento concreto de la interfaz (herramienta, botón del HUD, categoría del catálogo) o el punto geográfico del mapa 3D relevante.
+   - Burbujas explicativas con puntero direccional, avatar animado del Secretario General de la Alcaldía y textos didácticos y concisos.
+2. **Comprobación de Acciones Reales (*Action Checkers*):**
+   - El recorrido no avanza mediante simples clics pasivos de "Siguiente", sino al ejecutar y validar la acción urbana solicitada (orbitar cámara, tender la primera carretera desde la autopista, zonificar residencial, conectar tuberías, etc.).
+3. **Flexibilidad Total y Accesibilidad:**
+   - Opción de tour interactivo al iniciar una nueva partida, botón de reanudación rápida en la barra superior y selector temático por capítulos desde el panel de Ajustes.
+   - Subvención municipal de bienvenida al completar el recorrido y soporte íntegro en los 6 idiomas oficiales (EN, ES, DE, FR, ZH, JA).
+
+---
+
 ## 🗺️ 3. Plan de Implementación por Fases
 
 ```mermaid
@@ -168,6 +202,8 @@ flowchart TD
     P3 --> P4["Fase 4: Movilidad Multimodal, Metro y Bicis ✅"]
     P4 --> P5["Fase 5: Demografía, Empleo, Gentrificación y Epidemias ✅"]
     P5 --> P6["Fase 6: Clima Dinámico, Desastres y Mega-Proyectos ✅"]
+    P6 --> P7["Fase 7: Sistema de Dificultad Gradual y Modo Pesadilla (Al Borde del Colapso)"]
+    P7 --> P8["Fase 8: Tour Guiado Interactivo y Tutorial Paso a Paso"]
 ```
 
 ### Fase 1: Distritos y Políticas Locales (¡Completada! ✅)
@@ -332,6 +368,45 @@ flowchart TD
 - [x] **Bancarrota municipal, crisis de deuda y modo rescate de austeridad (*Austerity Default Mode*):** Periodo de gracia de 10 días al superar $-\$10.000$ de déficit; quiebra forzosa a $-\$25.000$ con inyección de liquidez de $+\$50.000$ bajo condiciones de austeridad (+30% coste de obras públicas, recargo mensual de intereses y $+25$ puntos de malestar social).
 - [x] **Centro de Mando de Meteorología y Emergencias:** Panel interactivo en [src/ui/panels/weather.ts](file:///home/dev/projects/city-builder/src/ui/panels/weather.ts) con widget en barra superior `#statWeather`, radar de previsión a 5 días, índices de riesgo de desastre, seguimiento de incidentes con enfoque de cámara y directivas de siembra de nubes, movilización de bomberos y sirenas urbanas.
 - [x] **Localización 100% multilingüe (i18n):** Traducción exhaustiva en los 6 idiomas del juego (`en`, `es`, `de`, `fr`, `zh`, `ja`) cumpliendo estrictamente con `AGENTS.md`.
+
+### Fase 7: Sistema de Dificultad Multinivel y Modo Pesadilla ("Colapso Administrativo")
+- [ ] **Estructura de Dificultad Modular en Estado y Partidas:**
+  - Definición de tipos en [src/types/index.ts](file:///home/dev/projects/city-builder/src/types/index.ts) (`DifficultyLevel = 'easy' | 'normal' | 'hard' | 'nightmare'`), parámetros dinámicos en [src/core/constants.ts](file:///home/dev/projects/city-builder/src/core/constants.ts) y serialización en cabecera de guardado `SerializedCity` en [src/sim/serialization.ts](file:///home/dev/projects/city-builder/src/sim/serialization.ts).
+  - Selector de dificultad estilizado en modal de inicio de nueva ciudad (`#startModal`) y ajuste reactivo en el panel de Ajustes [src/ui/panels/settings.ts](file:///home/dev/projects/city-builder/src/ui/panels/settings.ts).
+- [ ] **Modulación Paramétrica del Motor de Simulación (`Sim`):**
+  - Fondos iniciales escalonados: Fácil ($150.000$), Normal ($50.000$), Difícil ($25.000$), Pesadilla ($12.000$).
+  - Multiplicadores de costes de construcción y mantenimiento de servicios públicos.
+  - Coste punitivo por demolición en modo Pesadilla (desescombro obligatorio entre $50 y $250 por casilla).
+  - Elasticidad impositiva extrema: en Pesadilla, tipos impositivos superiores al 7.5% colapsan la demanda RCI e inducen quiebra masiva de tiendas.
+- [ ] **Sinergia Extrema de Mecánicas en Modo Pesadilla (El Reto Despiadado Definitivo):**
+  - **Huelgas y Barricadas Salvajes:** Convocatoria acelerada ante descontento vecinal; huelgas simultáneas de policía, bomberos y basuras, con barricadas físicas cortando las vías neurálgicas de la ciudad.
+  - **Epidemiología Explosiva:** Número de reproducción básico viral elevado ($R_0 \ge 2.8$); contagio acelerado por carreteras, saturación inmediata de camas hospitalarias y mortalidad cuadruplicada.
+  - **Incendios a Sotavento Devastadores:** Propagación celular voraz impulsada por viento; hidrantes inservibles si la presión de la red hídrica cae por debajo del 90%.
+  - **Desabastecimiento Fatal:** Tiendas sin suministro de alimentos o mercancías durante 48 horas quiebran y quedan abandonadas; recargos de importación triplicados.
+  - **Fuga de Cerebros Inmediata:** Titulados universitarios emigran en semanas si no se construyen oficinas y alta tecnología; penalización fiscal severa por desajuste laboral.
+  - **Bancarrota Letal:** Margen de descubierto reducido a solo -$5.000 con interés usurario del 22% y penalizaciones de austeridad que llevan la ciudad al colapso.
+- [ ] **Insignia y Distintivo de Honor:**
+  - Badge visual en el HUD para partidas en Modo Pesadilla y monumento conmemorativo exclusivo de prestigio cívico desbloqueable al alcanzar el hito de 50.000 habitantes en esta dificultad.
+- [ ] **Localización 100% i18n:** Traducción rigurosa de todas las cadenas de texto en los 6 idiomas (`en`, `es`, `de`, `fr`, `zh`, `ja`) cumpliendo con `AGENTS.md`.
+
+### Fase 8: Tutorial Interactivo, Tour Guiado y Onboarding Cívico ("Alcaldía en Acción")
+- [ ] **Motor de Foco y Recorte Dinámico (Spotlight Overlay en DOM):**
+  - Componente de máscara visual (`.tour-overlay`) que oscurece el juego y recorta con precisión SVG/CSS el elemento objetivo de la interfaz (herramientas, dock inferior, HUD superior, menús desplegables) o proyecta una baliza luminosa 3D sobre el terreno de juego.
+- [ ] **Flujo Narrativo Paso a Paso (7 Hitos Guiados de Mandato):**
+  1. *Bienvenida y Manejo de Cámara:* Orbitar con clic derecho, desplazamiento panorámico y zoom.
+  2. *Conexión Regional:* Trazar la primera carretera uniendo la autovía exterior con la cuadrícula municipal.
+  3. *Fundación Residencial:* Zonificar las primeras manzanas residenciales de baja densidad (`rlow`).
+  4. *Ciclo Hídrico y Sanidad:* Instalar bomba de agua limpia, colector de desagüe y tender tuberías subterráneas conectadas a las viviendas.
+  5. *Servicios Esenciales:* Ubicar dispensario médico y parque de bomberos con visualización interactiva de radios de cobertura.
+  6. *Equilibrio Económico RCI:* Zonificar comercios e industrias para generar empleo y evitar el desabastecimiento de tiendas.
+  7. *Mando Municipal y Tiempo:* Comprensión del HUD, velocidad de simulación (1x, 2x, 3x) y apertura de los paneles de analítica cívica.
+- [ ] **Validación Activa de Tareas (*Action Step Checkers*):**
+  - Comprobación en vivo del estado del juego en cada paso (el tour no avanza hasta que la acción real es detectada: carretera conectada, tubería presurizada o zona pintada).
+- [ ] **Control de Flujo, Reanudación y Accesibilidad:**
+  - Ventana flotante guiada con avatar animado del Secretario General de la Alcaldía, barra de progreso y botones de "Pausar", "Minimizar" o "Finalizar tour".
+  - Acceso en cualquier momento desde el menú de Ajustes (selector de lecciones temáticas) y botón de acceso rápido en la barra superior ("Tour Guiado").
+  - Subvención municipal de bienvenida al completar el tour con éxito.
+- [ ] **Localización 100% i18n:** Traducción exhaustiva de todos los textos, títulos, diálogos y felicitaciones del tour en los 6 idiomas soportados (`en`, `es`, `de`, `fr`, `zh`, `ja`).
 
 ---
 
