@@ -60,8 +60,8 @@ Barra fija de 48px, translúcida con desenfoque de cristal (`backdrop-filter: bl
   - **Viento y Clima (`#statWind`):** Velocidad actual del viento en km/h, ráfagas y rosa de los vientos (ej: `14 km/h NE ↗`). Al hacer clic, abre inmediatamente la vista de **Polución y Dispersión Atmosférica**.
   - **Demanda RCI (`#demand`):** Indicadores verticales de presión residencial, comercial e industrial. Al hacer clic, abre la paleta de **Zonificación**.
 - **Reloj y Velocidad:** Selector de marcha de simulación (Pausa `Space`, 1x, 2x, 4x) y reloj en tiempo real.
-- **Menú de Gestión Agrupado por Hubs Categóricos (`#menu`):**
-  En lugar de saturar la barra horizontal con 8 botones individuales que se desbordan en monitores portátiles o pantallas con escalado, los paneles se agrupan en **3 Hubs desplegables con diseño glassmorphic**, ahorrando más del 60% de espacio horizontal y garantizando visibilidad limpia:
+- **Menú de Gestión Agrupado por Hubs Categóricos y Ajustes (`#menu`):**
+  En lugar de saturar la barra horizontal con 8 botones individuales que se desbordan en monitores portátiles o pantallas con escalado, los paneles se agrupan en **3 Hubs desplegables con diseño glassmorphic** más un botón de acceso directo e independiente para **Ajustes a Pantalla Completa**:
   1. 🏛️ **Civic & Society (`civic`):**
      - **✊ Peace & Unrest:** Huelgas de servicios, sindicatos y convenios colectivos.
      - **🏛️ Districts & Policies:** Ordenanzas de distrito y especializaciones económicas.
@@ -69,26 +69,58 @@ Barra fija de 48px, translúcida con desenfoque de cristal (`backdrop-filter: bl
   2. 💼 **Economy & Trade (`economy`):**
      - **💰 Budget & Treasury:** Fiscalidad, préstamos municipales y balances departamentales.
      - **📦 Supply & Logistics:** Terminales de carga, cadenas de suministro y fletes.
-  3. 📊 **Insights & System (`insights`):**
+  3. 📊 **Insights & Views (`insights`):**
      - **👁️ Info Views:** Capas de información y mapas de calor (polución, agua, electricidad, valor del suelo).
      - **📈 City Statistics:** Demografía, empleo y gráficas históricas.
-     - **⚙️ Settings & Saves:** Gráficos, sonido y gestor de partidas guardadas.
+  4. ⚙️ **Settings Standalone (`settings`):**
+     - Botón único directo en la barra superior que abre la **Ventana de Ajustes a Pantalla Completa**.
   - **Interacción y Feedback Visual:**
     - Botón de hub con chevron animado que rota al abrirse.
     - Indicador de estado activo (`.active-hub` con punto luminoso de neón y borde iluminado) cuando cualquiera de sus paneles hijos está abierto.
     - Cierre automático al hacer clic en un ítem, hacer clic fuera del menú o presionar la tecla `Escape`.
 
-### 3.2 Cajón Desplegable de Metas (`#goals`)
+### 3.2 Ventana de Ajustes a Pantalla Completa (`#settingsModal`)
+A diferencia de los paneles laterales ordinarios acotados a 360px, la configuración del juego se despliega en una **interfaz inmersiva a pantalla completa** con fondo glassmorphic desenfocado (`backdrop-filter: blur(24px)`), optimizada tanto para monitores 4K como para portátiles compactos (1366×768, 1440×900, 1280×800):
+- **Barra de Cabecera Superior con Blindaje Antidesbordamiento:**
+  - Título e identidad de Vira City con icono vectorial engranaje y protección `flex-shrink: 0`.
+  - Pestañas de filtrado de categorías compactas y centradas (`Overview`, `Graphics`, `Simulation`, `Storage`, `Controls`) con desplazamiento horizontal oculto si el espacio es reducido.
+  - Botón de retorno rápido `← Return to City` con indicador de tecla <kbd>ESC</kbd> y protección `flex-shrink: 0`, garantizando que nunca se desplace fuera del viewport.
+- **Cuadrícula y Tarjetas Adaptables en Portátiles:**
+  - En pantallas medianas y portátiles (1366px - 1600px), los selectores y tarjetas reducen su padding y altura a 30px/14px, permitiendo una visión panorámica limpia.
+  - En pantallas de baja altura vertical (≤ 800px, estándar en pantallas de portátil de 768p y 800p), la cabecera se compacta a 44px y los espaciados verticales se optimizan a 10px para minimizar la necesidad de scroll.
+
+### 3.3 Soporte de Diseño Responsivo para Pantallas Medianas, Portátiles y Pequeñas
+Toda la interfaz de usuario se adapta de forma fluida a través de cuatro niveles de resolución con garantía estricta anti-desbordamiento (*zero-clipping*):
+- **Monitores de Escritorio / Ultrawide (> 1600px):** Espaciado completo, todas las etiquetas textuales visibles, indicadores numéricos tabulares amplios y paneles holgados.
+- **Portátiles y Pantallas Medianas (1366px a 1600px, incluye 1080p al 125% de escala SO = 1536px, MacBooks de 1440px):**
+  - Barra superior compacta con holgura de más de 200px: `#menu` posee `flex-shrink: 0;` impidiendo cualquier recorte sobre el botón **Settings**.
+  - Subtítulos no esenciales de estadísticas (`#popsub`, `#happysub`, `#unrest_lvl`) ocultados automáticamente, reduciendo el ancho de la franja de vitales de 595px a 395px (**-200px ahorrados**).
+  - Píldora de metas e hitos compactada con barra de 42px y título acotado.
+  - Reloj y botones de velocidad ajustados a 25×24px.
+  - Botones de menú estilizados con tipografía de 11px y padding optimizado (7px).
+- **Portátiles Estándar y Modos Ventana (1180px a 1366px, incluye 1366×768 y 1080p al 150% = 1280px):**
+  - Subtítulo de dirección de viento ocultado.
+  - Píldora de metas con barra de 32px y texto a 80px.
+  - Botones de velocidad y reloj integrados en una sola línea compacta de 13.5px.
+  - En `< 1180px`, los medidores de demanda RCI se repliegan (accesibles desde la paleta de zonas) y los botones del menú superior adoptan modo icono nítido con tooltip, reduciendo el menú a ~150px.
+- **Pantallas Pequeñas / Tablets / Móviles (≤ 768px):**
+  - **Barra Superior Táctil:** Altura de 44px con desplazamiento horizontal táctil nativo sin barras visibles (`-webkit-overflow-scrolling: touch`).
+  - **Desplegables Adaptados:** Los menús desplegables de los hubs adoptan posición fija centrada en pantalla (`top: 48px; left: 8px; right: 8px; width: calc(100vw - 16px)`), evitando recortes en los bordes.
+  - **Paneles en Modo Hoja Completa (*Full-Width Sheets*):** `#infoPanel`, `#sidePanel` y `#goals` ocupan el 100% del ancho móvil (`width: calc(100vw - 16px)`), con altura máxima ajustada y exclusión mutua automática (abrir el inspector cierra el panel de gestión lateral y viceversa).
+  - **Toolbar y Paleta Táctiles:** Botones de construcción de 44×42px con tipografía de 8px e iconos vectoriales adaptados para toques precisos.
+  - **Ajustes a Pantalla Completa Adaptable:** Cuadrícula de 1 sola columna con controles selectores de altura táctil (34px) y pestañas superiores con scroll horizontal.
+
+### 3.4 Cajón Desplegable de Metas (`#goals`)
 - Anclado de forma fija bajo el hito cívico (`top: 54px; left: 12px; width: 310px`).
 - **Blindaje Anti-Solapamiento:** Si el jugador inspecciona cualquier edificio, vehículo o cruce, el cajón de objetivos se oculta automáticamente para dejar libre el cuadrante izquierdo al panel inspector (`#infoPanel`). Cuando el inspector se cierra, las metas se restauran automáticamente si estaban abiertas.
 - Dispone de botón de cierre `✕` y atajo `Esc`.
 
-### 3.3 Dock de Construcción Inferior (`#toolbar`)
+### 3.5 Dock de Construcción Inferior (`#toolbar`)
 - Centrado en la base de la pantalla (`bottom: 10px; left: 50%; transform: translateX(-50%)`).
 - Botones de categoría con icono vectorial, etiqueta Barlow Condensed e indicador inferior de neón azul con animación suave cuando están activos.
 - Botón de Demolición (`#bdz`) con resplandor carmesí de peligro al activarse.
 
-### 3.4 Estante de Construcción Contextual (`#palette`)
+### 3.6 Estante de Construcción Contextual (`#palette`)
 - Se acopla de manera limpia justo encima del dock (`bottom: 74px; left: 50%; transform: translateX(-50%)`).
 - **Barra Superior del Estante (`.phead-bar`):**
   - Título e icono de la categoría activa.
@@ -97,7 +129,7 @@ Barra fija de 48px, translúcida con desenfoque de cristal (`backdrop-filter: bl
   - Botón de cierre directo `✕` y soporte para la tecla `Escape`.
 - **Carrusel de Tarjetas (`.cards`):** Desplazamiento horizontal fluido con previsualizaciones en gradiente, coste de construcción y mantenimiento, requisitos de población y badge "New".
 
-### 3.5 Panel Inspector de Entidades (`#infoPanel`)
+### 3.7 Panel Inspector de Entidades (`#infoPanel`)
 - Ubicado en el lateral izquierdo (`top: 54px; left: 12px; width: 340px`).
 - Proporciona inspección profunda de:
   - **Edificios:** Nivel de estrellas, habitantes/trabajadores, felicidad, progreso de mejora, cobertura de servicios y botón de demolición.

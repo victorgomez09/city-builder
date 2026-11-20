@@ -72,6 +72,9 @@ export function selectBuilding(b: Building | null): void {
     p.hidden = true;
     return;
   }
+  if (window.innerWidth <= 768) {
+    UI.openPanel(null);
+  }
   p.hidden = false;
   renderBuilding(p, b);
 }
@@ -80,6 +83,9 @@ export function selectVehicle(v: Vehicle | null): void {
   UI.select(null);
   UI.selVehicle = v;
   if (!v) return;
+  if (window.innerWidth <= 768) {
+    UI.openPanel(null);
+  }
   const p = $('infoPanel');
   p.hidden = false;
   const names: Record<string, string> = {

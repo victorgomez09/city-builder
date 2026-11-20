@@ -33,7 +33,7 @@ import { renderBudgetPanel, updBudget } from '@/ui/panels/budget';
 import { renderTransitPanel, updTransit } from '@/ui/panels/transit';
 import { renderStatsPanel, updStats } from '@/ui/panels/stats';
 import { renderDistrictsPanel, updDistricts, openDistrict } from '@/ui/panels/districts';
-import { renderSettingsPanel } from '@/ui/panels/settings';
+import { renderSettingsPanel, openSettingsModal, closeSettingsModal } from '@/ui/panels/settings';
 import { renderSupplyPanel, updSupply } from '@/ui/panels/supply';
 import { renderUnrestPanel, updUnrest } from '@/ui/panels/unrest';
 
@@ -250,6 +250,12 @@ UI.init = function () {
   // Keyboard shortcut: Escape closes modal, palette, inspector, or side panel cleanly
   window.addEventListener('keydown', e => {
     if (e.key === 'Escape') {
+      const settingsModal = $('settingsModal');
+      if (settingsModal && !settingsModal.hidden) {
+        closeSettingsModal();
+        UI.openPanel(null);
+        return;
+      }
       const anyDropdownOpen = document.querySelector('#menu .hub-dropdown:not([hidden])');
       if (anyDropdownOpen) {
         closeHubDropdowns();
@@ -574,7 +580,6 @@ const PANEL_HUBS: Record<string, string> = {
   supply: 'economy',
   views: 'insights',
   stats: 'insights',
-  settings: 'insights',
 };
 
 UI.openPanel = function (key: string | null) {
@@ -586,6 +591,15 @@ UI.openPanel = function (key: string | null) {
     Transit.showRibbons(tt === 'line' || tt === 'lineEdit' || tt === 'stop');
   }
   UI.panel = key;
+
+  // Mutual exclusion on mobile/small screens
+  if (key && window.innerWidth <= 768) {
+    UI.select(null);
+    UI.selVehicle = null;
+    UI.selStop = null;
+    UI.junctionTile = -1;
+    $('infoPanel').hidden = true;
+  }
 
   // Close open dropdowns
   $$<HTMLElement>('#menu .hub-dropdown').forEach(dd => (dd.hidden = true));
@@ -601,6 +615,17 @@ UI.openPanel = function (key: string | null) {
   });
 
   const p = $('sidePanel');
+
+  // Handle Fullscreen Settings window
+  if (key === 'settings') {
+    p.hidden = true;
+    p.innerHTML = '';
+    openSettingsModal();
+    return;
+  }
+
+  closeSettingsModal();
+
   if (!key) {
     p.hidden = true;
     p.innerHTML = '';

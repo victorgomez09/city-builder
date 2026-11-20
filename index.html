@@ -89,20 +89,22 @@ button { font: inherit; color: inherit; }
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 14px;
-  gap: 12px;
+  padding: 0 12px;
+  gap: 10px;
   z-index: 20;
   box-shadow: 0 4px 24px rgba(0,0,0,0.4);
   pointer-events: none;
   flex-wrap: nowrap;
   white-space: nowrap;
+  box-sizing: border-box;
 }
 .topbar > * { pointer-events: auto; }
 
 .tb-sec {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
+  min-width: 0;
 }
 
 /* City Identity & Milestone Pill */
@@ -304,6 +306,7 @@ button { font: inherit; color: inherit; }
   display: flex;
   align-items: center;
   gap: 4px;
+  flex-shrink: 0;
 }
 .hub-group {
   position: relative;
@@ -1059,16 +1062,447 @@ canvas.spark { width: 100%; height: 56px; display: block; }
   to { opacity: 1; transform: translateX(0); }
 }
 
-/* Responsive adjustments */
-@media (max-width: 1024px) {
-  .menu .mbtn span { display: none; }
-  .cityblk .mile span { max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
+/* Fullscreen Settings Window */
+.fullscreen-settings {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  background: rgba(10, 16, 26, 0.96);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: settingsFadeIn 0.18s cubic-bezier(0.16, 1, 0.3, 1);
 }
-@media (max-width: 768px) {
+@keyframes settingsFadeIn {
+  from { opacity: 0; transform: scale(0.99); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.fset-header {
+  height: 54px;
+  padding: 0 20px;
+  background: rgba(255, 255, 255, 0.03);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+  gap: 12px;
+}
+.fset-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.fset-title {
+  font-family: var(--cond);
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  line-height: 1;
+}
+.fset-title span { color: var(--accent); }
+.fset-sub {
+  font-size: 11.5px;
+  color: var(--mute);
+}
+
+.fset-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+  flex: 1;
+  justify-content: center;
+  min-width: 0;
+}
+.fset-tabs::-webkit-scrollbar { display: none; }
+.fset-tab {
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--cond);
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--mute);
+  white-space: nowrap;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+.fset-tab:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--fg);
+}
+.fset-tab.on {
+  background: rgba(61, 139, 255, 0.2);
+  border-color: rgba(61, 139, 255, 0.5);
+  color: #fff;
+}
+
+.fset-close-btn {
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.05);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--cond);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #fff;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
+}
+.fset-close-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+.fset-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 24px 36px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  max-width: 1200px;
+  margin: 0 auto;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.fset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: 16px;
+}
+
+.fset-card {
+  background: rgba(16, 24, 36, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+.fset-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  padding-bottom: 12px;
+}
+.fset-card-title {
+  font-family: var(--cond);
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.fset-card-badge {
+  font-size: 11px;
+  font-family: var(--cond);
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: rgba(61, 139, 255, 0.15);
+  color: #93c5fd;
+  border: 1px solid rgba(61, 139, 255, 0.3);
+}
+
+.fset-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.fset-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.fset-label b {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: #fff;
+}
+.fset-label span {
+  font-size: 11.5px;
+  color: var(--mute);
+  line-height: 1.25;
+}
+.fset-select {
+  height: 34px;
+  min-width: 140px;
+  background: rgba(22, 32, 46, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  color: #fff;
+  padding: 0 10px;
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.fset-select:focus {
+  border-color: var(--accent);
+}
+
+/* ==========================================================================
+   RESPONSIVE DESIGN: Medium & Small Screens Support
+   ========================================================================== */
+
+/* Laptops & Medium Screens (1366px - 1600px, 1080p @ 125% OS scaling = 1536px, MacBooks) */
+@media (max-width: 1600px) {
+  .topbar { padding: 0 10px; gap: 8px; }
+  .tb-sec { gap: 8px; }
+  .cityblk { gap: 8px; }
+  .cityblk .cname { font-size: 15.5px; }
+  .cityblk .mile { padding: 3px 8px; }
+  .cityblk .mile .mbar { width: 42px; }
+  .cityblk .mile span { max-width: 105px; overflow: hidden; text-overflow: ellipsis; font-size: 10.5px; }
+
+  .stats-strip { gap: 5px; }
+  .click-stat { padding: 2px 5px; }
+  .stat .lbl { font-size: 8.5px; }
+  .stat b { font-size: 13.5px; }
+  .stat small#popsub,
+  .stat small#happysub,
+  .stat small#unrest_lvl { display: none; }
+
+  .dbar { width: 10px; }
+  .dbar .track { width: 6px; height: 16px; }
+
+  .clock { gap: 6px; }
+  .clock .t { font-size: 14px; }
+  .clock .stat small { font-size: 9.5px; }
+  .speed button { width: 25px; height: 24px; }
+  .speed svg { width: 11px; height: 11px; }
+
+  .menu { gap: 3px; flex-shrink: 0; }
+  .mbtn { height: 30px; padding: 0 7px; font-size: 11px; gap: 4px; }
+  .mbtn svg { width: 14px; height: 14px; }
+
+  /* Settings view on laptops */
+  .fset-header { height: 50px; padding: 0 16px; gap: 10px; }
+  .fset-title { font-size: 18px; }
+  .fset-sub { font-size: 11px; }
+  .fset-tabs { gap: 3px; }
+  .fset-tab { height: 30px; padding: 0 10px; font-size: 11.5px; gap: 5px; }
+  .fset-close-btn { height: 32px; padding: 0 12px; font-size: 11.5px; gap: 6px; }
+  .fset-body { padding: 16px 20px 28px; gap: 14px; }
+  .fset-grid { grid-template-columns: repeat(auto-fit, minmax(310px, 1fr)); gap: 14px; }
+  .fset-card { padding: 14px 16px; gap: 10px; }
+  .fset-card-title { font-size: 14px; }
+  .fset-row { gap: 12px; }
+  .fset-label b { font-size: 12.5px; }
+  .fset-label span { font-size: 11px; }
+  .fset-select { height: 30px; font-size: 12px; min-width: 120px; padding: 0 8px; }
+}
+
+/* Common Laptops (1366x768, 1280x800, 1080p @ 150% OS scaling = 1280px) */
+@media (max-width: 1366px) {
+  .topbar { padding: 0 8px; gap: 6px; }
+  .tb-sec { gap: 6px; }
+  .cityblk .cname { font-size: 14.5px; }
+  .cityblk .mile .mbar { width: 32px; }
+  .cityblk .mile span { max-width: 80px; }
+
+  .stats-strip { gap: 4px; }
+  .click-stat { padding: 2px 4px; }
+  .stat b { font-size: 13px; }
+  .stat small#wind_dir { display: none; }
+
+  .clock .stat small { display: none; }
+  .clock .t { font-size: 13.5px; }
+
+  .mbtn { height: 29px; padding: 0 6px; font-size: 10.5px; gap: 3px; }
+
+  /* Settings view on 1366x768 / 1280px */
+  .fset-header { height: 46px; padding: 0 12px; gap: 8px; }
+  .fset-brand .fset-sub { display: none; }
+  .fset-title { font-size: 16px; gap: 6px; }
+  .fset-tab { height: 28px; padding: 0 8px; font-size: 11px; gap: 4px; }
+  .fset-close-btn { height: 29px; padding: 0 10px; font-size: 11px; }
+  .fset-body { padding: 12px 14px 22px; gap: 12px; }
+  .fset-grid { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+  .fset-card { padding: 12px 14px; gap: 8px; }
+  .fset-select { height: 28px; font-size: 11.5px; min-width: 110px; padding: 0 6px; }
+}
+
+/* Compact Laptop Windows & Tablets Landscape (<= 1180px) */
+@media (max-width: 1180px) {
   .demand { display: none; }
-  .panel { width: calc(100vw - 20px) !important; left: 10px !important; right: 10px !important; }
-  .tbtn { width: 54px; height: 50px; }
+  .cityblk .mile { padding: 2px 6px; }
+  .cityblk .mile .mbar { display: none; }
+  .cityblk .mile span { max-width: 70px; }
+
+  .menu .mbtn span { display: none; }
+  .menu .mbtn { padding: 0 8px; }
+  .toolbar { bottom: 8px; max-width: calc(100vw - 16px); gap: 2px; padding: 3px 5px; }
+  .tbtn { width: 52px; height: 50px; }
   .tbtn span { font-size: 9.5px; }
+  .palette { bottom: 66px; width: min(840px, calc(100vw - 16px)); max-height: 220px; }
+  .panel.left { width: 310px; }
+  .panel.right { width: 330px; }
+
+  .fset-header { height: 44px; padding: 0 10px; }
+  .fset-body { padding: 12px 14px 24px; }
+  .fset-grid { grid-template-columns: 1fr; gap: 10px; }
+}
+
+/* Height-specific adjustments for common laptop displays (768p / 800p) */
+@media (max-height: 800px) {
+  .fset-header { height: 44px; }
+  .fset-body { padding: 10px 16px 20px; gap: 10px; }
+  .fset-card { padding: 10px 14px; gap: 8px; }
+  .fset-row { gap: 8px; }
+  .fset-label span { font-size: 10.5px; }
+  .fset-select { height: 26px; font-size: 11px; }
+}
+
+/* Small Screens (Smartphones & Small Tablets, <= 768px) */
+@media (max-width: 768px) {
+  .topbar {
+    height: 44px;
+    padding: 0 6px;
+    gap: 6px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .topbar::-webkit-scrollbar { display: none; }
+
+  .cityblk { gap: 5px; }
+  .cname { font-size: 13.5px; }
+  .mile { padding: 2px 6px; }
+  .mile .mbar { width: 32px; height: 3px; }
+  .mile span { max-width: 70px; font-size: 9.5px; }
+  .mile svg { width: 8px; height: 8px; }
+
+  .stats-strip { gap: 3px; }
+  .click-stat { padding: 2px 4px; }
+  .stat .lbl { font-size: 8.5px; }
+  .stat b { font-size: 12px; }
+  .stat small { display: none; }
+  .stat small#net { display: block; font-size: 9px; }
+  .demand { display: none; }
+
+  .clock { gap: 4px; }
+  .clock .stat small { display: none; }
+  .clock .t { font-size: 13px; }
+  .speed button { width: 24px; height: 24px; }
+  .speed svg { width: 10px; height: 10px; }
+
+  .menu { gap: 3px; }
+  .menu .mbtn { height: 28px; padding: 0 6px; }
+  .menu .mbtn span { display: none; }
+  .hub-chevron { display: none; }
+
+  .hub-dropdown {
+    position: fixed;
+    top: 48px;
+    left: 8px;
+    right: 8px;
+    min-width: auto;
+    max-width: none;
+    width: calc(100vw - 16px);
+  }
+
+  /* Bottom Toolbar & Palette on Mobile */
+  .toolbar {
+    bottom: 4px;
+    max-width: calc(100vw - 8px);
+    gap: 2px;
+    padding: 2px 4px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .toolbar::-webkit-scrollbar { display: none; }
+  .tbtn { width: 44px; height: 42px; }
+  .tbtn svg { width: 16px; height: 16px; }
+  .tbtn span { font-size: 8px; letter-spacing: 0.02em; }
+  .sep { height: 24px; margin: 0 2px; }
+
+  .palette {
+    bottom: 50px;
+    width: calc(100vw - 12px);
+    left: 6px;
+    transform: none;
+    max-height: 195px;
+  }
+  .phead-bar { padding: 4px 6px; gap: 6px; }
+  .pcat-title { font-size: 11px; }
+  .ptab { padding: 2px 6px; font-size: 10.5px; }
+  .card { width: 86px; padding: 4px; }
+  .card .sw { height: 38px; }
+  .card b { font-size: 10.5px; min-height: 24px; }
+
+  /* Full-width Responsive Sheet Panels */
+  .panel {
+    width: calc(100vw - 16px) !important;
+    left: 8px !important;
+    right: 8px !important;
+    top: 48px !important;
+    max-height: calc(100vh - 105px) !important;
+    padding: 12px;
+  }
+  .goals {
+    width: calc(100vw - 16px) !important;
+    left: 8px !important;
+    right: 8px !important;
+    top: 48px !important;
+  }
+
+  /* Fullscreen Settings on Mobile */
+  .fset-header {
+    height: auto;
+    padding: 10px 12px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+  .fset-brand { justify-content: space-between; }
+  .fset-title { font-size: 18px; }
+  .fset-tabs { overflow-x: auto; padding-bottom: 2px; }
+  .fset-tab { height: 32px; padding: 0 10px; font-size: 11.5px; }
+  .fset-body { padding: 12px 14px 28px; }
+  .fset-grid { grid-template-columns: 1fr; gap: 12px; }
+  .fset-card { padding: 14px; gap: 10px; }
+  .fset-row { flex-direction: column; align-items: stretch; gap: 6px; }
+  .fset-select { width: 100%; min-width: 0; }
 }
 </style>
 
@@ -1166,7 +1600,7 @@ canvas.spark { width: 100%; height: 56px; display: block; }
 
       <!-- Insights Hub -->
       <div class="hub-group">
-        <button class="mbtn hub-btn" data-hub="insights" title="Insights & System (Overlays, Statistics, Settings)">
+        <button class="mbtn hub-btn" data-hub="insights" title="Insights & Views (Overlays, Statistics)">
           <svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>
           <span>Insights</span>
           <svg class="hub-chevron" viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg>
@@ -1186,15 +1620,14 @@ canvas.spark { width: 100%; height: 56px; display: block; }
               <span class="hub-item-sub">Demographics, jobs & graphs</span>
             </div>
           </button>
-          <button class="hub-item" data-panel="settings">
-            <span class="hub-item-icon">⚙️</span>
-            <div class="hub-item-txt">
-              <span class="hub-item-title">Settings & Saves</span>
-              <span class="hub-item-sub">Graphics, audio & save slots</span>
-            </div>
-          </button>
         </div>
       </div>
+
+      <!-- Settings Standalone Option -->
+      <button class="mbtn" data-panel="settings" title="Settings, Graphics, Simulation & Saves">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+        <span>Settings</span>
+      </button>
     </nav>
   </header>
 
@@ -1206,6 +1639,7 @@ canvas.spark { width: 100%; height: 56px; display: block; }
   <div class="glass tip" id="tip" hidden></div>
   <div class="toasts" id="toasts" aria-live="polite"><div class="toast glass" id="toast" hidden></div></div>
   <div class="modal" id="modal" hidden></div>
+  <div class="fullscreen-settings" id="settingsModal" hidden></div>
 
   <div class="ui start" id="start" hidden>
     <div class="glass sbox">
